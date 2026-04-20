@@ -1,0 +1,14 @@
+{
+  "name": "incubator",
+  "owner": {
+    "name": "The Incubator",
+    "email": "austin@theincubator.xyz"
+  },
+  "plugins": [
+    {
+      "name": "incubator-build",
+      "source": "./",
+      "description": "Incubator Build — curated skills, subagents, and session telemetry for Claude Code"
+    }
+  ]
+}

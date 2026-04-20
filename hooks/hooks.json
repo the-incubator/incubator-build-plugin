@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/gate.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/plugin-update.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs SessionStart" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/flush.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/transcript-sync.mjs" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs UserPromptSubmit" }] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/gh-pr-gate.mjs" }]
+      },
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PreToolUse" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PostToolUse" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs Notification" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs Stop" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs SubagentStop" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PreCompact" }] }
+    ]
+  }
+}
