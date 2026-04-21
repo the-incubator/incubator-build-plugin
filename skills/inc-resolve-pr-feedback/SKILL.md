@@ -9,8 +9,13 @@ allowed-tools: Bash(gh *), Bash(git *), Read
 
 Evaluate and fix PR review feedback, then reply and resolve threads. Spawns parallel agents for each thread.
 
-> **Agent time is cheap. Tech debt is expensive.**
-> Fix everything valid -- including nitpicks and low-priority items. If we're already in the code, fix it rather than punt it.
+> **Confirm before you mutate.** This skill does two mutating transitions: edits → commit, and commit → push + reply. The user sees the plan before edits happen, and the diff before commit/push happens. Do not chain fix → commit → push → reply without checkpoints, even when every finding looks obviously valid.
+>
+> Within that discipline: fix everything valid -- including nitpicks and low-priority items. If we're already in the code, fix it rather than punt it.
+
+## Asking the user
+
+When this skill says "ask the user," use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If unavailable, present the question inline and wait for a reply before proceeding. **Silence is not consent** — do not infer approval from a lack of response, and do not proceed past a checkpoint on your own.
 
 ## Security
 
@@ -123,7 +128,7 @@ Single-round clustering (grouping new-only threads by theme + proximity within o
 
 5. **If no clusters are found** after analysis (the signal fired but no new thread clustered with a prior-resolved thread), proceed with all items as individual. The only cost was the analysis itself.
 
-### 4. Plan
+### 4. Plan and confirm
 
 Create a task list of all **new** unresolved items grouped by type (e.g., `TaskCreate` in Claude Code, `update_plan` in Codex):
 - Code changes requested
@@ -132,6 +137,19 @@ Create a task list of all **new** unresolved items grouped by type (e.g., `TaskC
 - Test additions needed
 
 If step 3 produced clusters, include them in the task list as cluster items alongside individual items.
+
+**Confirmation checkpoint (before step 5).** Present the plan to the user with one row per new item containing:
+
+| Field | Content |
+|---|---|
+| Summary | 1-line paraphrase of what the reviewer said |
+| Classification | `valid`, `invalid`, or `needs-discussion` |
+| Proposed action | `fix` / `reply-only` / `not-addressing` / `needs-human` |
+| File(s) | the file(s) the action will touch, or `none` for reply-only |
+
+Ask the user to confirm, adjust, or drop items before agents are dispatched. Do not proceed to step 5 until the user has confirmed. Per the "Asking the user" convention above, silence is not consent — wait for a reply.
+
+The user may batch-approve (e.g., "all good, proceed"), selectively veto (e.g., "skip item 3"), or reclassify items. Adjust the task list to match before dispatching.
 
 ### 5. Implement (PARALLEL)
 
@@ -143,7 +161,7 @@ Previously-resolved threads (from `cross_invocation.resolved_threads`) participa
 
 #### Individual dispatch (default)
 
-**For review threads** (`review_threads`): Spawn a `workflow:pr-comment-resolver` agent for each new thread that is NOT already assigned to a cluster from step 3. Clustered threads are handled by cluster dispatch below -- do not dispatch them individually.
+**For review threads** (`review_threads`): Spawn a `inc-pr-comment-resolver` agent for each new thread that is NOT already assigned to a cluster from step 3. Clustered threads are handled by cluster dispatch below -- do not dispatch them individually.
 
 Each agent receives:
 - The thread ID
@@ -152,11 +170,11 @@ Each agent receives:
 - The PR number (for context)
 - The feedback type (`review_thread`)
 
-**For PR comments and review bodies** (`pr_comments`, `review_bodies`): These lack file/line context. Spawn a `workflow:pr-comment-resolver` agent for each actionable non-clustered item. The agent receives the comment ID, body text, PR number, and feedback type (`pr_comment` or `review_body`). The agent must identify the relevant files from the comment text and the PR diff.
+**For PR comments and review bodies** (`pr_comments`, `review_bodies`): These lack file/line context. Spawn a `inc-pr-comment-resolver` agent for each actionable non-clustered item. The agent receives the comment ID, body text, PR number, and feedback type (`pr_comment` or `review_body`). The agent must identify the relevant files from the comment text and the PR diff.
 
 #### Cluster dispatch
 
-For each cluster identified in step 3, dispatch ONE `workflow:pr-comment-resolver` agent that receives:
+For each cluster identified in step 3, dispatch ONE `inc-pr-comment-resolver` agent that receives:
 - The `<cluster-brief>` XML block
 - All thread details for threads in the cluster (IDs, file paths, line numbers, comment text)
 - The PR number
@@ -212,10 +230,20 @@ Record the validation outcome (command run, pass/fail counts, any pre-existing f
 
 ### 7. Commit and Push
 
-1. Stage only files reported by sub-agents and commit with a message referencing the PR:
+**Confirmation checkpoint (before commit).** Before staging or committing anything, show the user:
+
+- The list of files that will be staged (from agent `files_changed` summaries).
+- A diff summary — either `git diff --stat` output or a short per-file bullet list of what changed.
+- The draft commit message.
+
+Ask the user to confirm, amend the message, or drop files. Do not run `git add` or `git commit` until the user has confirmed. If the user edits the plan at this point (e.g., "revert the change to file X"), undo those specific edits before committing.
+
+Once confirmed:
+
+1. Stage only the files the user approved and commit with a message referencing the PR:
 
 ```bash
-git add [files from agent summaries]
+git add [approved files]
 git commit -m "Address PR review feedback (#PR_NUMBER)
 
 - [list changes from agent summaries]"
@@ -375,9 +403,11 @@ bash scripts/get-thread-for-comment PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
 
 This fetches thread IDs and their first comment IDs (minimal fields, no bodies) and returns the matching thread with full comment details.
 
-### 2. Fix, Reply, Resolve
+### 2. Plan, Confirm, Fix, Reply, Resolve
 
-Spawn a single `workflow:pr-comment-resolver` agent for the thread. Then follow the same validate -> commit -> push -> reply -> resolve flow as Full Mode steps 6-8.
+Before spawning an agent, present a one-line plan: the reviewer's ask (paraphrased) + your proposed action (`fix` / `reply-only` / `not-addressing` / `needs-human`) + the file the action will touch. Ask the user to confirm. Per the "Asking the user" convention, silence is not consent.
+
+After confirmation, spawn a single `inc-pr-comment-resolver` agent for the thread. Then follow the same validate -> confirm -> commit -> push -> reply -> resolve flow as Full Mode steps 6-8, including the Step 7 pre-commit confirmation checkpoint.
 
 ---
 
