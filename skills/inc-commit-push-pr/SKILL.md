@@ -133,6 +133,13 @@ Decision tree:
 - **Feature branch, all pushed, no open PR** -- skip Steps 4-5, continue from Step 6.
 - **Feature branch, all pushed, open PR** -- report up to date. Stop.
 
+**Never auto-switch branches.** A feature branch whose previous PR is merged or closed is still a valid place to keep working — the user may intentionally reuse the branch for a follow-up. Do not `git checkout -b <new-branch>` on your own, even when the situation seems to call for it (e.g., "the PR is merged, so I'll make a clean branch from main"). Check the open-PR status from context:
+
+- **No open PR on this branch AND the branch has commits ahead of the default branch** — the branch either has new work beyond a merged PR or never had a PR. Ask the user: "This branch's prior PR was merged/closed. Open a new PR from the current branch, or switch to a new branch off `<default>`?" Wait for a reply. If the user says "same branch," proceed to Step 6 on the current branch. If they say "new branch," ask for the new name (or derive from the change content) and only then create + switch.
+- **No open PR on this branch AND the branch is even with the default branch** — no work to ship; Step 1 already stops here.
+
+This applies equally when other signals tempt a switch (ugly/outdated branch name, stale PR title on the prior PR, etc.). Branch identity is the user's call, not yours.
+
 ### Step 2: Determine conventions
 
 Priority order for commit messages and PR titles:
