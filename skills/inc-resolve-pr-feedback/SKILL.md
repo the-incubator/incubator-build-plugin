@@ -226,7 +226,7 @@ git commit -m "Address PR review feedback (#PR_NUMBER)
 git push
 ```
 
-If the push is rejected because the branch is behind remote, or any merge/rebase conflict surfaces, hand off to `_inc-git-merge-expert` to resolve before continuing. Do not resolve conflicts inline.
+If the push is rejected because the branch is behind remote, or any merge/rebase conflict surfaces, hand off to `git-merge-expert` to resolve before continuing. Do not resolve conflicts inline.
 
 ### 8. Reply and Resolve
 

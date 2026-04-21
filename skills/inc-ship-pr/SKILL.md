@@ -156,7 +156,7 @@ SHIP: <GO | BLOCK — gate(s) N, M>
 
 If `SHIP: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
 
-If `SHIP: GO`, tell the user they're clear to merge, then print the monitoring reminder below. To perform the merge itself, hand off to `_inc-git-merge-expert`.
+If `SHIP: GO`, tell the user they're clear to merge, then print the monitoring reminder below. To perform the merge itself, hand off to `git-merge-expert`.
 
 ---
 
@@ -176,7 +176,7 @@ After the user merges, they must actively watch the deploy. Print this verbatim:
 
 ## What This Skill Does NOT Do
 
-- Does not merge the PR. The user merges after the report says GO, or hands off to `_inc-git-merge-expert` to perform the merge.
+- Does not merge the PR. The user merges after the report says GO, or hands off to `git-merge-expert` to perform the merge.
 - Does not run the deploy. Merging the PR triggers Cloud Build.
 - Does not run the backfill. That is a manual prerequisite the user confirms.
 - Does not replace code review or CI. Assume those already passed.

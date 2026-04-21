@@ -7,7 +7,7 @@ argument-hint: "[optional: 'rebase' to rebase instead of merge]"
 
 # Update Code From Main
 
-Bring the latest commits from `main` into the current working branch. Hand off to `_inc-git-merge-expert` if conflicts appear.
+Bring the latest commits from `main` into the current working branch. Hand off to `git-merge-expert` if conflicts appear.
 
 ## Inputs
 
@@ -38,7 +38,7 @@ Bring the latest commits from `main` into the current working branch. Hand off t
   - **Stash** the changes, run the update, then restore them.
   - **Commit** first, then update.
   - **Cancel.**
-- An in-progress merge, rebase, or cherry-pick is detected (`.git/MERGE_HEAD`, `.git/rebase-merge/`, or `.git/CHERRY_PICK_HEAD` exist). Hand off immediately to `_inc-git-merge-expert` to resolve the existing operation before starting a new one.
+- An in-progress merge, rebase, or cherry-pick is detected (`.git/MERGE_HEAD`, `.git/rebase-merge/`, or `.git/CHERRY_PICK_HEAD` exist). Hand off immediately to `git-merge-expert` to resolve the existing operation before starting a new one.
 
 Use `AskUserQuestion` for the dirty-tree case. Do not silently mutate state.
 
@@ -80,7 +80,7 @@ Capture the exit code and output.
 **If conflicts are reported** (exit code non-zero, output mentions `CONFLICT`, or `git status` shows `Unmerged paths`):
 
 1. Stop. Do not attempt to resolve conflicts inline.
-2. Invoke the `_inc-git-merge-expert` skill via the `Skill` tool, passing context about the in-progress operation:
+2. Invoke the `git-merge-expert` skill via the `Skill` tool, passing context about the in-progress operation:
    - which branch is being updated
    - merge vs. rebase
    - the conflicting files (`git diff --name-only --diff-filter=U`)
@@ -96,7 +96,7 @@ Confirm coherent state:
 - For merge: a new merge commit exists at `HEAD` (unless the merge was a fast-forward).
 - For rebase: the original commits have been replayed on top of `origin/main`; the new `HEAD` is a descendant of `origin/main`.
 
-If the user stashed changes in Step 0, run `git stash pop` and verify it applied without conflicts. If the pop conflicts, hand off again to `_inc-git-merge-expert`.
+If the user stashed changes in Step 0, run `git stash pop` and verify it applied without conflicts. If the pop conflicts, hand off again to `git-merge-expert`.
 
 Do **not** automatically run build, test, or typecheck commands. The user can run those separately if they want.
 
@@ -108,7 +108,7 @@ Report:
 
 1. The branch that was updated and the strategy used (merge vs. rebase).
 2. How many commits were pulled in from main.
-3. Any conflicts that were resolved (and that `_inc-git-merge-expert` handled them).
+3. Any conflicts that were resolved (and that `git-merge-expert` handled them).
 4. Whether stashed changes were restored.
 5. The current `HEAD` short SHA.
 6. A reminder if the branch was rebased and needs `git push --force-with-lease` to update its remote.
@@ -118,10 +118,10 @@ Do **not** push automatically. Pushing is a separate user action.
 ## Guardrails
 
 - Never run `git push`, `git push --force`, or `git reset --hard` from this skill. Pushing and force-pushing are user decisions.
-- Never resolve merge conflicts inline. Always hand off to `_inc-git-merge-expert` so conflict logic stays in one place.
+- Never resolve merge conflicts inline. Always hand off to `git-merge-expert` so conflict logic stays in one place.
 - Never `git stash drop` or `git stash clear`. If a stash pop fails, leave it in the stash list for the user.
 - Do not switch branches. This skill operates on whatever branch is currently checked out.
-- Do not abort an in-progress merge or rebase you did not start. Defer to the user or `_inc-git-merge-expert`.
+- Do not abort an in-progress merge or rebase you did not start. Defer to the user or `git-merge-expert`.
 
 ## Output Contract
 

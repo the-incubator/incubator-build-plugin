@@ -1,5 +1,5 @@
 ---
-name: _inc-pr-description
+name: pr-description
 user-invocable: false
 description: "Write or regenerate a value-first pull-request description (title + body) for the current branch's commits or for a specified PR. Use when the user says 'write a PR description', 'refresh the PR description', 'regenerate the PR body', 'rewrite this PR', 'freshen the PR', 'update the PR description', 'draft a PR body for this diff', 'describe this PR properly', 'generate the PR title', or pastes a GitHub PR URL / #NN / number. Also used internally by inc:commit-push-pr-4 (single-PR flow) and pr-stack (per-layer stack descriptions) so all callers share one writing voice. Input is a natural-language prompt. A PR reference (a full GitHub PR URL, `pr:561`, `#561`, or a bare number alone) picks a specific PR; anything else is treated as optional steering for the default 'describe my current branch' mode. Returns structured {title, body_file} (body written to an OS temp file) for the caller to apply via gh pr edit or gh pr create — this skill never edits the PR itself and never prompts for confirmation."
 argument-hint: "[PR ref e.g. pr:561 | #561 | URL] [free-text steering]"
@@ -40,13 +40,13 @@ Steering text is always optional. If present, incorporate it alongside the diff-
 
 **Examples**:
 
-- `_inc-pr-description` → current-branch, no focus, auto-detect base
-- `_inc-pr-description emphasize the benchmarks` → current-branch, focus = "emphasize the benchmarks"
-- `_inc-pr-description base:origin/develop` → current-branch, base pinned to `origin/develop`
-- `_inc-pr-description base:origin/develop emphasize perf` → same + focus
-- `_inc-pr-description pr:561` → PR #561, no focus
-- `_inc-pr-description #561 do a good job with the perf story` → PR #561, focus = "do a good job with the perf story"
-- `_inc-pr-description https://github.com/foo/bar/pull/561 emphasize safety` → PR #561 in foo/bar, focus = "emphasize safety"
+- `pr-description` → current-branch, no focus, auto-detect base
+- `pr-description emphasize the benchmarks` → current-branch, focus = "emphasize the benchmarks"
+- `pr-description base:origin/develop` → current-branch, base pinned to `origin/develop`
+- `pr-description base:origin/develop emphasize perf` → same + focus
+- `pr-description pr:561` → PR #561, no focus
+- `pr-description #561 do a good job with the perf story` → PR #561, focus = "do a good job with the perf story"
+- `pr-description https://github.com/foo/bar/pull/561 emphasize safety` → PR #561 in foo/bar, focus = "emphasize safety"
 
 ## Output
 
@@ -193,7 +193,7 @@ Decide whether evidence capture is possible from the full branch diff.
 **This skill does NOT prompt the user** to capture evidence. The decision logic is:
 
 1. **PR mode invocation** (any form: bare number, `#NN`, `pr:<N>`, or a full URL — anything that resolves to an existing PR whose body we fetched) **and the existing body contains a `## Demo` or `## Screenshots` section with image embeds:** preserve it verbatim unless the steering text asks to refresh or remove it. Include the preserved block in the returned body. This applies regardless of which input shape the caller used; what matters is that a PR exists and its body was read.
-2. **Current-branch mode or PR mode without an evidence block:** omit the evidence section entirely. If the caller wants to capture evidence, the caller is responsible for invoking `_inc-demo-reel` separately and splicing the result in, or for asking this skill to regenerate with updated steering text after capture.
+2. **Current-branch mode or PR mode without an evidence block:** omit the evidence section entirely. If the caller wants to capture evidence, the caller is responsible for invoking `demo-reel` separately and splicing the result in, or for asking this skill to regenerate with updated steering text after capture.
 
 Do not label test output as "Demo" or "Screenshots".
 
