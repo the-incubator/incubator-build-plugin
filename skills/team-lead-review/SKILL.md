@@ -1,5 +1,5 @@
 ---
-name: inc:team-lead-review
+name: inc:team-lead-review-6
 description: Team lead PR review focused on product acceptance — did the author build what was actually requested? Accepts requirements from a spec doc, Slack message link, or board task (Asana/Linear/etc.) URL. Use when reviewing a teammate's PR for feature completeness, when re-reviewing after feedback, or when the user says "review PR", "check PR", "recheck", "did he finish", "acceptance review", "re-review", or provides a PR number/URL plus an optional requirements reference.
 ---
 
@@ -21,11 +21,11 @@ Parse `$ARGUMENTS` to determine mode, the PR, and any requirements reference(s):
 
 | Pattern | Mode | Example |
 |---------|------|---------|
-| `<PR>` | First review | `/inc:team-lead-review 3` |
-| `<PR> <ref>` | First review with requirements | `/inc:team-lead-review 3 https://incubator.slack.com/archives/C0.../p17...` |
-| `<PR> <ref1> <ref2>` | First review with multiple sources | `/inc:team-lead-review 3 <asana-url> <slack-url>` |
-| `<PR> --recheck` | Re-review | `/inc:team-lead-review 3 --recheck` |
-| `<URL>` | First review | `/inc:team-lead-review https://github.com/.../pull/3` |
+| `<PR>` | First review | `/inc:team-lead-review-6 3` |
+| `<PR> <ref>` | First review with requirements | `/inc:team-lead-review-6 3 https://incubator.slack.com/archives/C0.../p17...` |
+| `<PR> <ref1> <ref2>` | First review with multiple sources | `/inc:team-lead-review-6 3 <asana-url> <slack-url>` |
+| `<PR> --recheck` | Re-review | `/inc:team-lead-review-6 3 --recheck` |
+| `<URL>` | First review | `/inc:team-lead-review-6 https://github.com/.../pull/3` |
 
 - `<PR>` can be a number or a full GitHub PR URL
 - `<ref>` can be:

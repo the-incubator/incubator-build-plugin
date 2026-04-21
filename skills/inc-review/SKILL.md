@@ -1,5 +1,5 @@
 ---
-name: inc:review
+name: inc:review-3a
 description: Code review a pull request, or the uncommitted changes in the working tree if no PR is provided
 allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git log:*), Bash(git blame:*)
 disable-model-invocation: false

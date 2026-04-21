@@ -1,5 +1,5 @@
 ---
-name: git-merge-expert
+name: _inc-git-merge-expert
 version: 2.0.0
 description: |
   User-only git merge workflow for branch merges, PR merges, conflict resolution, validation,
@@ -15,13 +15,13 @@ allowed-tools:
   - Grep
   - Skill
 disable-model-invocation: true
-user-invocable: true
+user-invocable: false
 argument-hint: "[PR number, source branch, target branch, or merge task]"
 arguments:
   - request
 when_to_use: |
   Use only when the user explicitly asks to merge a branch or PR, resolve git conflicts, review
-  merge readiness, or roll back a bad merge. Examples: "/git-merge-expert", "merge this branch",
+  merge readiness, or roll back a bad merge. Examples: "/_inc-git-merge-expert", "merge this branch",
   "resolve these merge conflicts", or "roll back that merge". Do not use for read-only git
   inspection or unrelated code changes.
 ---

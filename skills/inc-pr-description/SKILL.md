@@ -1,6 +1,7 @@
 ---
-name: inc-pr-description
-description: "Write or regenerate a value-first pull-request description (title + body) for the current branch's commits or for a specified PR. Use when the user says 'write a PR description', 'refresh the PR description', 'regenerate the PR body', 'rewrite this PR', 'freshen the PR', 'update the PR description', 'draft a PR body for this diff', 'describe this PR properly', 'generate the PR title', or pastes a GitHub PR URL / #NN / number. Also used internally by inc:commit-push-pr (single-PR flow) and pr-stack (per-layer stack descriptions) so all callers share one writing voice. Input is a natural-language prompt. A PR reference (a full GitHub PR URL, `pr:561`, `#561`, or a bare number alone) picks a specific PR; anything else is treated as optional steering for the default 'describe my current branch' mode. Returns structured {title, body_file} (body written to an OS temp file) for the caller to apply via gh pr edit or gh pr create — this skill never edits the PR itself and never prompts for confirmation."
+name: _inc-pr-description
+user-invocable: false
+description: "Write or regenerate a value-first pull-request description (title + body) for the current branch's commits or for a specified PR. Use when the user says 'write a PR description', 'refresh the PR description', 'regenerate the PR body', 'rewrite this PR', 'freshen the PR', 'update the PR description', 'draft a PR body for this diff', 'describe this PR properly', 'generate the PR title', or pastes a GitHub PR URL / #NN / number. Also used internally by inc:commit-push-pr-4 (single-PR flow) and pr-stack (per-layer stack descriptions) so all callers share one writing voice. Input is a natural-language prompt. A PR reference (a full GitHub PR URL, `pr:561`, `#561`, or a bare number alone) picks a specific PR; anything else is treated as optional steering for the default 'describe my current branch' mode. Returns structured {title, body_file} (body written to an OS temp file) for the caller to apply via gh pr edit or gh pr create — this skill never edits the PR itself and never prompts for confirmation."
 argument-hint: "[PR ref e.g. pr:561 | #561 | URL] [free-text steering]"
 ---
 
@@ -10,7 +11,7 @@ Generate a conventional-commit-style title and a product-first body describing a
 
 **Audience model.** Humans review these PRs for **product acceptance** (did we build the right thing, does it behave correctly for users/stakeholders). AI bots review for **code quality**. Write the body for the human: lead with product outcome, then provide a concise technical outline so the human can orient themselves without reading the diff line by line. Do not pad with code-quality narration — the bots already cover that.
 
-Why a separate skill: several callers need the same writing logic without the single-PR interactive scaffolding that lives in `inc:commit-push-pr`. `pr-stack`'s splitting workflow runs this once per layer as a batch; `inc:commit-push-pr` runs it inside its full-flow and refresh-mode paths. Extracting keeps one source of truth for the writing principles.
+Why a separate skill: several callers need the same writing logic without the single-PR interactive scaffolding that lives in `inc:commit-push-pr-4`. `pr-stack`'s splitting workflow runs this once per layer as a batch; `inc:commit-push-pr-4` runs it inside its full-flow and refresh-mode paths. Extracting keeps one source of truth for the writing principles.
 
 **Naming rationale:** `pr-description`, not `git-pr-description`. Stacking and PR creation are GitHub features; the "PR" in the name refers to the GitHub artifact.
 
@@ -21,7 +22,7 @@ Why a separate skill: several callers need the same writing logic without the si
 Input is a free-form prompt. Parse it into three parts:
 
 - **A PR reference, if present.** Any of these patterns counts: a full GitHub PR URL (`https://github.com/owner/repo/pull/NN`), `pr:<number>` or `pr:<URL>`, a bare hashmark form (`#NN`), or the argument being just a number (`561`). Extract the PR reference and treat the rest of the argument as steering text.
-- **A `test-plan:` block or `preserve-test-plan` directive, if present.** Callers (typically `inc:commit-push-pr`) may include a fully-authored test plan block, introduced by the literal token `test-plan:` followed by markdown content up to the next top-level steering directive (e.g., `base:`, `focus:`) or the end of the argument. Alternatively, a caller may pass the literal token `preserve-test-plan` (no body) to indicate the existing PR body's test-plan section should be kept verbatim. Extract either and handle per Step 8 below.
+- **A `test-plan:` block or `preserve-test-plan` directive, if present.** Callers (typically `inc:commit-push-pr-4`) may include a fully-authored test plan block, introduced by the literal token `test-plan:` followed by markdown content up to the next top-level steering directive (e.g., `base:`, `focus:`) or the end of the argument. Alternatively, a caller may pass the literal token `preserve-test-plan` (no body) to indicate the existing PR body's test-plan section should be kept verbatim. Extract either and handle per Step 8 below.
 - **Everything else is steering text** (a "focus" hint like "emphasize the benchmarks" or "do a good job with the perf story"). It may be combined with a PR reference or stand alone.
 
 No specific grammar is required — read the argument as natural language and identify whichever PR reference, `test-plan:` block, or `preserve-test-plan` directive is present. If no PR reference is present, default to describing the current branch.
@@ -35,17 +36,17 @@ No specific grammar is required — read the argument as natural language and id
 
 Steering text is always optional. If present, incorporate it alongside the diff-derived narrative; do not let it override the value-first principles or fabricate content unsupported by the diff.
 
-**Optional `base:<ref>` override (current-branch mode only).** When a caller already knows the intended base branch (e.g., `inc:commit-push-pr` has detected `origin/develop` or `origin/release/2026-04` as the target), it can pass `base:<ref>` to pin the base explicitly. The ref must resolve locally. This overrides auto-detection for current-branch mode; PR mode ignores it (PRs already define their own base via `baseRefName`). Most invocations don't need this — auto-detection (existing PR's `baseRefName` → `origin/HEAD`) covers the common case.
+**Optional `base:<ref>` override (current-branch mode only).** When a caller already knows the intended base branch (e.g., `inc:commit-push-pr-4` has detected `origin/develop` or `origin/release/2026-04` as the target), it can pass `base:<ref>` to pin the base explicitly. The ref must resolve locally. This overrides auto-detection for current-branch mode; PR mode ignores it (PRs already define their own base via `baseRefName`). Most invocations don't need this — auto-detection (existing PR's `baseRefName` → `origin/HEAD`) covers the common case.
 
 **Examples**:
 
-- `inc-pr-description` → current-branch, no focus, auto-detect base
-- `inc-pr-description emphasize the benchmarks` → current-branch, focus = "emphasize the benchmarks"
-- `inc-pr-description base:origin/develop` → current-branch, base pinned to `origin/develop`
-- `inc-pr-description base:origin/develop emphasize perf` → same + focus
-- `inc-pr-description pr:561` → PR #561, no focus
-- `inc-pr-description #561 do a good job with the perf story` → PR #561, focus = "do a good job with the perf story"
-- `inc-pr-description https://github.com/foo/bar/pull/561 emphasize safety` → PR #561 in foo/bar, focus = "emphasize safety"
+- `_inc-pr-description` → current-branch, no focus, auto-detect base
+- `_inc-pr-description emphasize the benchmarks` → current-branch, focus = "emphasize the benchmarks"
+- `_inc-pr-description base:origin/develop` → current-branch, base pinned to `origin/develop`
+- `_inc-pr-description base:origin/develop emphasize perf` → same + focus
+- `_inc-pr-description pr:561` → PR #561, no focus
+- `_inc-pr-description #561 do a good job with the perf story` → PR #561, focus = "do a good job with the perf story"
+- `_inc-pr-description https://github.com/foo/bar/pull/561 emphasize safety` → PR #561 in foo/bar, focus = "emphasize safety"
 
 ## Output
 
@@ -192,7 +193,7 @@ Decide whether evidence capture is possible from the full branch diff.
 **This skill does NOT prompt the user** to capture evidence. The decision logic is:
 
 1. **PR mode invocation** (any form: bare number, `#NN`, `pr:<N>`, or a full URL — anything that resolves to an existing PR whose body we fetched) **and the existing body contains a `## Demo` or `## Screenshots` section with image embeds:** preserve it verbatim unless the steering text asks to refresh or remove it. Include the preserved block in the returned body. This applies regardless of which input shape the caller used; what matters is that a PR exists and its body was read.
-2. **Current-branch mode or PR mode without an evidence block:** omit the evidence section entirely. If the caller wants to capture evidence, the caller is responsible for invoking `inc-demo-reel` separately and splicing the result in, or for asking this skill to regenerate with updated steering text after capture.
+2. **Current-branch mode or PR mode without an evidence block:** omit the evidence section entirely. If the caller wants to capture evidence, the caller is responsible for invoking `_inc-demo-reel` separately and splicing the result in, or for asking this skill to regenerate with updated steering text after capture.
 
 Do not label test output as "Demo" or "Screenshots".
 
@@ -389,7 +390,7 @@ Do not emit the body markdown in the return block — the caller reads it from `
 
 If Step 1 exited gracefully (closed/merged PR, invalid range, empty commit list), do not create a body file — just return the reason string.
 
-**The return block is a hand-off, not task completion.** When invoked by a parent skill (e.g., `inc:commit-push-pr`), emit the return block and then continue executing the parent's remaining steps (typically `gh pr create` or `gh pr edit` with the returned title and body file). Do not stop after the return block unless invoked directly by the user with no parent workflow.
+**The return block is a hand-off, not task completion.** When invoked by a parent skill (e.g., `inc:commit-push-pr-4`), emit the return block and then continue executing the parent's remaining steps (typically `gh pr create` or `gh pr edit` with the returned title and body file). Do not stop after the return block unless invoked directly by the user with no parent workflow.
 
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: inc:resolve-pr-feedback
+name: inc:resolve-pr-feedback-5
 description: Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.
 argument-hint: "[PR number, comment URL, or blank for current branch's PR]"
 allowed-tools: Bash(gh *), Bash(git *), Read
@@ -226,7 +226,7 @@ git commit -m "Address PR review feedback (#PR_NUMBER)
 git push
 ```
 
-If the push is rejected because the branch is behind remote, or any merge/rebase conflict surfaces, hand off to `git-merge-expert` to resolve before continuing. Do not resolve conflicts inline.
+If the push is rejected because the branch is behind remote, or any merge/rebase conflict surfaces, hand off to `_inc-git-merge-expert` to resolve before continuing. Do not resolve conflicts inline.
 
 ### 8. Reply and Resolve
 

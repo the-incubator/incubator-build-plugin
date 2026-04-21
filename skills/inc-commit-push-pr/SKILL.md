@@ -1,5 +1,5 @@
 ---
-name: inc:commit-push-pr
+name: inc:commit-push-pr-4
 description: Commit, push, and open a PR with an adaptive, value-first description. Use when the user says "commit and PR", "push and open a PR", "ship this", "create a PR", "open a pull request", "commit push PR", or wants to go from working changes to an open pull request in one step. Also use when the user says "update the PR description", "refresh the PR description", "freshen the PR", or wants to rewrite an existing PR description. Produces PR descriptions that scale in depth with the complexity of the change, avoiding cookie-cutter templates.
 ---
 
@@ -69,16 +69,16 @@ Read the current PR description to drive the compare-and-confirm step later:
 gh pr view --json body --jq '.body'
 ```
 
-**Generate the updated title and body** — load the `inc-pr-description` skill with the PR URL from DU-2 (e.g., `https://github.com/owner/repo/pull/123`). The URL preserves repo/PR identity even when invoked from a worktree or subdirectory where the current repo is ambiguous. If the user provided a focus (e.g., "include the benchmarking results"), append it as free-text steering after the URL. The skill returns a `{title, body_file}` block (body in an OS temp file) without applying or prompting.
+**Generate the updated title and body** — load the `_inc-pr-description` skill with the PR URL from DU-2 (e.g., `https://github.com/owner/repo/pull/123`). The URL preserves repo/PR identity even when invoked from a worktree or subdirectory where the current repo is ambiguous. If the user provided a focus (e.g., "include the benchmarking results"), append it as free-text steering after the URL. The skill returns a `{title, body_file}` block (body in an OS temp file) without applying or prompting.
 
-If `inc-pr-description` returns a "not open" or other graceful-exit message instead of a `{title, body_file}` pair, report that message and stop.
+If `_inc-pr-description` returns a "not open" or other graceful-exit message instead of a `{title, body_file}` pair, report that message and stop.
 
-**Evidence decision:** `inc-pr-description` preserves any existing `## Demo` or `## Screenshots` block from the current body by default. If the user's focus asks to refresh or remove evidence, pass that intent as steering text — the skill will honor it. If no evidence block exists and one would benefit the reader, invoke `inc-demo-reel` separately to capture, then re-invoke `inc-pr-description` with updated steering that references the captured evidence.
+**Evidence decision:** `_inc-pr-description` preserves any existing `## Demo` or `## Screenshots` block from the current body by default. If the user's focus asks to refresh or remove evidence, pass that intent as steering text — the skill will honor it. If no evidence block exists and one would benefit the reader, invoke `_inc-demo-reel` separately to capture, then re-invoke `_inc-pr-description` with updated steering that references the captured evidence.
 
 **Test-plan decision.** Check the current PR body for an existing `## Test plan` (or `## How to test`) section that covers core scenarios, secondary scenarios, and unhappy paths with concrete steps. Three paths:
 
-- **Existing plan is complete** — pass `preserve-test-plan` as steering so `inc-pr-description` keeps it verbatim. Skip the interview.
-- **Existing plan is thin, outdated, or missing** — run the full test-plan interview described in the Full workflow Step 6 ("Test-plan interview"), using the same three buckets (core / secondary / unhappy) and the same structured `test-plan:` steering block. Pass that block to `inc-pr-description` in place of `preserve-test-plan`.
+- **Existing plan is complete** — pass `preserve-test-plan` as steering so `_inc-pr-description` keeps it verbatim. Skip the interview.
+- **Existing plan is thin, outdated, or missing** — run the full test-plan interview described in the Full workflow Step 6 ("Test-plan interview"), using the same three buckets (core / secondary / unhappy) and the same structured `test-plan:` steering block. Pass that block to `_inc-pr-description` in place of `preserve-test-plan`.
 - **User's focus explicitly asks to refresh the test plan** — run the interview regardless of the existing plan's completeness.
 
 When in doubt between the first two paths, run the interview. A PO needs concrete steps more than a clean diff.
@@ -90,7 +90,7 @@ When in doubt between the first two paths, run the interview. A PO needs concret
 
 **If confirmed, perform these two actions in order.** They are separate steps with a hand-off boundary between them — do not stop after action 1.
 
-1. `inc-pr-description` has already returned its `=== TITLE ===` / `=== BODY_FILE ===` block and stopped; it does not apply on its own.
+1. `_inc-pr-description` has already returned its `=== TITLE ===` / `=== BODY_FILE ===` block and stopped; it does not apply on its own.
 2. Apply the returned title and body file yourself. This is this skill's responsibility, not the delegated skill's. Substitute `<TITLE>` and `<BODY_FILE>` verbatim from the return block; if `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 
    ```bash
@@ -145,7 +145,7 @@ Priority order for commit messages and PR titles:
 
 Use the current branch and existing PR check from context. If the branch is empty, report detached HEAD and stop.
 
-If the PR check returned `state: OPEN`, note the URL -- this is the existing-PR flow. Continue to Step 4 and 5 (commit any pending work and push), then go to Step 7 to ask whether to rewrite the description. Only run Step 6 (which generates a new description via `inc-pr-description`) if the user confirms the rewrite; Step 7's existing-PR sub-path consumes the `{title, body_file}` that Step 6 produces. Otherwise (no open PR), continue through Steps 6, 7, and 8 in order.
+If the PR check returned `state: OPEN`, note the URL -- this is the existing-PR flow. Continue to Step 4 and 5 (commit any pending work and push), then go to Step 7 to ask whether to rewrite the description. Only run Step 6 (which generates a new description via `_inc-pr-description`) if the user confirms the rewrite; Step 7's existing-PR sub-path consumes the `{title, body_file}` that Step 6 produces. Otherwise (no open PR), continue through Steps 6, 7, and 8 in order.
 
 ### Step 4: Branch, stage, and commit
 
@@ -202,13 +202,13 @@ Use this branch diff (not the working-tree diff) for the evidence decision. If t
 
 **Evidence decision (before delegation).** If the branch diff changes observable behavior (UI, CLI output, API behavior with runnable code, generated artifacts, workflow output) and evidence is not otherwise blocked (unavailable credentials, paid services, deploy-only infrastructure, hardware), ask: "This PR has observable behavior. Capture evidence for the PR description?"
 
-- **Capture now** -- load the `inc-demo-reel` skill with a target description inferred from the branch diff. `inc-demo-reel` returns `Tier`, `Description`, and `URL`. Note the captured evidence so it can be passed as free-text steering to `inc-pr-description` (e.g., "include the captured demo: <URL> as a `## Demo` section") or spliced into the returned body before apply. If capture returns `Tier: skipped` or `URL: "none"`, proceed with no evidence.
-- **Use existing evidence** -- ask for the URL or markdown embed, then pass it as free-text steering to `inc-pr-description` or splice in before apply.
+- **Capture now** -- load the `_inc-demo-reel` skill with a target description inferred from the branch diff. `_inc-demo-reel` returns `Tier`, `Description`, and `URL`. Note the captured evidence so it can be passed as free-text steering to `_inc-pr-description` (e.g., "include the captured demo: <URL> as a `## Demo` section") or spliced into the returned body before apply. If capture returns `Tier: skipped` or `URL: "none"`, proceed with no evidence.
+- **Use existing evidence** -- ask for the URL or markdown embed, then pass it as free-text steering to `_inc-pr-description` or splice in before apply.
 - **Skip** -- proceed with no evidence section.
 
 When evidence is not possible (docs-only, markdown-only, changelog-only, release metadata, CI/config-only, test-only, or pure internal refactors), skip without asking.
 
-**Test-plan interview (before delegation).** Humans reviewing this PR are primarily checking product acceptance — they need a concrete plan they can execute. Do not skip this gate for anything non-trivial. Skip only when the branch diff is docs-only, markdown-only, changelog-only, release metadata, CI/config-only, pure internal refactor with no observable behavior change, or a small+simple change per the `inc-pr-description` sizing table.
+**Test-plan interview (before delegation).** Humans reviewing this PR are primarily checking product acceptance — they need a concrete plan they can execute. Do not skip this gate for anything non-trivial. Skip only when the branch diff is docs-only, markdown-only, changelog-only, release metadata, CI/config-only, pure internal refactor with no observable behavior change, or a small+simple change per the `_inc-pr-description` sizing table.
 
 Ask the user for the concrete test plan the product owner (or a reviewer standing in for one) will execute. Structure the prompt around three buckets — every test plan must cover all three:
 
@@ -224,7 +224,7 @@ For each scenario across all three buckets, collect enough for a reviewer to act
 
 If the user gives a thin answer ("test the form submits"), push once for concrete inputs and the expected observable outcome. If they push back ("just use your judgment"), infer what you can from the diff and mark any inferred step with `(inferred — please verify)` so the product owner can spot-check it.
 
-Format the collected plan as a structured block to pass as steering to `inc-pr-description`. Use this exact shape so the downstream skill can render it verbatim:
+Format the collected plan as a structured block to pass as steering to `_inc-pr-description`. Use this exact shape so the downstream skill can render it verbatim:
 
 ```
 test-plan:
@@ -240,28 +240,28 @@ test-plan:
 
 Omit a bucket only if the user explicitly confirmed it has no applicable cases ("no unhappy paths matter for this chore PR"). Do not silently drop a bucket.
 
-**Delegate title and body generation to `inc-pr-description`.** Load the `inc-pr-description` skill:
+**Delegate title and body generation to `_inc-pr-description`.** Load the `_inc-pr-description` skill:
 
-- **For a new PR** (no existing PR found in Step 3): invoke with `base:<base-remote>/<base-branch>` using the already-resolved base from earlier in this step, so `inc-pr-description` describes the correct commit range even when the branch targets a non-default base (e.g., `develop`, `release/*`). Append any captured-evidence context, test-plan block, or user focus as free-text steering (e.g., "include the captured demo: <URL> as a `## Demo` section").
+- **For a new PR** (no existing PR found in Step 3): invoke with `base:<base-remote>/<base-branch>` using the already-resolved base from earlier in this step, so `_inc-pr-description` describes the correct commit range even when the branch targets a non-default base (e.g., `develop`, `release/*`). Append any captured-evidence context, test-plan block, or user focus as free-text steering (e.g., "include the captured demo: <URL> as a `## Demo` section").
 - **For an existing PR** (found in Step 3): invoke with the full PR URL from the Step 3 context (e.g., `https://github.com/owner/repo/pull/123`). The URL preserves repo/PR identity even when invoked from a worktree or subdirectory; the skill reads the PR's own `baseRefName` so no `base:` override is needed. Append the test-plan block and any focus steering as free text after the URL.
 
-**Steering discipline.** Pass only what the diff cannot reveal: a user focus ("emphasize the performance win"), a specific framing concern ("this needs to read as a migration not a feature"), the test-plan block from the interview above, or a pointer to institutional knowledge. Do NOT dump an exhaustive scope summary or a numbered list of every change — `inc-pr-description` reads the diff itself. Over-specified steering encourages the downstream skill to cover everything passed in, producing verbose output. Cap non-test-plan steering at roughly 100 words; the test-plan block is exempt from that cap since it is a user-authored artifact that must be preserved verbatim.
+**Steering discipline.** Pass only what the diff cannot reveal: a user focus ("emphasize the performance win"), a specific framing concern ("this needs to read as a migration not a feature"), the test-plan block from the interview above, or a pointer to institutional knowledge. Do NOT dump an exhaustive scope summary or a numbered list of every change — `_inc-pr-description` reads the diff itself. Over-specified steering encourages the downstream skill to cover everything passed in, producing verbose output. Cap non-test-plan steering at roughly 100 words; the test-plan block is exempt from that cap since it is a user-authored artifact that must be preserved verbatim.
 
-`inc-pr-description` returns a `{title, body_file}` block (body in an OS temp file). It applies the value-first writing principles, commit classification, sizing, narrative framing, writing voice, visual communication, numbering rules internally. Use the returned values verbatim in Step 7; do not layer manual edits onto them unless a focused adjustment is required (e.g., splicing an evidence block captured in this step that was not passed as steering text — in that case, edit the body file directly before applying).
+`_inc-pr-description` returns a `{title, body_file}` block (body in an OS temp file). It applies the value-first writing principles, commit classification, sizing, narrative framing, writing voice, visual communication, numbering rules internally. Use the returned values verbatim in Step 7; do not layer manual edits onto them unless a focused adjustment is required (e.g., splicing an evidence block captured in this step that was not passed as steering text — in that case, edit the body file directly before applying).
 
-If `inc-pr-description` returns a graceful-exit message instead of `{title, body_file}` (e.g., closed PR, no commits to describe, base ref unresolved), report the message and stop — do not create or edit the PR.
+If `_inc-pr-description` returns a graceful-exit message instead of `{title, body_file}` (e.g., closed PR, no commits to describe, base ref unresolved), report the message and stop — do not create or edit the PR.
 
 ### Step 7: Create or update the PR
 
 #### New PR (no existing PR from Step 3)
 
-Using the `=== TITLE ===` / `=== BODY_FILE ===` block returned by `inc-pr-description`, substitute `<TITLE>` and `<BODY_FILE>` verbatim. If `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
+Using the `=== TITLE ===` / `=== BODY_FILE ===` block returned by `_inc-pr-description`, substitute `<TITLE>` and `<BODY_FILE>` verbatim. If `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 
 ```bash
 gh pr create --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
 ```
 
-Keep the title under 72 characters; `inc-pr-description` already emits a conventional-commit title in that range.
+Keep the title under 72 characters; `_inc-pr-description` already emits a conventional-commit title in that range.
 
 #### Existing PR (found in Step 3)
 
@@ -269,7 +269,7 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 
 - If **no** -- skip Step 6 entirely and finish. Do not run delegation or evidence capture when the user declined the rewrite.
 - If **yes**, perform these three actions in order. They are separate steps with a hand-off boundary between them -- do not stop between actions.
-  1. Run Step 6 to generate via `inc-pr-description` (passing the existing PR URL as `pr:`). `inc-pr-description` explicitly does not apply on its own; it returns its `=== TITLE ===` / `=== BODY_FILE ===` block and stops.
+  1. Run Step 6 to generate via `_inc-pr-description` (passing the existing PR URL as `pr:`). `_inc-pr-description` explicitly does not apply on its own; it returns its `=== TITLE ===` / `=== BODY_FILE ===` block and stops.
   2. **Preview and confirm.** Read the first two sentences of the Summary from the body file, plus the total line count. Ask the user (per the "Asking the user" convention at the top of this skill): "New title: `<title>` (`<N>` chars). Summary leads with: `<first two sentences>`. Total body: `<L>` lines. Apply?" The first two sentences of the Summary carry most of the reviewer's attention; they are the single highest-leverage text in the description, so they are what the preview spotlights. If the user declines, they may pass steering text back for a regenerate; do not apply.
   3. If confirmed, apply the returned title and body file yourself. This is this skill's responsibility, not the delegated skill's. Substitute `<TITLE>` and `<BODY_FILE>` verbatim from the return block; if `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 

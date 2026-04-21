@@ -1,5 +1,5 @@
 ---
-name: inc:plan-review
+name: inc:plan-review-2
 description: Review a plan, spec, or design proposal *before* implementation. Dispatches inc-staff-reviewer alongside plan-adapted personas to surface gaps, over-engineering, risk, and ambiguity.
 argument-hint: "[path to plan file, URL to plan doc, or blank to review the most recently modified plan in docs/plans]"
 allowed-tools: Bash(ls:*), Bash(find:*), Bash(cat:*), Bash(wc:*), Bash(git log:*), Bash(git status:*), Bash(git rev-parse:*)
@@ -14,13 +14,13 @@ Review a plan or design proposal **before** any implementation begins. The goal 
 - You have a brainstorm or spec and need it stress-tested
 - You want structured gating between planning and implementation
 
-Do **not** use this to review code changes — use `/inc:review` or `/inc:review-deep` for that.
+Do **not** use this to review code changes — use `/inc:review-3a` or `/inc:deep-review-3b` for that.
 
 ## Mode detection
 
 - **Path mode** — `$ARGUMENTS` is a filesystem path to a markdown file. Read it directly.
 - **URL mode** — `$ARGUMENTS` looks like a URL. Fetch its contents via WebFetch.
-- **Auto mode** — `$ARGUMENTS` is empty. Pick the most recently modified file under `docs/plans/` (fall back to the repo root if that directory does not exist). If nothing plausible exists, stop with `No plan found. Pass a path or URL to /inc:plan-review.`
+- **Auto mode** — `$ARGUMENTS` is empty. Pick the most recently modified file under `docs/plans/` (fall back to the repo root if that directory does not exist). If nothing plausible exists, stop with `No plan found. Pass a path or URL to /inc:plan-review-2.`
 
 In every step below, "the plan" means the resolved plan document content.
 

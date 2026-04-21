@@ -1,5 +1,5 @@
 ---
-name: inc:ship-pr
+name: inc:ship-pr-7
 description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs four blocking checks (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing) and blocks the merge if any fail. Ends with a monitoring reminder.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(npx drizzle-kit *), Bash(npm run *), Bash(./scripts/*), Glob, Grep
 ---
@@ -107,7 +107,7 @@ Ask the user directly:
 - User confirms "no, nothing required" → **Gate 3 OK.**
 - User confirms backfill exists and has been run + verified → **Gate 3 OK.** Note what was run in the ship report.
 - User confirms backfill required but not yet run → **Gate 3 BLOCK.** Tell them:
-  > Run the backfill or sync first, verify its output, then re-run `/inc:ship-pr`.
+  > Run the backfill or sync first, verify its output, then re-run `/inc:ship-pr-7`.
 
 Do not guess on this gate. Ask, even if the diff looks trivial.
 
@@ -156,7 +156,7 @@ SHIP: <GO | BLOCK — gate(s) N, M>
 
 If `SHIP: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
 
-If `SHIP: GO`, tell the user they're clear to merge, then print the monitoring reminder below. To perform the merge itself, hand off to `git-merge-expert`.
+If `SHIP: GO`, tell the user they're clear to merge, then print the monitoring reminder below. To perform the merge itself, hand off to `_inc-git-merge-expert`.
 
 ---
 
@@ -176,7 +176,7 @@ After the user merges, they must actively watch the deploy. Print this verbatim:
 
 ## What This Skill Does NOT Do
 
-- Does not merge the PR. The user merges after the report says GO, or hands off to `git-merge-expert` to perform the merge.
+- Does not merge the PR. The user merges after the report says GO, or hands off to `_inc-git-merge-expert` to perform the merge.
 - Does not run the deploy. Merging the PR triggers Cloud Build.
 - Does not run the backfill. That is a manual prerequisite the user confirms.
 - Does not replace code review or CI. Assume those already passed.
