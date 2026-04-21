@@ -9,28 +9,29 @@ import { existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-const PUSH_OR_MERGE_RE = /\b(?:git\s+push|gh\s+pr\s+merge)\b/;
+const PUSH_OR_MERGE_RE = /(?:^|[&|;]|\s)(?:git\s+push|gh\s+pr\s+merge)(?:\s|$)/;
 const CONTENT_PREFIXES = ["skills/", "agents/", "hooks/"];
 
 function readStdinJson(timeoutMs = 500) {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) return resolve(null);
     let buf = "";
-    const timer = setTimeout(() => resolve(null), timeoutMs);
+    const done = (val) => {
+      clearTimeout(timer);
+      process.stdin.destroy();
+      resolve(val);
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (c) => (buf += c));
     process.stdin.on("end", () => {
-      clearTimeout(timer);
       try {
-        resolve(buf ? JSON.parse(buf) : null);
+        done(buf ? JSON.parse(buf) : null);
       } catch {
-        resolve(null);
+        done(null);
       }
     });
-    process.stdin.on("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
+    process.stdin.on("error", () => done(null));
   });
 }
 
@@ -44,6 +45,7 @@ function deny(reason) {
       },
     }),
   );
+  process.exit(0);
 }
 
 function git(args, cwd) {
@@ -58,7 +60,7 @@ async function main() {
 
   let root;
   try {
-    root = git(["rev-parse", "--show-toplevel"]);
+    root = git(["rev-parse", "--show-toplevel"], process.cwd());
   } catch {
     return;
   }
