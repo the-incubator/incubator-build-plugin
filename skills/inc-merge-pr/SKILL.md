@@ -1,14 +1,14 @@
 ---
-name: inc:ship-pr-7
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs four blocking checks (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing) and blocks the merge if any fail. Ends with a monitoring reminder.
+name: inc:merge-pr-7
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs four blocking checks (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing). If all gates pass, squash-merges the PR into main. If any gate fails, the merge is blocked. Ends with a monitoring reminder.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(npx drizzle-kit *), Bash(npm run *), Bash(./scripts/*), Glob, Grep
 ---
 
-# Ship PR: Production Deploy Readiness Check
+# Merge PR: Production Deploy Readiness Check
 
 Four gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning.
 
-Report each gate in order. At the end, print a single line: `SHIP: GO` or `SHIP: BLOCK — <reasons>`. Then print the monitoring reminder.
+Report each gate in order. At the end, print a single line: `MERGE: GO` or `MERGE: BLOCK — <reasons>`. On `MERGE: GO`, squash-merge the PR into `main`, then print the monitoring reminder.
 
 ---
 
@@ -107,7 +107,7 @@ Ask the user directly:
 - User confirms "no, nothing required" → **Gate 3 OK.**
 - User confirms backfill exists and has been run + verified → **Gate 3 OK.** Note what was run in the ship report.
 - User confirms backfill required but not yet run → **Gate 3 BLOCK.** Tell them:
-  > Run the backfill or sync first, verify its output, then re-run `/inc:ship-pr-7`.
+  > Run the backfill or sync first, verify its output, then re-run `/inc:merge-pr-7`.
 
 Do not guess on this gate. Ask, even if the diff looks trivial.
 
@@ -145,22 +145,36 @@ Blocked output:
 After all four gates, print:
 
 ```
-=== SHIP-PR REPORT ===
+=== MERGE-PR REPORT ===
 Gate 1 (env vars):       <OK | BLOCK: ...>
 Gate 2 (migrations):     <OK | BLOCK: ...>
 Gate 3 (backfill/sync):  <OK | BLOCK: ...>
 Gate 4 (deploy window):  <OK | BLOCK: ...>
 
-SHIP: <GO | BLOCK — gate(s) N, M>
+MERGE: <GO | BLOCK — gate(s) N, M>
 ```
 
-If `SHIP: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
+If `MERGE: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
 
-If `SHIP: GO`, tell the user they're clear to merge, then print the monitoring reminder below. To perform the merge itself, hand off to `git-merge-expert`.
+If `MERGE: GO`, squash-merge the PR into `main`:
+
+```bash
+PR_NUMBER=$(gh pr view --json number -q .number)
+gh pr merge "$PR_NUMBER" --squash
+```
+
+The branch is intentionally **not** deleted — leave it in place so the author can decide when to clean it up. If the user has told you their repo convention is `--merge` or `--rebase`, use that strategy instead of `--squash`.
+
+If `gh pr merge` fails, report the error verbatim, then branch on the cause:
+
+- **Merge conflicts** — hand off to the `git-merge-expert` skill to resolve conflicts (update the branch from `main`, resolve, push), then re-run `/inc:merge-pr-7`. Do not resolve conflicts in this skill.
+- **Required checks not green / branch protection / anything else** — stop. Do not retry, do not pass force flags.
+
+After a successful merge, print the monitoring reminder below.
 
 ---
 
-## Monitoring Reminder (only on SHIP: GO)
+## Monitoring Reminder (only on MERGE: GO)
 
 After the user merges, they must actively watch the deploy. Print this verbatim:
 
@@ -176,7 +190,8 @@ After the user merges, they must actively watch the deploy. Print this verbatim:
 
 ## What This Skill Does NOT Do
 
-- Does not merge the PR. The user merges after the report says GO, or hands off to `git-merge-expert` to perform the merge.
+- Does not delete the merged branch. The author cleans up when ready.
 - Does not run the deploy. Merging the PR triggers Cloud Build.
 - Does not run the backfill. That is a manual prerequisite the user confirms.
 - Does not replace code review or CI. Assume those already passed.
+- Does not force-merge. If branch protection, required checks, or conflicts block `gh pr merge`, the skill surfaces the error and stops.
