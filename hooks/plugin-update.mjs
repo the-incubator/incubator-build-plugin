@@ -1,6 +1,6 @@
 // SessionStart hook: background plugin auto-updater.
 //
-// Throttled to at most once per 6 hours. Spawns `claude plugin update` fully
+// Throttled to at most once per 4 hours. Spawns `claude plugin update` fully
 // detached so the running session is never blocked and the child outlives this
 // hook process. Any failure is swallowed — Claude Code sessions must never be
 // blocked by the updater.
@@ -12,7 +12,7 @@ import { P } from "./_util.mjs";
 
 const MARKETPLACE_NAME = "incubator";
 const PLUGIN_REF = "incubator-build@incubator";
-const INTERVAL_MS = 6 * 60 * 60 * 1000;
+const INTERVAL_MS = 4 * 60 * 60 * 1000;
 const STAMP_PATH = join(P.incubator, "last-update-check");
 
 try {
