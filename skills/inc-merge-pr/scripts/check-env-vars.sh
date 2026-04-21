@@ -4,8 +4,8 @@
 
 set -e
 
-# Get env vars referenced in diff vs main
-DIFF_ENV_VARS=$(git diff main -- server/ shared/ client/ 2>/dev/null | grep -oE 'process\.env\.[A-Z_]+|import\.meta\.env\.[A-Z_]+' | sort -u || true)
+# Get env vars newly referenced in diff vs origin/main (added lines only)
+DIFF_ENV_VARS=$(git diff origin/main -- server/ shared/ client/ 2>/dev/null | grep '^+' | grep -oE 'process\.env\.[A-Z_]+|import\.meta\.env\.[A-Z_]+' | sort -u || true)
 
 if [ -z "$DIFF_ENV_VARS" ]; then
     echo "STATUS: pass"
