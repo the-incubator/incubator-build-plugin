@@ -14,7 +14,7 @@ Report each gate in order. At the end, print a single line: `MERGE: GO` or `MERG
 
 ## Gate 1: New Environment Variables
 
-New `process.env.*` or `import.meta.env.*` references in the diff must already be configured in the Google Cloud Build deploy pipeline (`cloudbuild.yaml` substitutions for frontend `VITE_*` vars, Cloud Run environment for backend vars).
+New `process.env.*` or `import.meta.env.*` references in the diff must already be configured in the project's deploy pipeline before merge. Frontend build-time vars (e.g., `VITE_*`) are typically baked in at build time and need to be set in the build config; backend runtime vars are set in the runtime environment. The specific files and surfaces are project-dependent — consult the project's deploy docs or `CLAUDE.md` for the exact location.
 
 Run:
 
@@ -26,9 +26,9 @@ Parse output:
 
 - `STATUS: pass` → **Gate 1 OK.**
 - `STATUS: warn` (new vars found) → **Gate 1 BLOCK.** List each new var from `NEW_VARS:`. For each, tell the user:
-  > **New env var `<VAR_NAME>`** — not in `cloudbuild.yaml`.
-  > - If `VITE_*`: add to `cloudbuild.yaml` substitutions and commit.
-  > - Else: add to Cloud Run service env vars in the GCP console for the target environment.
+  > **New env var `<VAR_NAME>`** — not configured in the deploy pipeline.
+  > - If it's a build-time var (e.g., `VITE_*`): add it to the build config so it's baked into the bundle.
+  > - Otherwise: add it to the runtime environment for the target deploy environment.
   >
   > Merge is blocked until this var is configured in the deploy pipeline.
 
@@ -180,9 +180,9 @@ After the squash-merge completes, the user must actively watch the deploy. Print
 
 > **Merge complete — the deploy pipeline is running. Monitor the deploy in all three places until it's green:**
 >
-> 1. **Slack `#deploys` channel** — watch for the Cloud Build start/success/failure message for this commit.
-> 2. **Slack `#errors` channel (and/or your monitoring tool — Sentry / Datadog / whichever is wired up)** — watch for a spike in new errors in the minutes after deploy.
-> 3. **Hosting infrastructure** — Cloud Run service dashboard for the target environment: check instance health, request error rate, and CPU/memory for at least 10 minutes post-deploy.
+> 1. **Build/deploy channel** (e.g., Slack `#deploys`) — watch for the pipeline's start/success/failure message for this commit.
+> 2. **Errors channel or monitoring tool** (Slack `#errors`, Sentry, Datadog, or whichever is wired up) — watch for a spike in new errors in the minutes after deploy.
+> 3. **Runtime dashboard** — the hosting platform's service dashboard for the target environment: check instance health, request error rate, and CPU/memory for at least 10 minutes post-deploy.
 >
 > If any of the three goes red, roll back immediately rather than debugging live.
 
@@ -191,7 +191,7 @@ After the squash-merge completes, the user must actively watch the deploy. Print
 ## What This Skill Does NOT Do
 
 - Does not delete the merged branch. The author cleans up when ready.
-- Does not run the deploy. Merging the PR triggers Cloud Build.
+- Does not run the deploy. Merging the PR triggers whatever pipeline is wired to the target branch.
 - Does not run the backfill. That is a manual prerequisite the user confirms.
 - Does not replace code review or CI. Assume those already passed.
 - Does not force-merge. If branch protection, required checks, or conflicts block `gh pr merge`, the skill surfaces the error and stops.
