@@ -178,7 +178,7 @@ After a successful merge, print the monitoring reminder below.
 
 After the squash-merge completes, the user must actively watch the deploy. Print this verbatim:
 
-> **Merge complete — Cloud Build is running. Monitor the deploy in all three places until it's green:**
+> **Merge complete — the deploy pipeline is running. Monitor the deploy in all three places until it's green:**
 >
 > 1. **Slack `#deploys` channel** — watch for the Cloud Build start/success/failure message for this commit.
 > 2. **Slack `#errors` channel (and/or your monitoring tool — Sentry / Datadog / whichever is wired up)** — watch for a spike in new errors in the minutes after deploy.
