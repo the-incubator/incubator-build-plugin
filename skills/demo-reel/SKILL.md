@@ -1,5 +1,6 @@
 ---
-name: inc-demo-reel
+name: demo-reel
+user-invocable: false
 description: "Capture a visual demo reel (GIF, terminal recording, screenshots) for PR descriptions. Use when shipping UI changes, CLI features, or any work with observable behavior that benefits from visual proof. Also use when asked to add a demo, record a GIF, screenshot a feature, show what changed visually, create a demo reel, capture evidence, add proof to a PR, or create a before/after comparison."
 argument-hint: "[what to capture, e.g. 'the new settings page' or 'CLI output of the migrate command']"
 ---
@@ -147,7 +148,7 @@ After the selected tier produces an artifact, read `references/upload-and-approv
 
 ## Output
 
-Return these values to the caller (e.g., `inc:commit-push-pr`):
+Return these values to the caller (e.g., `inc:commit-push-pr-4`):
 
 ```
 === Evidence Capture Complete ===

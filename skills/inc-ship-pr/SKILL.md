@@ -1,5 +1,5 @@
 ---
-name: inc:ship-pr
+name: inc:ship-pr-7
 description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs four blocking checks (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing) and blocks the merge if any fail. Ends with a monitoring reminder.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(npx drizzle-kit *), Bash(npm run *), Bash(./scripts/*), Glob, Grep
 ---
@@ -107,7 +107,7 @@ Ask the user directly:
 - User confirms "no, nothing required" → **Gate 3 OK.**
 - User confirms backfill exists and has been run + verified → **Gate 3 OK.** Note what was run in the ship report.
 - User confirms backfill required but not yet run → **Gate 3 BLOCK.** Tell them:
-  > Run the backfill or sync first, verify its output, then re-run `/inc:ship-pr`.
+  > Run the backfill or sync first, verify its output, then re-run `/inc:ship-pr-7`.
 
 Do not guess on this gate. Ask, even if the diff looks trivial.
 

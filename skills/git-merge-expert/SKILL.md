@@ -15,7 +15,7 @@ allowed-tools:
   - Grep
   - Skill
 disable-model-invocation: true
-user-invocable: true
+user-invocable: false
 argument-hint: "[PR number, source branch, target branch, or merge task]"
 arguments:
   - request

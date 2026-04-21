@@ -1,5 +1,5 @@
 ---
-name: inc:resolve-pr-feedback
+name: inc:resolve-pr-feedback-5
 description: Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.
 argument-hint: "[PR number, comment URL, or blank for current branch's PR]"
 allowed-tools: Bash(gh *), Bash(git *), Read
