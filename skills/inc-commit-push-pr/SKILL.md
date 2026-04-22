@@ -126,12 +126,14 @@ If the working tree is clean (no staged, modified, or untracked files), determin
 
 Decision tree:
 
-- **On default branch, unpushed commits or no upstream** -- ask whether to create a feature branch (pushing default directly is not supported). If yes, create and continue from Step 5. If no, stop.
+- **On default branch, unpushed commits or no upstream** -- ask whether to create a feature branch (pushing default directly is not supported). If yes, create and continue from Step 4.5. If no, stop.
 - **On default branch, all pushed, no open PR** -- report no feature branch work. Stop.
-- **Feature branch, no upstream** -- skip Step 4, continue from Step 5.
-- **Feature branch, unpushed commits** -- skip Step 4, continue from Step 5.
+- **Feature branch, no upstream** -- skip Step 4, continue from Step 4.5.
+- **Feature branch, unpushed commits** -- skip Step 4, continue from Step 4.5.
 - **Feature branch, all pushed, no open PR** -- skip Steps 4-5, continue from Step 6.
 - **Feature branch, all pushed, open PR** -- report up to date. Stop.
+
+**Step 4.5 always runs before Step 5, on every push path.** Whether the flow arrived via Step 4 (fresh commits) or skipped directly from Step 1 (already-committed but unpushed), the branch must pass the freshness check before anything is pushed.
 
 **Never auto-switch branches.** A feature branch whose previous PR is merged or closed is still a valid place to keep working — the user may intentionally reuse the branch for a follow-up. Do not `git checkout -b <new-branch>` on your own, even when the situation seems to call for it (e.g., "the PR is merged, so I'll make a clean branch from main"). Check the open-PR status from context:
 
@@ -165,6 +167,19 @@ If the PR check returned `state: OPEN`, note the URL -- this is the existing-PR 
    EOF
    )"
    ```
+
+### Step 4.5: Check branch freshness before push
+
+Before any push (whether it originated from Step 4's fresh commits or a skip-4 path with already-committed work), check how far the branch is behind the default branch. Pushing a stale branch opens a PR whose CI ran against an outdated base and will likely require conflict resolution or a re-run later.
+
+```bash
+OUT=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/branch-freshness")
+BEHIND=$(printf '%s\n' "$OUT" | sed -n 's/^BEHIND=//p')
+```
+
+If `BEHIND` ≥ **10**, ask the user whether to update the branch before pushing. If they say yes, invoke the `inc:update-code` skill via the `Skill` tool — the working tree is clean at this point (Step 1's decision tree only routes through 4.5 on clean-tree paths) so it can proceed without stashing. After it returns cleanly, continue to Step 5. If it hands off to `git-merge-expert` for conflicts, let that complete before pushing.
+
+If the user declines or behind < 10, continue to Step 5 without updating.
 
 ### Step 5: Push
 

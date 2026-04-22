@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# branch-freshness — compute freshness signals (behind count, ahead count,
+# path overlap) between a head-side ref and the remote default branch.
+#
+# Shared by inc:merge-pr, inc:commit-push-pr, inc:resolve-pr-feedback, inc:plan.
+# Each caller applies its own policy (block / ask / notify) on the same signal.
+#
+# Usage:
+#   branch-freshness [--pr-branch <name>] [--base <branch>]
+#
+#   --pr-branch <name>  Compare origin/<name> against origin/<base>. Fetches
+#                       the PR branch first so a stale local tip can't produce
+#                       a false "no overlap". Use this in PR-review contexts
+#                       (inc:merge-pr).
+#   --base <branch>     Override the remote default branch resolution. Rare.
+#
+# Output (stable KV, one per line on stdout):
+#   DEFAULT=<branch name>
+#   REF=<head-side ref used>
+#   BEHIND=<commits behind default>
+#   AHEAD=<commits ahead of default>
+#   OVERLAP=<file path>     (zero or more lines; files changed on both sides
+#                            since divergence)
+#
+# Exits 0 even when a fetch fails (e.g., offline). Callers treat missing
+# MERGE_BASE as "can't determine" and degrade to a notify-only path.
+
+set -e
+
+PR_BRANCH=""
+BASE_OVERRIDE=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pr-branch) PR_BRANCH="$2"; shift 2 ;;
+    --base)      BASE_OVERRIDE="$2"; shift 2 ;;
+    -h|--help)
+      sed -n '2,/^set -e/p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) echo "Unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+# Resolve remote default branch. `git rev-parse --abbrev-ref origin/HEAD`
+# emits the literal string "HEAD" when origin/HEAD is unset (fresh clone,
+# shallow clone), so the main fallback must guard against that.
+if [ -n "$BASE_OVERRIDE" ]; then
+  DEFAULT="$BASE_OVERRIDE"
+else
+  DEFAULT=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
+  [ "$DEFAULT" = "HEAD" ] && DEFAULT=""
+  DEFAULT=${DEFAULT:-main}
+fi
+
+# Resolve head-side ref. Prefer origin/<PR_BRANCH> over local tip so a
+# teammate's push or another-machine rebase can't produce a false negative.
+if [ -n "$PR_BRANCH" ]; then
+  git fetch origin "$PR_BRANCH" --quiet 2>/dev/null || true
+  REF="origin/$PR_BRANCH"
+else
+  CURRENT=$(git branch --show-current 2>/dev/null || true)
+  REF="${CURRENT:-HEAD}"
+fi
+
+git fetch origin "$DEFAULT" --quiet 2>/dev/null || true
+
+MERGE_BASE=$(git merge-base "$REF" "origin/$DEFAULT" 2>/dev/null || true)
+
+echo "DEFAULT=$DEFAULT"
+echo "REF=$REF"
+
+if [ -z "$MERGE_BASE" ]; then
+  echo "BEHIND=0"
+  echo "AHEAD=0"
+  exit 0
+fi
+
+AHEAD=$(git rev-list --count "origin/$DEFAULT..$REF" 2>/dev/null || echo 0)
+BEHIND=$(git rev-list --count "$REF..origin/$DEFAULT" 2>/dev/null || echo 0)
+
+echo "BEHIND=$BEHIND"
+echo "AHEAD=$AHEAD"
+
+comm -12 \
+  <(git diff "$MERGE_BASE...$REF" --name-only 2>/dev/null | sort -u) \
+  <(git diff "$MERGE_BASE...origin/$DEFAULT" --name-only 2>/dev/null | sort -u) \
+  | while IFS= read -r f; do
+      [ -n "$f" ] && echo "OVERLAP=$f"
+    done
