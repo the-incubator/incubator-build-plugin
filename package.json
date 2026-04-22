@@ -1,0 +1,11 @@
+{
+  "name": "incubator-build-plugin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:skills": "node scripts/validate-skills.mjs"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}

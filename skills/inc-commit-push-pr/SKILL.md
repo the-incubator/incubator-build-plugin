@@ -304,3 +304,27 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 ### Step 8: Report
 
 Output the PR URL.
+
+### Step 9: Offer to watch for the Greptile review (optional)
+
+Only run this step when a **new PR** was just created in Step 7 (the new-PR sub-path). Skip for the existing-PR description-rewrite sub-path — Greptile re-reviews are not reliably triggered by body edits.
+
+Ask the user: "Watch this PR for the Greptile review in the background? I'll notify you when it lands." If declined, stop here.
+
+If confirmed, launch a background Bash poll scoped to this PR. Use the PR number from Step 7's output. Greptile posts as a PR-level review, typically from `greptile-apps[bot]`; match on a case-insensitive `greptile` substring against review *and* issue-comment authors so the watch survives minor bot-login changes.
+
+Wrap the check in an until-loop, cap it at 1 hour so a stuck watch cannot run forever, and run via the `Monitor` tool with `run_in_background: true` so the parent session is free and is auto-notified when the loop exits:
+
+```bash
+PR=<pr-number>
+timeout 3600 bash -c '
+  until [ "$(gh pr view "$0" --json reviews,comments --jq "[.reviews[].author.login, .comments[].author.login] | any(test(\"greptile\"; \"i\"))" 2>/dev/null)" = "true" ]; do
+    sleep 60
+  done
+  echo "GREPTILE_REVIEW_READY pr=$0"
+' "$PR" || echo "GREPTILE_REVIEW_TIMEOUT pr=$PR"
+```
+
+When the notification fires, surface the outcome to the user: on `GREPTILE_REVIEW_READY`, offer the natural follow-up — "Greptile has reviewed #<PR>. Load `inc:resolve-pr-feedback` to triage?" — without auto-invoking. On `GREPTILE_REVIEW_TIMEOUT`, report that the 1-hour window elapsed with no Greptile review and stop.
+
+This watch only survives the current Claude session. If the user closes the terminal, the background bash dies; that is acceptable for a same-session "ship then wait" flow. Cross-session watching is out of scope here.
