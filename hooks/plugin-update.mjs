@@ -1,4 +1,9 @@
-// SessionStart hook: background plugin auto-updater.
+// SessionStart + SessionEnd hook: background plugin auto-updater.
+//
+// Runs on both events so SessionEnd primes the update for the next start
+// (plugin changes only take effect on the following session), and SessionStart
+// acts as a fallback if SessionEnd didn't fire (killed terminal, crash).
+// The stamp file dedups across both — concurrent sessions also serialize on it.
 //
 // Throttled to at most once per hour. Spawns `claude plugin update` fully
 // detached so the running session is never blocked and the child outlives this

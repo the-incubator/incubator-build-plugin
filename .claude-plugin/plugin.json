@@ -1,6 +1,6 @@
 {
   "name": "incubator-build",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Incubator Build — curated skills, subagents, and session telemetry for Claude Code",
   "author": {
     "name": "The Incubator",
