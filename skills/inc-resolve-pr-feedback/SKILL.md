@@ -138,14 +138,32 @@ Create a task list of all **new** unresolved items grouped by type (e.g., `TaskC
 
 If step 3 produced clusters, include them in the task list as cluster items alongside individual items.
 
-**Confirmation checkpoint (before step 5).** Present the plan to the user with one row per new item containing:
+**Confirmation checkpoint (before step 5).** Present the plan to the user as one **card per new item**. Card format:
 
-| Field | Content |
-|---|---|
-| Summary | 1-line paraphrase of what the reviewer said |
-| Classification | `valid`, `invalid`, or `needs-discussion` |
-| Proposed action | `fix` / `reply-only` / `not-addressing` / `needs-human` |
-| File(s) | the file(s) the action will touch, or `none` for reply-only |
+```
+┌─ N ─ [P#] · [ICON ]ACTION ────────────────────────────────────┐
+│ Problem   1-line paraphrase of what the reviewer said,        │
+│           wrapping inside the box if needed                   │
+│                                                                │
+│ Solution  1-line description of the proposed fix/reply,       │
+│           wrapping inside the box if needed                   │
+│                                                                │
+│ File      path/to/file.ts  (or `none` for reply-only)         │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Rendering rules:**
+
+- **Card number** (`N`) — sequential, starts at 1.
+- **Priority** (`P#`) — include `P0` / `P1` / `P2` / `P3` only if the reviewer explicitly marked one in their comment; omit the segment entirely otherwise (header becomes `┌─ N ─ ACTION ─┐`).
+- **Action** — uppercase, from this vocabulary: `FIX` (code change as requested), `FIX-DIFF` (code change with a better approach), `REPLY` (reply-only), `SKIP` (not-addressing), `NEEDS-HUMAN` (needs-human).
+- **Class icon** — prefixes the action with no separator; omitted when class is `valid`:
+  - `valid` → no icon (e.g. `FIX`, `REPLY`)
+  - `invalid` → `⚠ ` (e.g. `⚠ SKIP`)
+  - `needs-discussion` → `? ` (e.g. `? NEEDS-HUMAN`)
+- **Labels** — `Problem`, `Solution`, `File`, no colons, aligned to the same indent column so values stack vertically.
+- **Spacing** — one blank line between each labeled row inside the box. No padding at the top or bottom of the box.
+- Long values wrap onto continuation lines indented to match the value column.
 
 Ask the user to confirm, adjust, or drop items before agents are dispatched. Do not proceed to step 5 until the user has confirmed. Per the "Asking the user" convention above, silence is not consent — wait for a reply.
 
