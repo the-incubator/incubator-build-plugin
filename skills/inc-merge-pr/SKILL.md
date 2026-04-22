@@ -1,7 +1,7 @@
 ---
 name: inc:merge-pr-7
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs four blocking checks (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing). If all gates pass, squash-merges the PR into main. If any gate fails, the merge is blocked. Ends with a monitoring reminder.
-allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(npx drizzle-kit *), Bash(npm run *), Bash(./scripts/*), Glob, Grep
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then four blocking gates (new env vars, Drizzle schema migrations and backward compatibility, data backfill / sports data sync prerequisites, deploy-window timing). If all gates pass, squash-merges the PR into main. If any gate fails, the merge is blocked. Ends with a monitoring reminder.
+allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(npx drizzle-kit *), Bash(npm run *), Bash(./scripts/*), Glob, Grep, Skill
 ---
 
 # Merge PR: Production Deploy Readiness Check
@@ -9,6 +9,32 @@ allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), B
 Four gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning.
 
 Report each gate in order. At the end, print a single line: `MERGE: GO` or `MERGE: BLOCK — <reasons>`. On `MERGE: GO`, squash-merge the PR into `main`, then print the monitoring reminder.
+
+---
+
+## Pre-flight: Branch freshness (path overlap)
+
+Commit count is a noisy proxy for staleness — 50 commits on files this branch doesn't touch is harmless, while 2 commits on a file this branch rewrote can invalidate the entire diff. Check **path overlap** between what this branch changed and what has landed on `main` since they diverged. Overlap means CI went green against a version of the code the merge will no longer produce.
+
+```bash
+PR_BRANCH=$(gh pr view --json headRefName -q .headRefName 2>/dev/null)
+CURRENT_BRANCH=$(git branch --show-current)
+REF="${PR_BRANCH:-$CURRENT_BRANCH}"
+git fetch origin main --quiet
+MERGE_BASE=$(git merge-base "$REF" origin/main)
+BEHIND=$(git rev-list --count "$REF"..origin/main 2>/dev/null)
+OVERLAP=$(comm -12 \
+  <(git diff "$MERGE_BASE...$REF" --name-only | sort -u) \
+  <(git diff "$MERGE_BASE...origin/main" --name-only | sort -u))
+```
+
+Act on `$OVERLAP` and `$BEHIND`:
+
+- **No overlap, BEHIND == 0** — pre-flight OK. Proceed to Gate 1.
+- **No overlap, BEHIND > 0** — pre-flight OK. Note "`$BEHIND` commits behind `main`, no path overlap" in the report and proceed to Gate 1.
+- **Overlap exists** — **block the merge**, regardless of `BEHIND`. List the overlapping paths so the user can see exactly where the collision is. If the user is on the PR branch locally, invoke the `inc:update-code` skill via the `Skill` tool (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-7`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
+
+**Success criteria:** No files changed on both the branch and on `main` since divergence — or the user has updated the branch and CI is re-running before re-invocation.
 
 ---
 
@@ -146,6 +172,7 @@ After all four gates, print:
 
 ```
 === MERGE-PR REPORT ===
+Pre-flight (freshness):  <OK | OK: N behind, no overlap | BLOCK: path overlap on <files>, update required>
 Gate 1 (env vars):       <OK | BLOCK: ...>
 Gate 2 (migrations):     <OK | BLOCK: ...>
 Gate 3 (backfill/sync):  <OK | BLOCK: ...>

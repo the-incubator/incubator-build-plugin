@@ -166,6 +166,21 @@ If the PR check returned `state: OPEN`, note the URL -- this is the existing-PR 
    )"
    ```
 
+### Step 4.5: Check branch freshness before push
+
+Before the first push (or any push that will open/update a PR), check how far the branch is behind the default branch. Pushing a stale branch opens a PR whose CI ran against an outdated base and will likely require conflict resolution or a re-run later.
+
+```bash
+DEFAULT=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+DEFAULT=${DEFAULT:-main}
+git fetch origin "$DEFAULT" --quiet 2>/dev/null
+git rev-list --left-right --count HEAD..."origin/$DEFAULT" 2>/dev/null
+```
+
+The second number is commits behind. If behind ≥ **10**, ask the user whether to update the branch before pushing. If they say yes, invoke the `inc:update-code` skill via the `Skill` tool — the working tree is clean at this point (Step 4 just committed) so it can proceed without stashing. After it returns cleanly, continue to Step 5. If it hands off to `git-merge-expert` for conflicts, let that complete before pushing.
+
+If the user declines or behind < 10, continue to Step 5 without updating.
+
 ### Step 5: Push
 
 ```bash
