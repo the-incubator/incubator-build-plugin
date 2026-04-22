@@ -14,25 +14,22 @@ Report each gate in order. At the end, print a single line: `MERGE: GO` or `MERG
 
 ## Pre-flight: Branch freshness (path overlap)
 
-Commit count is a noisy proxy for staleness — 50 commits on files this branch doesn't touch is harmless, while 2 commits on a file this branch rewrote can invalidate the entire diff. Check **path overlap** between what this branch changed and what has landed on `main` since they diverged. Overlap means CI went green against a version of the code the merge will no longer produce.
+Commit count is a noisy proxy for staleness — 50 commits on files this branch doesn't touch is harmless, while 2 commits on a file this branch rewrote can invalidate the entire diff. Check **path overlap** between what this PR branch changed and what has landed on `main` since they diverged. Overlap means CI went green against a version of the code the merge will no longer produce.
+
+Run the shared freshness helper with `--pr-branch` so it fetches the PR branch from origin first (comparing against a stale local tip could produce a false "no overlap" when a teammate has pushed a rebase or the author pushed from another machine):
 
 ```bash
 PR_BRANCH=$(gh pr view --json headRefName -q .headRefName 2>/dev/null)
-CURRENT_BRANCH=$(git branch --show-current)
-REF="${PR_BRANCH:-$CURRENT_BRANCH}"
-git fetch origin main --quiet
-MERGE_BASE=$(git merge-base "$REF" origin/main)
-BEHIND=$(git rev-list --count "$REF"..origin/main 2>/dev/null)
-OVERLAP=$(comm -12 \
-  <(git diff "$MERGE_BASE...$REF" --name-only | sort -u) \
-  <(git diff "$MERGE_BASE...origin/main" --name-only | sort -u))
+OUT=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/branch-freshness" --pr-branch "$PR_BRANCH")
+BEHIND=$(printf '%s\n' "$OUT" | sed -n 's/^BEHIND=//p')
+OVERLAP=$(printf '%s\n' "$OUT" | sed -n 's/^OVERLAP=//p')
 ```
 
 Act on `$OVERLAP` and `$BEHIND`:
 
 - **No overlap, BEHIND == 0** — pre-flight OK. Proceed to Gate 1.
 - **No overlap, BEHIND > 0** — pre-flight OK. Note "`$BEHIND` commits behind `main`, no path overlap" in the report and proceed to Gate 1.
-- **Overlap exists** — **block the merge**, regardless of `BEHIND`. List the overlapping paths so the user can see exactly where the collision is. If the user is on the PR branch locally, invoke the `inc:update-code` skill via the `Skill` tool (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-7`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
+- **Overlap is non-empty** — **block the merge**, regardless of `BEHIND`. List the overlapping paths so the user can see exactly where the collision is. If the user is on the PR branch locally, invoke the `inc:update-code` skill via the `Skill` tool (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-7`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
 
 **Success criteria:** No files changed on both the branch and on `main` since divergence — or the user has updated the branch and CI is re-running before re-invocation.
 
