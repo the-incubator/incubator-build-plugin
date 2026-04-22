@@ -7,7 +7,7 @@ import yaml from "js-yaml";
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 const SKILLS_DIR = join(REPO_ROOT, "skills");
 
-const NAME_RE = /^[a-z0-9][a-z0-9:_-]*$/i;
+const NAME_RE = /^[a-z0-9][a-z0-9:_-]*$/;
 const MAX_DESCRIPTION = 1024;
 const REQUIRED_FIELDS = ["name", "description"];
 const KNOWN_FIELDS = new Set([
@@ -56,7 +56,7 @@ function parseFrontmatter(source, file) {
   }
 }
 
-function validateFrontmatter(fm, file, skillDirName) {
+function validateFrontmatter(fm, file) {
   for (const field of REQUIRED_FIELDS) {
     if (!(field in fm)) {
       err(file, `missing required field: ${field}`);
@@ -98,8 +98,8 @@ function validateFrontmatter(fm, file, skillDirName) {
   return fm;
 }
 
-function validateRelativeLinks(content, file) {
-  const skillDir = dirname(file);
+function validateRelativeLinks(content, errKey, skillFile) {
+  const skillDir = dirname(skillFile);
   const linkRe = /\[[^\]]*\]\(([^)]+)\)/g;
   let m;
   while ((m = linkRe.exec(content)) !== null) {
@@ -111,7 +111,7 @@ function validateRelativeLinks(content, file) {
     if (target.startsWith("/")) continue;
     const resolved = resolve(skillDir, target);
     if (!existsSync(resolved)) {
-      err(file, `broken relative link: ${target}`);
+      err(errKey, `broken relative link: ${target}`);
     }
   }
 }
@@ -140,8 +140,8 @@ function main() {
     const source = readFileSync(skillFile, "utf8");
     const parsed = parseFrontmatter(source, rel);
     if (!parsed) continue;
-    const fm = validateFrontmatter(parsed.frontmatter, rel, skillDir);
-    validateRelativeLinks(parsed.content, skillFile);
+    const fm = validateFrontmatter(parsed.frontmatter, rel);
+    validateRelativeLinks(parsed.content, rel, skillFile);
 
     if (typeof fm.name === "string") {
       const list = nameToFiles.get(fm.name) ?? [];
