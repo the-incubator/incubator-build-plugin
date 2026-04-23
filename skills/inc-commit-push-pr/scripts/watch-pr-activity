@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+#
+# watch-pr-activity — emit a structured event stream for a newly-opened PR.
+#
+# Consumed by `inc-commit-push-pr` Step 9 (or any caller that wants
+# post-open CI + AI review + preview deploy signals). The caller is
+# responsible for deciding which events to push-notify and which
+# follow-up commands to offer.
+#
+# Usage: watch-pr-activity <pr-number> [timeout-seconds]
+#   pr-number         required
+#   timeout-seconds   optional, default 3600 (1 hour)
+#
+# Each stdout line is one event. Events emitted:
+#
+#   CI_FAIL: <check-name>     — check transitioned pending → fail|cancel
+#   CI_GREEN                  — all checks terminal and none failed (once)
+#   AI_REVIEW: <bot-login>    — first comment from a known AI reviewer (once per bot)
+#   PREVIEW_READY             — preview deploy bot body flipped to ready
+#   PREVIEW_FAIL              — preview deploy bot body flipped to failed
+#   WATCH_TIMEOUT pr=<n>      — loop hit its timeout cap
+#
+# Design notes:
+# - No `set -e`: we explicitly want to survive transient gh/jq failures and
+#   keep polling. We use `set -u` and `|| true` around poll commands.
+# - Silence-is-not-success: the filter emits on failure transitions
+#   (CI_FAIL, PREVIEW_FAIL), not just happy paths.
+# - Human reviews are intentionally NOT watched — they arrive async and
+#   are out of scope for a post-open watch window.
+
+set -u
+
+usage() {
+  sed -n '/^# Usage:/,/^# Design/p' "$0" | sed 's/^# \{0,1\}//; /^Design/d'
+  exit "${1:-0}"
+}
+
+PR="${1:-}"
+TIMEOUT="${2:-3600}"
+
+if [ -z "$PR" ] || [ "$PR" = "-h" ] || [ "$PR" = "--help" ]; then
+  usage 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "watch-pr-activity: gh CLI not found on PATH" >&2
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "watch-pr-activity: jq not found on PATH" >&2
+  exit 2
+fi
+
+AI_PATTERN='greptile|coderabbit|devin|copilot|codex|sourcery|cursor'
+PREVIEW_PATTERN='vercel|netlify|cloudflare|railway|render|google-cloud|fly|aws-amplify'
+PREVIEW_READY_RE='Ready|Deployed|Deployment succeeded|Success'
+PREVIEW_FAIL_RE='Error|Failed|Canceled|Cancelled'
+POLL_INTERVAL=60
+
+# State tracking (persistent across ticks)
+SEEN_AI=""              # newline-delimited list of bot logins already emitted
+FAILED_CHECKS=""        # newline-delimited list of check names already emitted as CI_FAIL
+CI_GREEN_EMITTED=0      # 1 once CI_GREEN has been emitted
+LAST_PREVIEW=""         # last observed preview state: "ready", "fail", or ""
+
+DEADLINE=$(( $(date +%s) + TIMEOUT ))
+
+# Helper: does $1 (newline-delimited) contain the line $2?
+seen_has() {
+  printf '%s\n' "$1" | grep -Fxq -- "$2"
+}
+
+emit_ci_events() {
+  local checks_json
+  checks_json="$(gh pr checks "$PR" --json name,bucket 2>/dev/null || echo '[]')"
+
+  # New failures: checks with bucket=fail|cancel that we haven't emitted yet
+  local curr_fail
+  curr_fail="$(printf '%s' "$checks_json" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | .name' 2>/dev/null || true)"
+  while IFS= read -r chk; do
+    [ -z "$chk" ] && continue
+    if ! seen_has "$FAILED_CHECKS" "$chk"; then
+      echo "CI_FAIL: $chk"
+      FAILED_CHECKS="$FAILED_CHECKS"$'\n'"$chk"
+    fi
+  done <<< "$curr_fail"
+
+  # CI_GREEN: at least one check, none pending, none failing. Once per watch.
+  if [ "$CI_GREEN_EMITTED" = "0" ]; then
+    local total pending failed
+    total="$(printf '%s' "$checks_json" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(printf '%s' "$checks_json" | jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 1)"
+    failed="$(printf '%s' "$checks_json" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>/dev/null || echo 1)"
+    if [ "$total" -gt 0 ] && [ "$pending" = "0" ] && [ "$failed" = "0" ]; then
+      echo "CI_GREEN"
+      CI_GREEN_EMITTED=1
+    fi
+  fi
+}
+
+emit_ai_and_preview_events() {
+  local pr_json
+  pr_json="$(gh pr view "$PR" --json reviews,comments 2>/dev/null || echo '{}')"
+
+  # AI reviewers: unique allowlisted bot logins across reviews + comments.
+  local curr_ai
+  curr_ai="$(printf '%s' "$pr_json" | jq -r --arg pat "$AI_PATTERN" '
+    [(.reviews // [])[]?.author.login, (.comments // [])[]?.author.login]
+      | map(select(. != null and (test($pat; "i"))))
+      | unique[]' 2>/dev/null || true)"
+  while IFS= read -r bot; do
+    [ -z "$bot" ] && continue
+    if ! seen_has "$SEEN_AI" "$bot"; then
+      echo "AI_REVIEW: $bot"
+      SEEN_AI="$SEEN_AI"$'\n'"$bot"
+    fi
+  done <<< "$curr_ai"
+
+  # Preview deploy: look at most recent comment from a preview-deploy bot.
+  # Parse body for ready/fail keywords; emit on state transitions only.
+  local preview_body
+  preview_body="$(printf '%s' "$pr_json" | jq -r --arg pat "$PREVIEW_PATTERN" '
+    [(.comments // [])[]? | select(.author.login != null and (.author.login | test($pat; "i")))]
+      | sort_by(.createdAt) | last | (.body // "")' 2>/dev/null || true)"
+
+  local curr_preview=""
+  if [ -n "$preview_body" ] && [ "$preview_body" != "null" ]; then
+    if printf '%s' "$preview_body" | grep -Eqi "$PREVIEW_FAIL_RE"; then
+      curr_preview="fail"
+    elif printf '%s' "$preview_body" | grep -Eqi "$PREVIEW_READY_RE"; then
+      curr_preview="ready"
+    fi
+  fi
+
+  if [ -n "$curr_preview" ] && [ "$curr_preview" != "$LAST_PREVIEW" ]; then
+    case "$curr_preview" in
+      ready) echo "PREVIEW_READY" ;;
+      fail)  echo "PREVIEW_FAIL" ;;
+    esac
+    LAST_PREVIEW="$curr_preview"
+  fi
+}
+
+# Main loop: poll, emit events, sleep until next tick or deadline.
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  emit_ci_events
+  emit_ai_and_preview_events
+  remaining=$(( DEADLINE - $(date +%s) ))
+  [ "$remaining" -le 0 ] && break
+  chunk="$POLL_INTERVAL"
+  [ "$chunk" -gt "$remaining" ] && chunk="$remaining"
+  sleep "$chunk"
+done
+
+echo "WATCH_TIMEOUT pr=$PR"

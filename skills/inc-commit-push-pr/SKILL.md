@@ -305,26 +305,34 @@ The new commits are already on the PR from Step 5. Report the PR URL, then ask w
 
 Output the PR URL.
 
-### Step 9: Offer to watch for the Greptile review (optional)
+### Step 9: Watch the PR for CI + AI review activity
 
-Only run this step when a **new PR** was just created in Step 7 (the new-PR sub-path). Skip for the existing-PR description-rewrite sub-path — Greptile re-reviews are not reliably triggered by body edits.
+Only run this step when a **new PR** was just created in Step 7 (the new-PR sub-path). Skip for the existing-PR description-rewrite sub-path — body edits don't reliably re-trigger reviewers or re-run CI for this purpose.
 
-Ask the user: "Watch this PR for the Greptile review in the background? I'll notify you when it lands." If declined, stop here.
+**Announce and start. Do not ask.** After Step 8 has reported the PR URL, emit a single sentence like *"Watching CI and AI reviews on PR #N in the background — I'll notify you on failures or when a reviewer weighs in."* Then launch the watch via the `Monitor` tool with `run_in_background: true`, `timeout_ms: 3600000`, `persistent: false`. The one opt-out path is if the user has already said in conversation "don't watch this one" — otherwise the watch always runs.
 
-If confirmed, launch a background Bash poll scoped to this PR. Use the PR number from Step 7's output. Greptile posts as a PR-level review, typically from `greptile-apps[bot]`; match on a case-insensitive `greptile` substring against review *and* issue-comment authors so the watch survives minor bot-login changes.
-
-Wrap the check in an until-loop, cap it at 1 hour so a stuck watch cannot run forever, and run via the `Monitor` tool with `run_in_background: true` so the parent session is free and is auto-notified when the loop exits:
+The watch delegates to [scripts/watch-pr-activity](scripts/watch-pr-activity), which emits one stdout line per state transition:
 
 ```bash
 PR=<pr-number>
-timeout 3600 bash -c '
-  until [ "$(gh pr view "$0" --json reviews,comments --jq "[.reviews[].author.login, .comments[].author.login] | any(test(\"greptile\"; \"i\"))" 2>/dev/null)" = "true" ]; do
-    sleep 60
-  done
-  echo "GREPTILE_REVIEW_READY pr=$0"
-' "$PR" || echo "GREPTILE_REVIEW_TIMEOUT pr=$PR"
+bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-commit-push-pr/scripts/watch-pr-activity" "$PR" 3600
 ```
 
-When the notification fires, surface the outcome to the user: on `GREPTILE_REVIEW_READY`, offer the natural follow-up — "Greptile has reviewed #<PR>. Load `inc:resolve-pr-feedback` to triage?" — without auto-invoking. On `GREPTILE_REVIEW_TIMEOUT`, report that the 1-hour window elapsed with no Greptile review and stop.
+**Event vocabulary.** Each line is one of:
+
+| Event | Fired when | Push-notify? | Follow-up to offer |
+|---|---|---|---|
+| `CI_FAIL: <check-name>` | A check transitioned pending → `fail` or `cancel` (one line per newly-failing check) | yes | `gh run view --log-failed` to pull the failing logs |
+| `CI_GREEN` | At least one check exists, none are `pending`, none are `fail`/`cancel` (emitted once per watch) | yes | — |
+| `AI_REVIEW: <bot-login>` | First comment or review from a known AI reviewer, once per bot per watch | yes | `/inc:resolve-pr-feedback` to triage the review |
+| `PREVIEW_READY` | A preview-deploy bot comment body matched a "ready" keyword this tick | **no** — informational, stream only | — |
+| `PREVIEW_FAIL` | A preview-deploy bot comment body matched a "failed" keyword this tick | yes | — |
+| `WATCH_TIMEOUT pr=<n>` | 1h loop cap reached without earlier exit | yes | — |
+
+**AI reviewer allowlist** (case-insensitive substring on `login`): `greptile`, `coderabbit`, `devin`, `copilot`, `codex`, `sourcery`, `cursor`. **Preview deploy bot allowlist** (provider-agnostic): `vercel`, `netlify`, `cloudflare`, `railway`, `render`, `google-cloud`, `fly`, `aws-amplify`.
+
+**Follow-up routing.** When an event lands that the user would want to act on now, send a `PushNotification` and offer the corresponding follow-up command in conversation — do not auto-invoke. Human reviewer events are intentionally not watched here; those arrive async and aren't a post-open concern.
+
+**Silence-is-not-success.** The script emits on failure transitions (`CI_FAIL`, `PREVIEW_FAIL`), not just happy paths — a silent watch that hides a broken build is worse than a noisy one.
 
 This watch only survives the current Claude session. If the user closes the terminal, the background bash dies; that is acceptable for a same-session "ship then wait" flow. Cross-session watching is out of scope here.
