@@ -1,16 +1,45 @@
 #!/usr/bin/env bash
 
+# Resolves a PR review thread. GitHub has no REST equivalent — this is a
+# GraphQL-only mutation. When GraphQL is unavailable, the script writes a
+# ready-to-paste manual command to a pending-resolves marker file and exits
+# 0 so the agent flow keeps going.
+
 set -e
 
 if [ $# -eq 0 ]; then
-    echo "Usage: resolve-pr-thread THREAD_ID"
-    echo "Example: resolve-pr-thread PRRT_kwDOABC123"
+    echo "Usage: resolve-pr-thread THREAD_ID [PR_NUMBER OWNER/REPO]" >&2
+    echo "Example: resolve-pr-thread PRRT_kwDOABC123" >&2
     exit 1
 fi
 
 THREAD_ID=$1
+PR_NUMBER=${2:-}
+if [ -n "$3" ]; then
+    OWNER=$(echo "$3" | cut -d/ -f1)
+    REPO=$(echo "$3" | cut -d/ -f2)
+else
+    OWNER=$(gh repo view --json owner -q .owner.login 2>/dev/null || echo "")
+    REPO=$(gh repo view --json name -q .name 2>/dev/null || echo "")
+fi
 
-gh api graphql -f threadId="$THREAD_ID" -f query='
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+THREAD_CACHE="$SCRIPT_DIR/../../../scripts/gh-thread-cache"
+[ -x "$THREAD_CACHE" ] || THREAD_CACHE=$(command -v gh-thread-cache || echo "")
+
+print_manual_command() {
+    cat <<EOF
+# Manual replay (run when GraphQL quota resets):
+gh api graphql -f threadId='$THREAD_ID' -f query='
+mutation ResolveReviewThread(\$threadId: ID!) {
+  resolveReviewThread(input: {threadId: \$threadId}) {
+    thread { id isResolved path line }
+  }
+}'
+EOF
+}
+
+if RESPONSE=$(gh api graphql -f threadId="$THREAD_ID" -f query='
 mutation ResolveReviewThread($threadId: ID!) {
   resolveReviewThread(input: {threadId: $threadId}) {
     thread {
@@ -20,4 +49,36 @@ mutation ResolveReviewThread($threadId: ID!) {
       line
     }
   }
-}'
+}' 2>&1); then
+    echo "$RESPONSE"
+    exit 0
+fi
+
+if echo "$RESPONSE" | grep -qE 'RATE_LIMITED|rate limit|API rate limit|Bad credentials|HTTP 401|HTTP 403'; then
+    REASON="GraphQL quota or auth"
+else
+    REASON="GraphQL mutation failed"
+fi
+
+PENDING_FILE=""
+if [ -n "$THREAD_CACHE" ] && [ -n "$OWNER" ] && [ -n "$REPO" ] && [ -n "$PR_NUMBER" ]; then
+    PENDING_FILE=$("$THREAD_CACHE" pending-file "$OWNER" "$REPO" "$PR_NUMBER" resolves 2>/dev/null || echo "")
+fi
+
+cat >&2 <<EOF
+resolve-pr-thread: $REASON — skipped network call. Manual command below.
+  Reason detail: $(echo "$RESPONSE" | head -3 | tr '\n' ' ')
+EOF
+
+MANUAL=$(print_manual_command)
+printf '%s\n' "$MANUAL" >&2
+
+if [ -n "$PENDING_FILE" ]; then
+    {
+        echo "# thread: $THREAD_ID  ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+        printf '%s\n\n' "$MANUAL"
+    } >> "$PENDING_FILE"
+    echo "  Appended to: $PENDING_FILE" >&2
+fi
+
+exit 0

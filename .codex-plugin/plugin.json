@@ -1,0 +1,40 @@
+{
+  "name": "incubator-build",
+  "version": "0.2.0",
+  "description": "Incubator Build — curated skills and subagents for planning, code review, debugging, and shipping pull requests.",
+  "author": {
+    "name": "The Incubator",
+    "email": "austin@theincubator.xyz"
+  },
+  "homepage": "https://github.com/the-incubator/incubator-build-plugin",
+  "repository": "https://github.com/the-incubator/incubator-build-plugin",
+  "keywords": [
+    "code-review",
+    "pull-request",
+    "github",
+    "debugging",
+    "planning",
+    "git",
+    "engineering",
+    "developer-tools"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Incubator Build",
+    "shortDescription": "Curated skills for planning, code review, debugging, and shipping PRs.",
+    "longDescription": "Incubator Build provides a curated set of skills and subagents for the engineering loop: planning before code, reviewing PRs (or local changes) with structured personas, debugging systematically, resolving review feedback, and shipping pull requests with value-first descriptions.",
+    "developerName": "The Incubator",
+    "category": "Development",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/the-incubator/incubator-build-plugin",
+    "defaultPrompt": [
+      "Use Incubator Build to plan this change",
+      "Review this PR with Incubator Build",
+      "Ship this PR with Incubator Build"
+    ]
+  }
+}

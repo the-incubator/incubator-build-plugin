@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 
 # Maps a PR review comment node ID to its parent thread.
-# Fetches thread IDs and first comment IDs to find the match,
-# then returns the matching thread with full comment details.
+#
+# Reads the cached thread map first (zero-cost, no API call). Falls through to
+# a direct GraphQL query only if the cache is empty AND we haven't been told
+# GraphQL is unavailable. When GraphQL fails, prints a manual command the user
+# can run later instead of hard-stopping.
+#
+# Output: a single thread object with full comment details, matching the prior
+# GraphQL-only output shape (id, isResolved, path, line, comments.nodes[]).
 
 set -e
 
 if [ $# -lt 2 ]; then
-    echo "Usage: get-thread-for-comment PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]"
-    echo "Example: get-thread-for-comment 378 PRRC_kwDOP_gZVc6ySv89"
+    echo "Usage: get-thread-for-comment PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]" >&2
+    echo "Example: get-thread-for-comment 378 PRRC_kwDOP_gZVc6ySv89" >&2
     exit 1
 fi
 
@@ -24,15 +30,78 @@ else
 fi
 
 if [ -z "$OWNER" ] || [ -z "$REPO" ]; then
-    echo "Error: Could not detect repository. Pass OWNER/REPO as third argument."
+    echo "Error: Could not detect repository. Pass OWNER/REPO as third argument." >&2
     exit 1
 fi
 
-gh api graphql -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" -f query='
-query($owner: String!, $repo: String!, $pr: Int!) {
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+THREAD_CACHE="$SCRIPT_DIR/../../../scripts/gh-thread-cache"
+if [ ! -x "$THREAD_CACHE" ]; then
+    THREAD_CACHE=$(command -v gh-thread-cache || echo "")
+fi
+
+# Step 1: try the cache (or one-shot GraphQL fetch via the helper).
+CACHE_JSON=""
+if [ -n "$THREAD_CACHE" ]; then
+    CACHE_JSON=$("$THREAD_CACHE" get "$OWNER" "$REPO" "$PR_NUMBER" 2>/dev/null || echo "")
+fi
+
+# Try to resolve the thread from the cached map.
+if [ -n "$CACHE_JSON" ] && [ "$CACHE_JSON" != "[]" ]; then
+    # Look up the inline comment body via REST to enrich the cached thread shape.
+    REVIEW_COMMENTS=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments" --paginate 2>/dev/null || echo "[]")
+
+    RESULT=$(echo "$CACHE_JSON" | jq -c \
+        --arg cid "$COMMENT_NODE_ID" \
+        --argjson review_comments "$REVIEW_COMMENTS" '
+      ($review_comments | map({key: .node_id, value: .}) | from_entries) as $by_node |
+      (if type == "object" then .threads else . end) as $threads |
+      [$threads[] | select(.comments | map(.id) | index($cid))] as $matches |
+      if ($matches | length) == 0 then empty
+      else
+        $matches[0]
+        | {
+            id: .thread_id,
+            isResolved: .isResolved,
+            isOutdated: .isOutdated,
+            path: .path,
+            line: .line,
+            comments: {
+              nodes: [.comments[]
+                | $by_node[.id]
+                | select(. != null)
+                | {
+                    id: .node_id,
+                    author: { login: .user.login },
+                    body: .body,
+                    createdAt: .created_at,
+                    url: .html_url
+                  }]
+            }
+          }
+      end' 2>/dev/null || echo "")
+
+    if [ -n "$RESULT" ]; then
+        echo "$RESULT"
+        exit 0
+    fi
+fi
+
+# Step 2: fall through to direct GraphQL. This is the unavoidable path when
+# the cache is empty (no prior get-pr-comments call on this head SHA).
+#
+# Paginate reviewThreads so PRs with >100 threads don't silently miss the
+# target. Short-circuit as soon as the matching thread is found — we only
+# pay for additional pages when the comment lives past page 1.
+CURSOR=""
+while :; do
+    if [ -z "$CURSOR" ]; then
+        GRAPHQL_OUT=$(gh api graphql -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" -f query='
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
@@ -51,8 +120,61 @@ query($owner: String!, $repo: String!, $pr: Int!) {
       }
     }
   }
-}' | jq -e --arg cid "$COMMENT_NODE_ID" '
-  [.data.repository.pullRequest.reviewThreads.nodes[]
-  | select(.comments.nodes | map(.id) | index($cid))]
-  | if length == 0 then error("No thread found for comment \($cid)") else .[0] end
-'
+}' 2>&1) || GRAPHQL_RC=$?
+    else
+        GRAPHQL_OUT=$(gh api graphql -f owner="$OWNER" -f repo="$REPO" -F pr="$PR_NUMBER" -f cursor="$CURSOR" -f query='
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          path
+          line
+          comments(first: 100) {
+            nodes {
+              id
+              author { login }
+              body
+              createdAt
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+}' 2>&1) || GRAPHQL_RC=$?
+    fi
+
+    if [ -n "${GRAPHQL_RC:-}" ]; then
+        cat >&2 <<EOF
+get-thread-for-comment: GraphQL unavailable. Cannot map comment $COMMENT_NODE_ID to its thread.
+  Manual lookup (run when quota resets):
+    gh api graphql -f owner=$OWNER -f repo=$REPO -F pr=$PR_NUMBER \\
+      -f query='query(\$owner:String!,\$repo:String!,\$pr:Int!,\$cursor:String){repository(owner:\$owner,name:\$repo){pullRequest(number:\$pr){reviewThreads(first:100,after:\$cursor){pageInfo{hasNextPage endCursor} nodes{id comments(first:100){nodes{id}}}}}}}' \\
+      | jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes | map(.id) | index("$COMMENT_NODE_ID"))'
+  Or warm the cache: $THREAD_CACHE get $OWNER $REPO $PR_NUMBER
+EOF
+        exit 2
+    fi
+
+    MATCH=$(echo "$GRAPHQL_OUT" | jq -c --arg cid "$COMMENT_NODE_ID" '
+      .data.repository.pullRequest.reviewThreads.nodes
+      | map(select(.comments.nodes | map(.id) | index($cid)))
+      | .[0] // empty
+    ')
+    if [ -n "$MATCH" ]; then
+        echo "$MATCH"
+        exit 0
+    fi
+
+    HAS_NEXT=$(echo "$GRAPHQL_OUT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+    [ "$HAS_NEXT" = "true" ] || break
+    CURSOR=$(echo "$GRAPHQL_OUT" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+done
+
+echo "No thread found for comment $COMMENT_NODE_ID" >&2
+exit 1

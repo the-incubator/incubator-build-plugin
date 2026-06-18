@@ -47,7 +47,7 @@ Split the demo content on `---` lines into separate text files, one per frame:
 Use the capture pipeline script to render each text frame through silicon and stitch into an animated GIF in a single call:
 
 ```bash
-python3 scripts/capture-demo.py screenshot-reel --output [RUN_DIR]/demo.gif --duration 2.5 --text [RUN_DIR]/frame-001.txt [RUN_DIR]/frame-002.txt [RUN_DIR]/frame-003.txt
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" screenshot-reel --output [RUN_DIR]/demo.gif --duration 2.5 --text [RUN_DIR]/frame-001.txt [RUN_DIR]/frame-002.txt [RUN_DIR]/frame-003.txt
 ```
 
 The script handles silicon rendering, dimension normalization, two-pass palette generation, and automatic frame reduction if the GIF exceeds limits. Default duration is 2.5 seconds per frame (faster than browser reels since terminal frames are quicker to read).

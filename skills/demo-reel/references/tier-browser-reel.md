@@ -89,13 +89,13 @@ agent-browser screenshot [RUN_DIR]/frame-01-initial.png
 Use the capture pipeline script to normalize frame dimensions, stitch with two-pass palette, and auto-reduce if over 10 MB:
 
 ```bash
-python3 scripts/capture-demo.py stitch [RUN_DIR]/demo.gif [RUN_DIR]/frame-*.png
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" stitch [RUN_DIR]/demo.gif [RUN_DIR]/frame-*.png
 ```
 
 The script handles dimension normalization (via ffprobe + ffmpeg padding), concat demuxer stitching, palette generation, and automatic frame reduction if the GIF exceeds GitHub's 10 MB inline limit. Default is 3 seconds per frame. To adjust:
 
 ```bash
-python3 scripts/capture-demo.py stitch --duration 2.0 [RUN_DIR]/demo.gif [RUN_DIR]/frame-*.png
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" stitch --duration 2.0 [RUN_DIR]/demo.gif [RUN_DIR]/frame-*.png
 ```
 
 **If stitching fails:** Fall back to static screenshots tier using the individual PNGs already captured. If no PNGs were captured, report the failure.

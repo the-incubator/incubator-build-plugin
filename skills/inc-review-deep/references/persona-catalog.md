@@ -12,7 +12,7 @@ Spawned on every review regardless of diff content.
 |---------|-------|-------|
 | `correctness` | `review:inc-correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation, intent compliance |
 | `testing` | `review:inc-testing-reviewer` | Coverage gaps, weak assertions, brittle tests, missing edge case tests |
-| `maintainability` | `review:inc-maintainability-reviewer` | Coupling, complexity, naming, dead code, premature abstraction |
+| `maintainability` | `review:inc-maintainability-reviewer` | Code judo (delete > rearrange), 1k-line diff warning, coupling, complexity, naming, dead code, premature abstraction |
 | `project-standards` | `review:inc-project-standards-reviewer` | CLAUDE.md and AGENTS.md compliance -- frontmatter, references, naming, cross-platform portability, tool selection |
 
 **CE agents (unstructured output, synthesized separately):**

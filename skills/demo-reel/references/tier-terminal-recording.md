@@ -67,7 +67,7 @@ Sleep 2s
 Use the capture pipeline script to execute the tape file and validate output:
 
 ```bash
-python3 scripts/capture-demo.py terminal-recording --output [RUN_DIR]/demo.gif --tape [RUN_DIR]/demo.tape
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" terminal-recording --output [RUN_DIR]/demo.gif --tape [RUN_DIR]/demo.tape
 ```
 
 The script runs VHS, validates the output exists, and reports the file size. If the GIF exceeds 10 MB, reduce by adjusting the .tape: smaller terminal dimensions (`Set Width/Height`), shorter recording (fewer sleeps), or lower font size. Re-run.

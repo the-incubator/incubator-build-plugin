@@ -95,7 +95,7 @@ Use scenario-oriented titles that describe the constructed failure, not the patt
 
 For the `evidence` array, describe the constructed scenario step by step -- the trigger, the execution path, and the failure outcome.
 
-Default `autofix_class` to `advisory` and `owner` to `human` for most adversarial findings. Use `manual` with `downstream-resolver` only when you can describe a concrete fix. Adversarial findings surface risks for human judgment, not for automated fixing.
+Default `autofix_class` to `fyi` and `owner` to `human` for most adversarial findings. Use `ask_user` with `human` only when you can describe a concrete fix. Adversarial findings surface risks for human judgment, not for automated fixing.
 
 ```json
 {

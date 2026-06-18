@@ -1,0 +1,541 @@
+#!/usr/bin/env bash
+#
+# watch-pr-activity — emit a structured event stream for a newly-opened PR.
+#
+# Consumed by `inc-commit-push-pr` Step 14 (or any caller that wants
+# post-open CI + AI review + preview deploy signals). The caller is
+# responsible for deciding which events to push-notify and which
+# follow-up commands to offer.
+#
+# Usage: watch-pr-activity <pr-number> [timeout-seconds]
+#   pr-number         required
+#   timeout-seconds   optional, default 3600 (1 hour)
+#
+# Each stdout line is one event. Events emitted:
+#
+#   WATCH_STARTED pr=<n> mode=<rest|graphql> first_poll_in=<sec>
+#                                 — emitted once at launch so the consumer (Monitor)
+#                                   gets a confirmation-of-life within seconds, before
+#                                   the 6-min initial quiet window. Without this,
+#                                   silent first 360s is indistinguishable from a dead
+#                                   watcher; see PR #59 (2026-05) for the failure mode.
+#   CI_FAIL: <check-name>         — check transitioned pending → fail|cancel
+#   CI_GREEN                      — all checks terminal and none failed (once)
+#   CI_NONE                       — first post-initial-wait poll saw zero checks; repo has no CI configured (once). Satisfies early-stop the same way CI_GREEN does.
+#   AI_REVIEW: <bot-login>        — first comment from a known AI reviewer (once per bot)
+#   AI_REVIEW_DONE: <bot-login>   — known AI reviewer SUBMITTED a review (state
+#                                   COMMENTED|CHANGES_REQUESTED|APPROVED). A review
+#                                   submission is atomic, so all of that reviewer's
+#                                   inline comments are already attached to the PR —
+#                                   this is the green light for feedback resolution,
+#                                   not WATCH_QUIET. Once per bot.
+#   PREVIEW_READY[: <projects>]   — preview deploy bot body flipped to ready
+#   PREVIEW_FAIL[: <projects>]    — preview deploy bot body flipped to failed
+#   PREVIEW_SKIPPED[: <projects>] — preview deploy bot body indicates project(s) skipped
+#   MODE_FLIP: <new-mode>         — switched API mode due to rate-limit (graphql ↔ rest)
+#   WATCH_QUIET pr=<n>            — CI_GREEN observed + 2 consecutive quiet ticks (no new events) at the active tier; clean early exit
+#   WATCH_TIMEOUT pr=<n>          — loop hit its timeout cap without going quiet
+#
+# Design notes:
+# - No `set -e`: we explicitly want to survive transient gh/jq failures and
+#   keep polling. We use `set -u` and `|| true` around poll commands.
+# - Silence-is-not-success: the filter emits on failure transitions
+#   (CI_FAIL, PREVIEW_FAIL), not just happy paths.
+# - Human reviews are intentionally NOT watched — they arrive async and
+#   are out of scope for a post-open watch window.
+#
+# Strategic polling (avoid bombarding GitHub):
+# - Initial quiet window: sleep 360s (6 min) before the first poll. CI and AI
+#   reviewers rarely produce useful signal that early; polling sooner just wastes
+#   quota on "still pending" responses.
+# - Tiered intervals after the initial wait, based on elapsed watch time:
+#     6–12 min:   180s polls (active window — catches the bulk of CI + AI activity)
+#     12–22 min:  300s polls (steady tail)
+#     22 min+:    exponential backoff starting at 600s, doubling each tick
+#                 (600 → 1200 → 2400 → 4800…), clamped by remaining deadline
+# - Early stop: once CI_GREEN has fired and two consecutive ticks pass with zero
+#   new events (no late AI_REVIEW/AI_REVIEW_DONE, no preview flips), exit clean
+#   with WATCH_QUIET — at whatever tier we're in, NOT gated on the 600s slow tier.
+#   Event-quiescence beats a wall-clock floor: the old 600s gate forced a ~22-min
+#   minimum even when CI went green at minute 5. Resolution no longer waits for
+#   WATCH_QUIET anyway — it keys off AI_REVIEW_DONE (all inline comments attached).
+#   Typical real-world watch: 8–15 min, and resolution can start sooner still.
+# - Dual API mode (graphql ↔ rest) with auto-pick and flip-on-rate-limit:
+#     - At startup, `gh api rate_limit` (a free call) reports remaining
+#       points for both budgets. Pick whichever has more headroom; default
+#       REST on rough parity (cheaper per call).
+#     - If any per-tick call fails (non-zero exit, almost always rate-limit
+#       in this shape), re-check `rate_limit`. If the active mode is at 0,
+#       emit MODE_FLIP and switch. The other budget is untouched and the
+#       watch continues without restart.
+
+set -u
+
+usage() {
+  sed -n '/^# Usage:/,/^# Design/p' "$0" | sed 's/^# \{0,1\}//; /^Design/d'
+  exit "${1:-0}"
+}
+
+PR="${1:-}"
+TIMEOUT="${2:-3600}"
+
+if [ -z "$PR" ] || [ "$PR" = "-h" ] || [ "$PR" = "--help" ]; then
+  usage 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "watch-pr-activity: gh CLI not found on PATH" >&2
+  exit 2
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "watch-pr-activity: jq not found on PATH" >&2
+  exit 2
+fi
+
+# Derive OWNER/REPO from the git remote once (zero API calls).
+ORIGIN="$(git config --get remote.origin.url 2>/dev/null || echo '')"
+if [ -z "$ORIGIN" ]; then
+  echo "watch-pr-activity: no git remote.origin.url found in current directory" >&2
+  exit 2
+fi
+OWNER="$(printf '%s\n' "$ORIGIN" | sed -E 's#.*[:/]([^/:]+)/[^/]+/?$#\1#' | sed -E 's#\.git$##')"
+REPO="$(printf '%s\n'  "$ORIGIN" | sed -E 's#.*[:/][^/:]+/([^/]+)/?$#\1#' | sed -E 's#\.git$##')"
+
+AI_PATTERN='greptile|coderabbit|devin|copilot|codex|sourcery|cursor'
+PREVIEW_PATTERN='vercel|netlify|cloudflare|railway|render|google-cloud|fly|aws-amplify'
+PREVIEW_READY_RE='Ready|Deployed|Deployment succeeded|Success'
+PREVIEW_FAIL_RE='Error|Failed|Canceled|Cancelled'
+PREVIEW_SKIPPED_RE='Skipped|Ignored'
+
+# State tracking (persistent across ticks)
+SEEN_AI=""                  # newline-delimited list of bot logins already emitted (AI_REVIEW, first contact)
+SEEN_AI_DONE=""             # newline-delimited list of bot logins already emitted as AI_REVIEW_DONE (review submitted)
+FAILED_CHECKS=""            # newline-delimited list of check names already emitted as CI_FAIL
+CI_GREEN_EMITTED=0          # 1 once CI_GREEN has been emitted
+NO_CI_DETECTED=0            # 1 once CI_NONE has been emitted (zero checks observed post-initial-wait)
+LAST_PREVIEW=""             # last observed fail/ready preview state: "ready", "fail", or ""
+PREVIEW_SKIPPED_EMITTED=0   # 1 once PREVIEW_SKIPPED has been emitted
+QUIET_TICKS=0               # consecutive ticks (any tier) with no new events after CI_GREEN; 2 → WATCH_QUIET
+NEW_EVENTS_THIS_TICK=0      # reset each tick; bumped by emit_event
+TICK_HAD_ERROR=0            # reset each tick; bumped on any fetcher non-zero exit
+MODE="rest"                 # set below by select_initial_mode
+BACKOFF_INTERVAL=0          # 0 until elapsed enters the backoff phase; doubles each phase-3 tick
+HEAD_SHA=""                 # resolved once at watch start; reused every tick to avoid burning REST budget on a value that almost never changes within a single watch session
+
+WATCH_START=$(date +%s)
+DEADLINE=$(( WATCH_START + TIMEOUT ))
+
+# Helper: does $1 (newline-delimited) contain the line $2?
+seen_has() {
+  printf '%s\n' "$1" | grep -Fxq -- "$2"
+}
+
+# Helper: does check name $1 belong to a preview-deploy bot? (case-insensitive)
+is_preview_check() {
+  printf '%s' "$1" | grep -Eqi -- "$PREVIEW_PATTERN"
+}
+
+# Helper: extract project names matching a status keyword from a preview-deploy
+# comment body. See README of inc-commit-push-pr for format details. BSD grep
+# `-E` doesn't backtrack inside `[^|]+`, so we use `.*` for the keyword segment.
+extract_preview_projects() {
+  local body="$1" status_re="$2"
+  printf '%s\n' "$body" \
+    | grep -Ei "^\|[^|]+\|.*($status_re)" \
+    | sed -E 's/^\|[[:space:]]*\*{0,2}([A-Za-z0-9._/-]+)\*{0,2}.*/\1/' \
+    | paste -sd, -
+}
+
+# Emit one event line. Bumps NEW_EVENTS_THIS_TICK so early-stop can detect quiet periods.
+emit_event() {
+  printf '%s\n' "$1"
+  NEW_EVENTS_THIS_TICK=$((NEW_EVENTS_THIS_TICK + 1))
+}
+
+# Set the global $POLL_INTERVAL for the next sleep, based on elapsed time
+# from WATCH_START. Schedule:
+#   0–360s elapsed:    360s (the initial quiet window — single sleep, no calls)
+#   360–720s elapsed:  180s (active window — 3min polls for 6 min)
+#   720–1320s elapsed: 300s (steady tail — 5min polls for 10 min)
+#   1320s+ elapsed:    exponential backoff (600s, 1200s, 2400s, …)
+# NOTE: must set via globals, not command substitution, because phase 3 mutates
+# $BACKOFF_INTERVAL and a $(…) subshell would discard that mutation each tick.
+# Caller contract: invoke exactly once per loop iteration.
+update_poll_interval() {
+  local elapsed=$(( $(date +%s) - WATCH_START ))
+  if [ "$elapsed" -lt 360 ]; then
+    POLL_INTERVAL=360
+  elif [ "$elapsed" -lt 720 ]; then
+    POLL_INTERVAL=180
+  elif [ "$elapsed" -lt 1320 ]; then
+    POLL_INTERVAL=300
+  else
+    if [ "$BACKOFF_INTERVAL" -eq 0 ]; then
+      BACKOFF_INTERVAL=600
+    else
+      BACKOFF_INTERVAL=$(( BACKOFF_INTERVAL * 2 ))
+    fi
+    POLL_INTERVAL="$BACKOFF_INTERVAL"
+  fi
+}
+
+# Read GraphQL + REST remaining budgets in one free call.
+fetch_rate_limits() {
+  gh api rate_limit 2>/dev/null || echo '{}'
+}
+
+# Pick the initial API mode by comparing remaining budgets. Default REST on tie:
+# REST calls are cheaper per call (1 point each) than GraphQL queries (variable, 1–50+ per query),
+# so equal headroom favors REST. GraphQL wins only when it has clearly more room.
+select_initial_mode() {
+  local rl_json gql_rem rest_rem
+  rl_json="$(fetch_rate_limits)"
+  gql_rem="$(printf '%s' "$rl_json" | jq -r '.resources.graphql.remaining // 0' 2>/dev/null || echo 0)"
+  rest_rem="$(printf '%s' "$rl_json" | jq -r '.resources.core.remaining // 0' 2>/dev/null || echo 0)"
+
+  if [ "$rest_rem" -ge 1000 ]; then
+    MODE="rest"
+  elif [ "$gql_rem" -gt "$((rest_rem * 2))" ] && [ "$gql_rem" -gt 500 ]; then
+    MODE="graphql"
+  else
+    MODE="rest"
+  fi
+  echo "watch-pr-activity: starting in MODE=$MODE (rest_remaining=$rest_rem, graphql_remaining=$gql_rem)" >&2
+}
+
+# If the active mode is exhausted, flip to the other and emit MODE_FLIP.
+# Called only when a tick actually saw a fetch failure — avoids burning the
+# free rate_limit call on every tick.
+maybe_flip_mode() {
+  local rl_json gql_rem rest_rem
+  rl_json="$(fetch_rate_limits)"
+  gql_rem="$(printf '%s' "$rl_json" | jq -r '.resources.graphql.remaining // 0' 2>/dev/null || echo 0)"
+  rest_rem="$(printf '%s' "$rl_json" | jq -r '.resources.core.remaining // 0' 2>/dev/null || echo 0)"
+
+  if [ "$MODE" = "rest" ] && [ "$rest_rem" -le 10 ] && [ "$gql_rem" -gt 100 ]; then
+    MODE="graphql"
+    emit_event "MODE_FLIP: graphql"
+  elif [ "$MODE" = "graphql" ] && [ "$gql_rem" -le 10 ] && [ "$rest_rem" -gt 100 ]; then
+    MODE="rest"
+    emit_event "MODE_FLIP: rest"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Fetchers: each returns a JSON document on stdout in a normalized shape.
+# Sets TICK_HAD_ERROR=1 on any non-zero gh exit. Caller handles the shape.
+# ---------------------------------------------------------------------------
+
+# Resolve the PR head SHA. Tries git first (free, instant) when CWD is the
+# matching checkout; falls back to REST. Memoized in $HEAD_SHA so subsequent
+# ticks reuse it without re-spending budget.
+#
+# Within a /ship-it watch session the SHA effectively doesn't change: we just
+# pushed it, and any fixes during resolve-pr-feedback restart the watcher with
+# fresh state. An external push during the watch window is rare and the watcher
+# would still report on the CI run for the SHA we pushed — which is what the
+# caller actually cares about.
+resolve_head_sha() {
+  if [ -n "$HEAD_SHA" ]; then
+    printf '%s' "$HEAD_SHA"
+    return 0
+  fi
+
+  local origin_owner_repo sha
+  origin_owner_repo=$(printf '%s' "$ORIGIN" \
+    | sed -E 's#.*[:/]([^/:]+/[^/]+)/?$#\1#' \
+    | sed -E 's#\.git$##')
+  if [ "$origin_owner_repo" = "$OWNER/$REPO" ]; then
+    sha=$(git rev-parse --verify --quiet '@{u}' 2>/dev/null \
+          || git rev-parse --verify --quiet HEAD 2>/dev/null \
+          || echo "")
+    if [ -n "$sha" ]; then
+      HEAD_SHA="$sha"
+      printf '%s' "$HEAD_SHA"
+      return 0
+    fi
+  fi
+
+  sha=$(gh api "repos/$OWNER/$REPO/pulls/$PR" -q .head.sha 2>/dev/null)
+  if [ -n "$sha" ]; then
+    HEAD_SHA="$sha"
+    printf '%s' "$HEAD_SHA"
+    return 0
+  fi
+
+  return 1
+}
+
+# Returns a JSON array of {name, bucket}. Bucket values: pass|fail|pending|cancel|skipping.
+fetch_checks_rest() {
+  local sha runs_json
+  sha=$(resolve_head_sha)
+  if [ -z "$sha" ]; then TICK_HAD_ERROR=1; echo '[]'; return; fi
+
+  runs_json="$(gh api "repos/$OWNER/$REPO/commits/$sha/check-runs?per_page=100" 2>/dev/null)"
+  if [ -z "$runs_json" ]; then TICK_HAD_ERROR=1; echo '[]'; return; fi
+
+  printf '%s' "$runs_json" | jq '
+    [(.check_runs // [])[] | {
+      name,
+      bucket: (
+        if .status != "completed" then "pending"
+        elif .conclusion == "success" then "pass"
+        elif .conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required" then "fail"
+        elif .conclusion == "cancelled" then "cancel"
+        else "skipping" end
+      )
+    }]' 2>/dev/null || echo '[]'
+}
+
+fetch_checks_graphql() {
+  local checks_json
+  checks_json="$(gh pr checks "$PR" --json name,bucket 2>/dev/null)"
+  if [ -z "$checks_json" ]; then TICK_HAD_ERROR=1; echo '[]'; return; fi
+  printf '%s' "$checks_json"
+}
+
+# Returns a JSON object {reviews: [{user:{login}}], comments: [{user:{login}, body, created_at}]}.
+# Both modes produce the same shape so emit_ai_and_preview_events doesn't branch.
+fetch_reviews_and_comments_rest() {
+  local reviews_json comments_json
+  reviews_json="$(gh api "repos/$OWNER/$REPO/pulls/$PR/reviews?per_page=100" 2>/dev/null)"
+  comments_json="$(gh api "repos/$OWNER/$REPO/issues/$PR/comments?per_page=100" 2>/dev/null)"
+  if [ -z "$reviews_json" ] || [ -z "$comments_json" ]; then
+    TICK_HAD_ERROR=1
+    echo '{"reviews":[],"comments":[]}'
+    return
+  fi
+  jq -n --argjson r "$reviews_json" --argjson c "$comments_json" '{reviews: $r, comments: $c}'
+}
+
+fetch_reviews_and_comments_graphql() {
+  local pr_json
+  pr_json="$(gh pr view "$PR" --json reviews,comments 2>/dev/null)"
+  if [ -z "$pr_json" ]; then TICK_HAD_ERROR=1; echo '{"reviews":[],"comments":[]}'; return; fi
+  # Normalize to the REST shape: author.login → user.login, createdAt → created_at.
+  # Carry review state + body so AI_REVIEW_DONE can detect a submitted review.
+  printf '%s' "$pr_json" | jq '{
+    reviews:  [(.reviews  // [])[] | {user: {login: .author.login}, state: .state, body: .body}],
+    comments: [(.comments // [])[] | {user: {login: .author.login}, body, created_at: .createdAt}]
+  }' 2>/dev/null || echo '{"reviews":[],"comments":[]}'
+}
+
+# ---------------------------------------------------------------------------
+# Emit functions: dispatch to mode-appropriate fetcher, then process the
+# normalized shape with the same logic regardless of mode.
+# ---------------------------------------------------------------------------
+
+emit_ci_events() {
+  local checks_json
+  if [ "$MODE" = "graphql" ]; then
+    checks_json="$(fetch_checks_graphql)"
+  else
+    checks_json="$(fetch_checks_rest)"
+  fi
+
+  # New failures: checks with bucket=fail|cancel that we haven't emitted yet.
+  # Classify by source: preview-deploy bot names → PREVIEW_FAIL, else CI_FAIL.
+  local curr_fail
+  curr_fail="$(printf '%s' "$checks_json" | jq -r '.[] | select(.bucket == "fail" or .bucket == "cancel") | .name' 2>/dev/null || true)"
+  while IFS= read -r chk; do
+    [ -z "$chk" ] && continue
+    if ! seen_has "$FAILED_CHECKS" "$chk"; then
+      if is_preview_check "$chk"; then
+        emit_event "PREVIEW_FAIL: $chk"
+      else
+        emit_event "CI_FAIL: $chk"
+      fi
+      FAILED_CHECKS="$FAILED_CHECKS"$'\n'"$chk"
+    fi
+  done <<< "$curr_fail"
+
+  # CI_GREEN: at least one check, none pending, none failing. Once per watch.
+  # CI_NONE: zero checks observed on the first post-initial-wait poll — this repo
+  # has no CI configured, so we'll never see CI_GREEN. Emit once and let the
+  # early-stop logic treat it as decisive (same as CI_GREEN).
+  if [ "$CI_GREEN_EMITTED" = "0" ]; then
+    local total pending failed
+    total="$(printf '%s' "$checks_json" | jq 'length' 2>/dev/null || echo 0)"
+    pending="$(printf '%s' "$checks_json" | jq '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 1)"
+    failed="$(printf '%s' "$checks_json" | jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' 2>/dev/null || echo 1)"
+    if [ "$total" -gt 0 ] && [ "$pending" = "0" ] && [ "$failed" = "0" ]; then
+      emit_event "CI_GREEN"
+      CI_GREEN_EMITTED=1
+    elif [ "$total" = "0" ] && [ "$TICK_HAD_ERROR" = "0" ] && [ "$NO_CI_DETECTED" = "0" ]; then
+      emit_event "CI_NONE"
+      NO_CI_DETECTED=1
+    fi
+  fi
+}
+
+emit_ai_and_preview_events() {
+  local payload
+  if [ "$MODE" = "graphql" ]; then
+    payload="$(fetch_reviews_and_comments_graphql)"
+  else
+    payload="$(fetch_reviews_and_comments_rest)"
+  fi
+
+  local reviews_json comments_json
+  reviews_json="$(printf '%s' "$payload" | jq '.reviews // []' 2>/dev/null || echo '[]')"
+  comments_json="$(printf '%s' "$payload" | jq '.comments // []' 2>/dev/null || echo '[]')"
+
+  # AI reviewers: unique allowlisted bot logins across reviews + comments.
+  local curr_ai
+  curr_ai="$(jq -nr --argjson r "$reviews_json" --argjson c "$comments_json" --arg pat "$AI_PATTERN" '
+    [($r // [])[]?.user.login, ($c // [])[]?.user.login]
+      | map(select(. != null and (test($pat; "i"))))
+      | unique[]' 2>/dev/null || true)"
+  while IFS= read -r bot; do
+    [ -z "$bot" ] && continue
+    if ! seen_has "$SEEN_AI" "$bot"; then
+      emit_event "AI_REVIEW: $bot"
+      SEEN_AI="$SEEN_AI"$'\n'"$bot"
+    fi
+  done <<< "$curr_ai"
+
+  # AI reviewers that have SUBMITTED a review (terminal state). A GitHub review
+  # submission is atomic — once we see the submission, every inline comment that
+  # review carries is already attached to the PR. This is the precise "reviewer
+  # is done, all comments have landed" signal that callers previously approximated
+  # by waiting for WATCH_QUIET (a ~22-min wall-clock floor). PENDING is the only
+  # non-submitted state, so any other state counts as done.
+  local curr_ai_done
+  curr_ai_done="$(jq -nr --argjson r "$reviews_json" --arg pat "$AI_PATTERN" '
+    [($r // [])[]?
+      | select(.user.login != null
+               and (.user.login | test($pat; "i"))
+               and ((.state // "") | ascii_upcase
+                    | test("^(COMMENTED|CHANGES_REQUESTED|APPROVED|DISMISSED)$")))
+      | .user.login]
+      | unique[]' 2>/dev/null || true)"
+  while IFS= read -r bot; do
+    [ -z "$bot" ] && continue
+    if ! seen_has "$SEEN_AI_DONE" "$bot"; then
+      emit_event "AI_REVIEW_DONE: $bot"
+      SEEN_AI_DONE="$SEEN_AI_DONE"$'\n'"$bot"
+    fi
+  done <<< "$curr_ai_done"
+
+  # Preview deploy: most recent comment from a preview-deploy bot.
+  local preview_body
+  preview_body="$(jq -nr --argjson c "$comments_json" --arg pat "$PREVIEW_PATTERN" '
+    [($c // [])[]? | select(.user.login != null and (.user.login | test($pat; "i")))]
+      | sort_by(.created_at) | last | (.body // "")' 2>/dev/null || true)"
+
+  # Strip markdown URLs and HTML tags so a "canceled.svg" icon doesn't trip the failure regex.
+  local sanitized=""
+  if [ -n "$preview_body" ] && [ "$preview_body" != "null" ]; then
+    sanitized="$(printf '%s' "$preview_body" | sed -E 's#\([^)]*\)##g; s#<[^>]*>##g')"
+  fi
+
+  local curr_preview=""
+  if [ -n "$sanitized" ]; then
+    if printf '%s' "$sanitized" | grep -Eqi "$PREVIEW_FAIL_RE"; then
+      curr_preview="fail"
+    elif printf '%s' "$sanitized" | grep -Eqi "$PREVIEW_READY_RE"; then
+      curr_preview="ready"
+    fi
+  fi
+
+  if [ -n "$curr_preview" ] && [ "$curr_preview" != "$LAST_PREVIEW" ]; then
+    case "$curr_preview" in
+      ready)
+        local ready_names
+        ready_names="$(extract_preview_projects "$sanitized" "$PREVIEW_READY_RE")"
+        if [ -n "$ready_names" ]; then
+          emit_event "PREVIEW_READY: $ready_names"
+        else
+          emit_event "PREVIEW_READY"
+        fi
+        ;;
+      fail)
+        local fail_names
+        fail_names="$(extract_preview_projects "$sanitized" "$PREVIEW_FAIL_RE")"
+        if [ -n "$fail_names" ]; then
+          emit_event "PREVIEW_FAIL: $fail_names"
+        else
+          emit_event "PREVIEW_FAIL"
+        fi
+        ;;
+    esac
+    LAST_PREVIEW="$curr_preview"
+  fi
+
+  # PREVIEW_SKIPPED runs on an independent channel — both Ready and Skipped can
+  # appear in the same monorepo bot comment.
+  if [ "$PREVIEW_SKIPPED_EMITTED" = "0" ] && [ -n "$sanitized" ]; then
+    if printf '%s' "$sanitized" | grep -Eqi "$PREVIEW_SKIPPED_RE"; then
+      local skipped_names
+      skipped_names="$(extract_preview_projects "$sanitized" "$PREVIEW_SKIPPED_RE")"
+      if [ -n "$skipped_names" ]; then
+        emit_event "PREVIEW_SKIPPED: $skipped_names"
+      else
+        emit_event "PREVIEW_SKIPPED"
+      fi
+      PREVIEW_SKIPPED_EMITTED=1
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+select_initial_mode
+
+# Confirmation-of-life: emit immediately so Monitor sees the watcher is alive
+# before the 6-min initial quiet window. The first_poll_in value mirrors the
+# phase-1 sleep in update_poll_interval (360s).
+echo "WATCH_STARTED pr=$PR mode=$MODE first_poll_in=360"
+
+while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+  update_poll_interval
+
+  # Initial quiet window: sleep first, then loop. No fetches during this phase.
+  if [ "$POLL_INTERVAL" = "360" ]; then
+    remaining=$(( DEADLINE - $(date +%s) ))
+    [ "$remaining" -le 0 ] && break
+    chunk=360
+    [ "$chunk" -gt "$remaining" ] && chunk="$remaining"
+    sleep "$chunk"
+    continue
+  fi
+
+  TICK_HAD_ERROR=0
+  NEW_EVENTS_THIS_TICK=0
+
+  emit_ci_events
+  emit_ai_and_preview_events
+
+  # If any fetcher failed this tick, check whether we should flip mode.
+  if [ "$TICK_HAD_ERROR" = "1" ]; then
+    maybe_flip_mode
+  fi
+
+  # Early stop: once CI is green (or we've confirmed no CI exists) and two
+  # consecutive ticks at the CURRENT tier pass with zero new events, exit clean.
+  # Not gated on the 600s slow tier anymore — that gate forced a ~22-min floor
+  # (POLL_INTERVAL only reaches 600 at elapsed >= 1320s) even when CI greened at
+  # minute 5. Requiring two quiet ticks lets late AI_REVIEW/AI_REVIEW_DONE events
+  # reset the counter, so the watcher still waits out a trickling reviewer — it
+  # just does so by event-quiescence instead of a wall-clock minimum.
+  if { [ "$CI_GREEN_EMITTED" = "1" ] || [ "$NO_CI_DETECTED" = "1" ]; } && [ "$NEW_EVENTS_THIS_TICK" = "0" ]; then
+    QUIET_TICKS=$((QUIET_TICKS + 1))
+    if [ "$QUIET_TICKS" -ge 2 ]; then
+      echo "WATCH_QUIET pr=$PR"
+      exit 0
+    fi
+  else
+    QUIET_TICKS=0
+  fi
+
+  remaining=$(( DEADLINE - $(date +%s) ))
+  [ "$remaining" -le 0 ] && break
+  chunk="$POLL_INTERVAL"
+  [ "$chunk" -gt "$remaining" ] && chunk="$remaining"
+  sleep "$chunk"
+done
+
+echo "WATCH_TIMEOUT pr=$PR"

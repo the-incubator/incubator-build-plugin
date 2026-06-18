@@ -14,7 +14,7 @@ Detect the CLI framework from imports in the diff (Click, argparse, Cobra, clap,
 
 **Severity constraints:** CLI readiness findings never reach P0. Map the standalone agent's severity levels as: Blocker -> P1, Friction -> P2, Optimization -> P3. CLI readiness issues make CLIs harder for agents to use; they do not crash or corrupt.
 
-**Autofix constraints:** All findings use `autofix_class: manual` or `advisory` with `owner: human`. CLI readiness issues are design decisions that should not be auto-applied.
+**Autofix constraints:** All findings use `autofix_class: ask_user` or `fyi` with `owner: human`. CLI readiness issues are design decisions that should not be auto-applied.
 
 ## What you're hunting for
 
