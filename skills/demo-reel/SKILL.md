@@ -9,6 +9,8 @@ argument-hint: "[what to capture, e.g. 'the new settings page' or 'CLI output of
 
 Detect project type, recommend a capture tier, record visual evidence, upload to a public URL, and return markdown for PR inclusion.
 
+**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+
 **Evidence means USING THE PRODUCT, not running tests.** "I ran npm test" is test evidence. Evidence capture is running the actual CLI command, opening the web app, making the API call, or triggering the feature. The distinction is absolute -- test output is never labeled "Demo" or "Screenshots."
 
 If real product usage is impractical (requires API keys, cloud deploy, paid services, bot tokens), say so explicitly: "Real evidence would require [X]. Recommending [fallback approach] instead." Do not silently skip to "no evidence needed" or substitute test output.
@@ -57,7 +59,7 @@ Use the workspace where the feature was built. Do not reinstall from scratch. If
 Use the capture target from Step 0 to decide which directory to classify. If the diff touches a specific subdirectory with its own package manifest (e.g., `packages/cli/`, `apps/web/`), pass that as the root. Otherwise use the repo root.
 
 ```bash
-python3 scripts/capture-demo.py detect --repo-root [TARGET_DIR]
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" detect --repo-root [TARGET_DIR]
 ```
 
 This outputs JSON with `type` and `reason`. The result is a signal, not a gate. If the agent's understanding from Step 0 contradicts the script's classification (e.g., the diff clearly changes CLI behavior but the repo root classifies as `web-app` because of a sibling Next.js app), the agent's judgment wins.
@@ -90,7 +92,7 @@ Infer feat vs fix from commit messages, branch name, or plan file frontmatter (`
 Run the preflight check:
 
 ```bash
-python3 scripts/capture-demo.py preflight
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" preflight
 ```
 
 This outputs JSON with boolean availability for each tool: `agent_browser`, `vhs`, `silicon`, `ffmpeg`, `ffprobe`. Print a human-readable summary for the user based on the result, noting install commands for missing tools (e.g., `brew install charmbracelet/tap/vhs` for vhs, `brew install silicon` for silicon, `brew install ffmpeg` for ffmpeg).
@@ -110,7 +112,7 @@ Use the output as `RUN_DIR`. Pass this concrete run directory to every tier refe
 Run the recommendation script with the project type from Step 2, change classification from Step 3, and preflight JSON from Step 4:
 
 ```bash
-python3 scripts/capture-demo.py recommend --project-type [TYPE] --change-type [motion|states] --tools '[PREFLIGHT_JSON]'
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" recommend --project-type [TYPE] --change-type [motion|states] --tools '[PREFLIGHT_JSON]'
 ```
 
 This outputs JSON with `recommended` (the best tier), `available` (list of tiers whose tools are present), and `reasoning`.

@@ -1,7 +1,7 @@
 ---
-name: inc:resolve-pr-feedback-5
+name: inc:resolve-pr-feedback
 description: Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.
-argument-hint: "[PR number, comment URL, or blank for current branch's PR]"
+argument-hint: "[PR number, comment URL, or blank for current branch's PR] [--auto for unattended mode]"
 allowed-tools: Bash(gh *), Bash(git *), Read, Skill
 ---
 
@@ -9,9 +9,19 @@ allowed-tools: Bash(gh *), Bash(git *), Read, Skill
 
 Evaluate and fix PR review feedback, then reply and resolve threads. Spawns parallel agents for each thread.
 
+**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+
 > **Confirm before you mutate.** This skill does two mutating transitions: edits → commit, and commit → push + reply. The user sees the plan before edits happen, and the diff before commit/push happens. Do not chain fix → commit → push → reply without checkpoints, even when every finding looks obviously valid.
 >
 > Within that discipline: fix everything valid -- including nitpicks and low-priority items. If we're already in the code, fix it rather than punt it.
+
+## Unattended mode (`--auto`)
+
+When invoked with `--auto` in the arguments (the `inc:commit-push-pr-4` watch loop passes this), run **without the confirmation checkpoints**: skip the Step 4 plan confirmation and the Step 7 pre-commit/push confirmation, and chain fix → commit → push → reply → resolve directly. This is the deliberate exception to the "Confirm before you mutate" rule above — the caller has opted into hands-off resolution.
+
+The autonomy boundary in this mode is the **`needs-human` verdict**: any item a resolver agent returns as `fixed`, `fixed-differently`, `replied`, or `not-addressing` is applied, pushed, and resolved automatically. Only `needs-human` items pause — post their holding reply, leave the thread open, and surface them to the caller (do not resolve). Everything else (freshness check, validation in Step 6, reply/resolve in Step 8, the verify loop in Step 9) runs unchanged.
+
+Direct user invocation (no `--auto`) keeps every confirmation checkpoint. Unattended mode is opt-in by the caller, never the default.
 
 ## Asking the user
 
@@ -42,7 +52,8 @@ Reviewers often comment on code that's since been refactored on `main`. Resolvin
 Before fetching threads, compute path overlap via the shared freshness helper:
 
 ```bash
-OUT=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/branch-freshness")
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+OUT=$(bash "$PLUGIN_ROOT/scripts/branch-freshness")
 OVERLAP=$(printf '%s\n' "$OUT" | sed -n 's/^OVERLAP=//p')
 ```
 
@@ -63,25 +74,25 @@ If no PR number was provided, detect from the current branch:
 gh pr view --json number -q .number
 ```
 
-Then fetch all feedback using the GraphQL script at [scripts/get-pr-comments](scripts/get-pr-comments):
+Then fetch all feedback using the script at [scripts/get-pr-comments](scripts/get-pr-comments):
 
 ```bash
-bash scripts/get-pr-comments PR_NUMBER
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+bash "$PLUGIN_ROOT/skills/inc-resolve-pr-feedback/scripts/get-pr-comments" PR_NUMBER
 ```
 
-Returns a JSON object with three keys:
+This reads REST endpoints for everything REST can provide (comment bodies, top-level comments, review submissions, PR author) and uses a single cached GraphQL call (via `scripts/gh-thread-cache`) for thread-level state. Repeated runs on the same PR head SHA cost zero GraphQL points.
+
+Returns a JSON object:
 
 | Key | Contents | Has file/line? | Resolvable? |
 |-----|----------|---------------|-------------|
-| `review_threads` | Unresolved, non-outdated inline code review threads | Yes | Yes (GraphQL) |
+| `review_threads` | Unresolved, non-outdated inline code review threads | Yes | Yes (GraphQL mutation) |
 | `pr_comments` | Top-level PR conversation comments (excludes PR author) | No | No |
 | `review_bodies` | Review submission bodies with non-empty text (excludes PR author) | No | No |
+| `degraded` | `true` when GraphQL was unavailable and `review_threads` was synthesized from REST without resolution filtering | — | — |
 
-If the script fails, fall back to:
-```bash
-gh pr view PR_NUMBER --json reviews,comments
-gh api repos/{owner}/{repo}/pulls/PR_NUMBER/comments
-```
+When `degraded: true`, surface a one-line warning to the user (e.g. "GraphQL quota exhausted — proceeding with all inline comments; some may already be resolved") and continue. The mutation scripts (`reply-to-pr-thread`, `resolve-pr-thread`) will also degrade gracefully if their calls fail, writing manual commands to `pending-replies-*.txt` / `pending-resolves-*.txt` in the cache dir.
 
 ### 2. Triage: Separate New from Pending
 
@@ -157,7 +168,7 @@ Create a task list of all **new** unresolved items grouped by type (e.g., `TaskC
 
 If step 3 produced clusters, include them in the task list as cluster items alongside individual items.
 
-**Confirmation checkpoint (before step 5).** Present the plan to the user as one **card per new item**. Card format:
+**Confirmation checkpoint (before step 5).** *Skipped in `--auto` mode — proceed straight to step 5.* Otherwise, present the plan to the user as one **card per new item**. Card format:
 
 ```
 ┌─ N ─ [P#] · [ICON ]ACTION ────────────────────────────────────┐
@@ -267,7 +278,7 @@ Record the validation outcome (command run, pass/fail counts, any pre-existing f
 
 ### 7. Commit and Push
 
-**Confirmation checkpoint (before commit).** Before staging or committing anything, show the user:
+**Confirmation checkpoint (before commit).** *Skipped in `--auto` mode — stage the approved files and commit directly, then push.* Otherwise, before staging or committing anything, show the user:
 
 - The list of files that will be staged (from agent `files_changed` summaries).
 - A diff summary — either `git diff --stat` output or a short per-file bullet list of what changed.
@@ -275,7 +286,7 @@ Record the validation outcome (command run, pass/fail counts, any pre-existing f
 
 Ask the user to confirm, amend the message, or drop files. Do not run `git add` or `git commit` until the user has confirmed. If the user edits the plan at this point (e.g., "revert the change to file X"), undo those specific edits before committing.
 
-Once confirmed:
+Once confirmed (or immediately, in `--auto` mode):
 
 1. Stage only the files the user approved and commit with a message referencing the PR:
 
@@ -321,13 +332,17 @@ For `needs-human` verdicts, post the reply but do NOT resolve the thread. Leave 
 
 1. **Reply** using [scripts/reply-to-pr-thread](scripts/reply-to-pr-thread):
 ```bash
-echo "REPLY_TEXT" | bash scripts/reply-to-pr-thread THREAD_ID
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+echo "REPLY_TEXT" | bash "$PLUGIN_ROOT/skills/inc-resolve-pr-feedback/scripts/reply-to-pr-thread" THREAD_ID [PR_NUMBER OWNER/REPO]
 ```
 
 2. **Resolve** using [scripts/resolve-pr-thread](scripts/resolve-pr-thread):
 ```bash
-bash scripts/resolve-pr-thread THREAD_ID
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+bash "$PLUGIN_ROOT/skills/inc-resolve-pr-feedback/scripts/resolve-pr-thread" THREAD_ID [PR_NUMBER OWNER/REPO]
 ```
+
+Pass `PR_NUMBER` and `OWNER/REPO` so that, if GraphQL is unavailable, the script can append the equivalent manual command to a pending-marker file in the cache dir (`pending-replies-*.txt`, `pending-resolves-*.txt`). When this happens, the script prints the manual command to stderr and exits 0 — the flow keeps moving, the user can replay later.
 
 #### PR comments and review bodies
 
@@ -344,7 +359,8 @@ Include enough quoted context in the reply so the reader can follow which commen
 Re-fetch feedback to confirm resolution:
 
 ```bash
-bash scripts/get-pr-comments PR_NUMBER
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+bash "$PLUGIN_ROOT/skills/inc-resolve-pr-feedback/scripts/get-pr-comments" PR_NUMBER
 ```
 
 The `review_threads` array should be empty (except `needs-human` items).
@@ -435,7 +451,8 @@ gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID \
 
 **Step 2** -- Map comment to its thread ID. Use [scripts/get-thread-for-comment](scripts/get-thread-for-comment):
 ```bash
-bash scripts/get-thread-for-comment PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
+bash "$PLUGIN_ROOT/skills/inc-resolve-pr-feedback/scripts/get-thread-for-comment" PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
 ```
 
 This fetches thread IDs and their first comment IDs (minimal fields, no bodies) and returns the matching thread with full comment details.
@@ -450,10 +467,11 @@ After confirmation, spawn a single `inc-pr-comment-resolver` agent for the threa
 
 ## Scripts
 
-- [scripts/get-pr-comments](scripts/get-pr-comments) -- GraphQL query for unresolved review threads
-- [scripts/get-thread-for-comment](scripts/get-thread-for-comment) -- Map a comment node ID to its parent thread (for targeted mode)
-- [scripts/reply-to-pr-thread](scripts/reply-to-pr-thread) -- GraphQL mutation to reply within a review thread
-- [scripts/resolve-pr-thread](scripts/resolve-pr-thread) -- GraphQL mutation to resolve a thread by ID
+- [scripts/get-pr-comments](scripts/get-pr-comments) -- REST-first fetch of unresolved review threads, top-level comments, and review bodies. Uses the shared thread cache for thread state.
+- [scripts/get-thread-for-comment](scripts/get-thread-for-comment) -- Map a comment node ID to its parent thread (reads the shared thread cache when available)
+- [scripts/reply-to-pr-thread](scripts/reply-to-pr-thread) -- GraphQL mutation to reply within a review thread (degrades to a queued manual command on quota/auth failure)
+- [scripts/resolve-pr-thread](scripts/resolve-pr-thread) -- GraphQL mutation to resolve a thread by ID (degrades to a queued manual command on quota/auth failure)
+- `<plugin root>/scripts/gh-thread-cache` -- Shared helper that caches the GraphQL thread map per (owner, repo, PR, head SHA)
 
 ## Success Criteria
 
@@ -462,3 +480,5 @@ After confirmation, spawn a single `inc-pr-comment-resolver` agent for the threa
 - Each thread replied to with quoted context
 - Threads resolved via GraphQL (except `needs-human`)
 - Empty result from get-pr-comments on verify (minus intentionally-open threads)
+
+**Next.** Once any pushed fixes have re-greened CI, run `/inc:merge-pr-5` to ship. When you don't invoke this skill directly, `/inc:commit-push-pr-4`'s watch loop runs it for you in unattended (`--auto`) mode after a PR is opened, and `/inc:ship-it` carries on through merge + deploy from there.

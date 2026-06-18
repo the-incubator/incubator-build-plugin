@@ -2,12 +2,18 @@
 
 # Replies to a PR review thread. Body is read from stdin to avoid
 # shell escaping issues with markdown (quotes, newlines, etc.).
+#
+# GitHub has no REST equivalent for thread replies — this is a GraphQL-only
+# mutation. When GraphQL is unavailable (quota or auth), the script does NOT
+# fail the agent flow: it prints a ready-to-paste manual command and appends
+# the same to a pending-replies marker file, so the user can play these back
+# later without losing context.
 
 set -e
 
 if [ $# -lt 1 ]; then
-    echo "Usage: echo 'reply body' | reply-to-pr-thread THREAD_ID"
-    echo "Example: echo 'Addressed: added null check' | reply-to-pr-thread PRRT_kwDOABC123"
+    echo "Usage: echo 'reply body' | reply-to-pr-thread THREAD_ID [PR_NUMBER OWNER/REPO]" >&2
+    echo "Example: echo 'Addressed: added null check' | reply-to-pr-thread PRRT_kwDOABC123" >&2
     exit 1
 fi
 
@@ -15,19 +21,82 @@ THREAD_ID=$1
 BODY=$(cat)
 
 if [ -z "$BODY" ]; then
-    echo "Error: No body provided on stdin."
+    echo "Error: No body provided on stdin." >&2
     exit 1
 fi
 
-gh api graphql -f threadId="$THREAD_ID" -f body="$BODY" -f query='
+# Optional context for the pending-marker file.
+PR_NUMBER=${2:-}
+if [ -n "$3" ]; then
+    OWNER=$(echo "$3" | cut -d/ -f1)
+    REPO=$(echo "$3" | cut -d/ -f2)
+else
+    OWNER=$(gh repo view --json owner -q .owner.login 2>/dev/null || echo "")
+    REPO=$(gh repo view --json name -q .name 2>/dev/null || echo "")
+fi
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+THREAD_CACHE="$SCRIPT_DIR/../../../scripts/gh-thread-cache"
+[ -x "$THREAD_CACHE" ] || THREAD_CACHE=$(command -v gh-thread-cache || echo "")
+
+print_manual_command() {
+    # Escape single quotes in body for safe single-quoted bash literal.
+    local escaped_body
+    escaped_body=$(printf '%s' "$BODY" | sed "s/'/'\\\\''/g")
+    cat <<EOF
+# Manual replay (run when GraphQL quota resets):
+gh api graphql -f threadId='$THREAD_ID' -f body='$escaped_body' -f query='
+mutation ReplyToReviewThread(\$threadId: ID!, \$body: String!) {
+  addPullRequestReviewThreadReply(input: {
+    pullRequestReviewThreadId: \$threadId
+    body: \$body
+  }) { comment { id url } }
+}'
+EOF
+}
+
+# Attempt the mutation.
+if RESPONSE=$(gh api graphql -f threadId="$THREAD_ID" -f body="$BODY" -f query='
 mutation ReplyToReviewThread($threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: {
     pullRequestReviewThreadId: $threadId
     body: $body
   }) {
-    comment {
-      id
-      url
-    }
+    comment { id url }
   }
-}'
+}' 2>&1); then
+    echo "$RESPONSE"
+    exit 0
+fi
+
+# Failure path: figure out whether it's a quota issue or something structural.
+if echo "$RESPONSE" | grep -qE 'RATE_LIMITED|rate limit|API rate limit|Bad credentials|HTTP 401|HTTP 403'; then
+    REASON="GraphQL quota or auth"
+else
+    REASON="GraphQL mutation failed"
+fi
+
+PENDING_FILE=""
+if [ -n "$THREAD_CACHE" ] && [ -n "$OWNER" ] && [ -n "$REPO" ] && [ -n "$PR_NUMBER" ]; then
+    PENDING_FILE=$("$THREAD_CACHE" pending-file "$OWNER" "$REPO" "$PR_NUMBER" replies 2>/dev/null || echo "")
+fi
+
+cat >&2 <<EOF
+reply-to-pr-thread: $REASON — skipped network call. Manual command below.
+  Reason detail: $(echo "$RESPONSE" | head -3 | tr '\n' ' ')
+EOF
+
+MANUAL=$(print_manual_command)
+printf '%s\n' "$MANUAL" >&2
+
+if [ -n "$PENDING_FILE" ]; then
+    {
+        echo "# thread: $THREAD_ID  ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
+        printf '%s\n\n' "$MANUAL"
+    } >> "$PENDING_FILE"
+    echo "  Appended to: $PENDING_FILE" >&2
+fi
+
+# Exit 0 so the orchestrating agent flow keeps going. Caller can detect
+# degradation by checking for an empty stdout (no comment id/url).
+exit 0

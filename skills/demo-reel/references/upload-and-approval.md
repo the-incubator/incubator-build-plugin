@@ -7,7 +7,7 @@ Upload a temporary preview for the user to review, then promote to permanent hos
 Upload the evidence file (GIF or PNG) to litterbox for a temporary 1-hour preview:
 
 ```bash
-python3 scripts/capture-demo.py preview [ARTIFACT_PATH]
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" preview [ARTIFACT_PATH]
 ```
 
 The last line of output is the preview URL (e.g., `https://litter.catbox.moe/abc123.gif`). This URL expires after 1 hour — no cleanup needed.
@@ -42,7 +42,7 @@ Set evidence to null and proceed. The preview link expires on its own.
 After the user approves, upload to permanent catbox hosting. The command accepts either the preview URL (preferred) or the local file path (fallback):
 
 ```bash
-python3 scripts/capture-demo.py upload [PREVIEW_URL or ARTIFACT_PATH]
+python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" upload [PREVIEW_URL or ARTIFACT_PATH]
 ```
 
 If Step 1 produced a preview URL, pass it here -- catbox copies directly from litterbox without re-uploading. If Step 1 fell back to local review (no preview URL), pass the local artifact path instead.

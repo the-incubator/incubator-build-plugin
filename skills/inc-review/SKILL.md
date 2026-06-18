@@ -1,106 +1,93 @@
 ---
 name: inc:review-3a
-description: Code review a pull request, or the uncommitted changes in the working tree if no PR is provided
-allowed-tools: Bash(gh issue view:*), Bash(gh search:*), Bash(gh issue list:*), Bash(gh pr comment:*), Bash(gh pr diff:*), Bash(gh pr view:*), Bash(gh pr list:*), Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git log:*), Bash(git blame:*)
+description: Review the uncommitted/branch changes in the working tree — auto-apply safe fixes, surface findings that need your call, write a run artifact. Lightweight tier; escalate to inc:review-deep-3b for large or sensitive changes.
+allowed-tools: Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git log:*), Bash(git blame:*), Bash(git remote:*), Bash(mkdir:*), Edit, Write, Read, Grep, Glob, Agent, Bash
 disable-model-invocation: false
 ---
 
-Provide a code review for the given pull request, or for the uncommitted changes in the working tree when no PR is provided.
+Review the change set on the current branch: auto-apply safe fixes, surface findings that need the user's call, and write a run artifact. This is the lightweight review tier — a fast multi-agent pass without the deep persona fan-out. For large or sensitive changes, or to review a GitHub PR, use `inc:review-deep-3b` instead.
 
-## Mode detection
+## Scope
 
-- **PR mode** — A PR number or GitHub PR URL is in `$ARGUMENTS`. Run all 8 steps below.
-- **Local mode** — `$ARGUMENTS` is empty. The review target is uncommitted changes in the working tree (`git diff HEAD` plus `git diff --cached`). Skip steps 1 and 7 (no PR to gate on). In step 8, do not post to GitHub — print the formatted findings to the terminal instead. Code links in step 8 still require a full sha (use `git rev-parse HEAD`) and the resolved repo slug from `git remote get-url origin` if one exists; if not, render bare `path:Lstart-Lend` references instead of GitHub URLs.
-- **No-changes guard (local mode only)** — If `git status --porcelain` is empty, stop with `No uncommitted changes to review.` and do not proceed.
+Working-tree only. The review target is the change set on the current branch: `git diff HEAD` plus staged changes (`git diff --cached`), or — when reviewing a whole branch — `git diff <base>...HEAD`. There is no PR mode; reviewing a GitHub PR is `inc:review-deep-3b`'s job.
 
-In every step below, "the diff" means `gh pr diff <PR>` in PR mode and `git diff HEAD` (combined with staged changes) in local mode. "The pull request" means the PR in PR mode and "the local change set" in local mode — adapt agent prompts accordingly.
+**No-changes guard:** if `git status --porcelain` is empty (and no branch diff was requested), stop with `No changes to review.` and do not proceed.
+
+"The diff" below always means this local change set.
 
 To do this, follow these steps precisely:
 
-1. **PR mode only.** Use a Haiku agent to check if the pull request (a) is closed, (b) is a draft, (c) does not need a code review (eg. because it is an automated pull request, or is very simple and obviously ok), or (d) already has a code review from you from earlier. If so, do not proceed. **Skip in local mode.**
-2. Use another Haiku agent to give you a list of file paths to (but not the contents of) any relevant CLAUDE.md files from the codebase: the root CLAUDE.md file (if one exists), as well as any CLAUDE.md files in the directories whose files the pull request (or local change set) modified
-3. Use a Haiku agent to view the change and return a summary. In PR mode, the agent reads PR title, body, and `gh pr diff`. In local mode, the agent reads `git status --porcelain` and `git diff HEAD` (plus staged) to summarize the working-tree changes.
-4. Then, launch 6 parallel Sonnet agents to independently code review the change. The agents should do the following, then return a list of issues and the reason each issue was flagged (eg. CLAUDE.md adherence, bug, historical git context, etc.):
-   a. Agent #1: Audit the changes to make sure they comply with the CLAUDE.md. Note that CLAUDE.md is guidance for Claude as it writes code, so not all instructions will be applicable during code review.
-   b. Agent #2: Read the file changes in the pull request, then do a shallow scan for obvious bugs. Avoid reading extra context beyond the changes, focusing just on the changes themselves. Focus on large bugs, and avoid small issues and nitpicks. Ignore likely false positives.
-   c. Agent #3: Read the git blame and history of the code modified, to identify any bugs in light of that historical context
-   d. Agent #4: Read previous pull requests that touched these files, and check for any comments on those pull requests that may also apply to the current pull request (or, in local mode, to the current working-tree changes).
-   e. Agent #5: Read code comments in the modified files, and make sure the changes in the pull request comply with any guidance in the comments.
-   f. Agent #6: Dispatch the `inc-architecture-strategist` subagent (defined at `agents/review/inc-architecture-strategist.agent.md`) to review the change from a system architecture perspective. The agent should surface architectural pattern violations, SOLID principle breaches, coupling/cohesion problems, circular dependencies, component boundary violations, leaky abstractions, API contract/interface stability issues, and inconsistent architectural patterns. Pass it the PR summary from step 3 and the diff so it can render its structured analysis (Architecture Overview, Change Assessment, Compliance Check, Risk Analysis, Recommendations) along with concrete issues.
-5. For each issue found in #4, launch a parallel Haiku agent that takes the PR, issue description, and list of CLAUDE.md files (from step 2), and returns a score to indicate the agent's level of confidence for whether the issue is real or false positive. To do that, the agent should score each issue on a scale from 0-100, indicating its level of confidence. For issues that were flagged due to CLAUDE.md instructions, the agent should double check that the CLAUDE.md actually calls out that issue specifically. The scale is (give this rubric to the agent verbatim):
-   a. 0: Not confident at all. This is a false positive that doesn't stand up to light scrutiny, or is a pre-existing issue.
-   b. 25: Somewhat confident. This might be a real issue, but may also be a false positive. The agent wasn't able to verify that it's a real issue. If the issue is stylistic, it is one that was not explicitly called out in the relevant CLAUDE.md.
-   c. 50: Moderately confident. The agent was able to verify this is a real issue, but it might be a nitpick or not happen very often in practice. Relative to the rest of the PR, it's not very important.
-   d. 75: Highly confident. The agent double checked the issue, and verified that it is very likely it is a real issue that will be hit in practice. The existing approach in the PR is insufficient. The issue is very important and will directly impact the code's functionality, or it is an issue that is directly mentioned in the relevant CLAUDE.md.
-   e. 100: Absolutely certain. The agent double checked the issue, and confirmed that it is definitely a real issue, that will happen frequently in practice. The evidence directly confirms this.
-6. Filter out any issues with a score less than 80. If there are no issues that meet this criteria, do not proceed.
-7. **PR mode only.** Use a Haiku agent to repeat the eligibility check from #1, to make sure that the pull request is still eligible for code review. **Skip in local mode.**
-8. Finally, deliver the result. When writing the output, keep in mind to:
-   a. Keep your output brief
-   b. Avoid emojis
-   c. Link and cite relevant code, files, and URLs
+1. Launch 3 parallel Sonnet review agents. Each agent reviews the change and returns a list of findings, following the review instructions below verbatim. Each agent locates the relevant CLAUDE.md files on its own (root CLAUDE.md plus any in directories the change touches). One of the three agents should additionally dispatch the `inc-architecture-strategist` subagent (defined at `agents/review/inc-architecture-strategist.agent.md`), pass it the diff, and fold its architectural findings (pattern violations, SOLID/coupling/cohesion problems, circular dependencies, component-boundary violations, leaky abstractions, API/interface stability issues) into that agent's findings list using the same schema.
 
-   **PR mode:** Use the `gh` bash command to comment back on the pull request with the result.
+   **Review instructions (give to each agent verbatim):**
 
-   **Local mode:** Print the same formatted block directly to the terminal — do not call `gh pr comment` and do not post anywhere. For code citations: if `git remote get-url origin` resolves to a GitHub URL, render full GitHub permalinks using `git rev-parse HEAD` for the sha. If origin does not resolve to a GitHub URL, render bare `path:Lstart-Lend` references instead of GitHub URLs. Cite uncommitted lines by their post-edit line numbers in the working tree.
+   > Review the code changes and return structured findings.
+   >
+   > Task:
+   > - Read the relevant history and diff yourself.
+   > - Focus findings on risks introduced by changed code, but inspect surrounding code, call sites, shared helpers, tests, and invariants when needed to understand root cause.
+   > - Do NOT run tests during review. The pipeline has a dedicated test step after review.
+   > - Analyze for bugs, risks, and code simplification opportunities.
+   > - "Simplification" means reducing code complexity through non-functional refactoring (e.g. deduplication, clearer control flow). It does NOT mean removing features, changing product behavior, or stripping intentional user-facing output.
+   > - Treat security issues, performance regressions, breaking changes, and insufficient error handling as risks.
+   > - Do a full review pass before returning. Do not stop after the first valid finding. Continue inspecting the rest of the changed code until you have enumerated all material issues you can substantiate.
+   >
+   > Rules:
+   > - Anchor every finding to a specific file and one-indexed line number in the changed code when possible.
+   > - Severity is P0-P3: P0 = critical breakage/exploit/data loss (must fix before merge), P1 = high-impact defect likely hit in normal use, P2 = moderate issue with meaningful downside, P3 = low-impact minor improvement.
+   > - Be concise and actionable. No generic advice like "add more tests".
+   > - Only comment on things that genuinely matter.
+   > - Do NOT report styling, formatting, linting, compilation, or type-checking issues.
+   > - If the change is clean, return an empty findings array.
+   >
+   > Confidence is one of 5 discrete anchors. Pick the anchor whose definition matches your evidence — do not interpolate or invent intermediate values:
+   >   - 0: Not a real finding / false positive. Do not report.
+   >   - 25: Speculative. Weak or circumstantial evidence; likely noise. Do not report.
+   >   - 50: Plausible but unverified -- real but uncertain. Do not report unless P0 severity (the orchestrator may still promote a corroborated 50 to 75 during merge).
+   >   - 75: Confident. Real and substantiated with concrete, code-grounded evidence. Report.
+   >   - 100: Certain. Verifiable from the code/diff alone -- a definitive logic bug, a compile/type error, or a quotable standards violation with no interpretation. Report.
+   >   Suppress threshold: emit only findings at anchor 75 or 100. The single exception is a P0 at anchor 50 -- a critical issue you believe is real but cannot fully verify. Never emit anchor 0 or 25.
+   >
+   > Set `autofix_class` to exactly one of:
+   >   - `auto_apply`: The fix is local, deterministic, and safe to apply automatically — correctness, error handling, security, performance, or mechanical code quality, with no question about the author's intent. Examples: add a missing nil check, fix an off-by-one, extract a duplicated helper, remove dead code, add a missing test.
+   >   - `ask_user`: The user should review this before anything changes — because the fix touches behavior, contracts, permissions, product decisions, or the author's deliberate intent, OR because it is actionable work needing a design decision. Examples: add auth to an unprotected endpoint, change a public API response shape, a deletion that looks wrong, a hardcoded value that should be configurable. When in doubt between auto_apply and ask_user, choose ask_user.
+   >   - `fyi`: Informational only — no action required. Examples: noting a pattern, acknowledging a tradeoff, a residual risk.
 
-Examples of false positives, for steps 4 and 5:
+   Each finding is a `{file, line, severity, confidence, autofix_class, title, why_it_matters, suggested_fix?}` object — `severity` is P0-P3, `confidence` is one of {0,25,50,75,100}, `autofix_class` is auto_apply|ask_user|fyi, `suggested_fix` is optional.
+
+2. **Merge and gate.** Merge the three agents' findings; dedup overlaps on `(file, line±3, normalized title)` keeping the higher severity and higher confidence anchor. When 2+ agents flag the same issue, promote one anchor step (50→75, 75→100). Then apply the confidence gate: **suppress anything below anchor 75** (a P0 survives at anchor 50+). Suppression is silent — never surface suppressed findings or a suppressed count; the full set goes in the artifact. Drop the false-positive categories listed below before gating.
+
+3. **Auto-apply safe fixes.** For every surviving `auto_apply` finding, apply the fix to the working tree (Edit/Write). Then verify: run the affected tests/lint (targeted; broaden if fixes span files). If a fix fails verification, revert that one fix and re-route it as `ask_user`. Never leave the tree red. A finding whose fix needs validation is not done until that check runs.
+
+4. **Write the run artifact.** Generate a run id (`date +%Y%m%d-%H%M%S`-rand) and `mkdir -p .context/incubator/inc-review/<run-id>/`. Write the full synthesized finding set to `.context/incubator/inc-review/<run-id>/findings.json` as a JSON array (each object: `autofix_class`, `severity`, `file`, `line`, `title`, `why_it_matters`, optional `suggested_fix`). Write `metadata.json` with `{run_id, branch, head_sha, completed_at, ask_user_count}`. This `findings.json` is the gate signal downstream skills (e.g. `inc:review-and-pr`) read.
+
+5. **Present, then stop.** Render the report per `references/review-output-template.md`: a one-line situation summary (risk + what was auto-applied + what needs the user), then the `ask_user` findings as "Needs your call" prose, then the auto-applied fixes, then `fyi` informational. Cite each finding by `file:line`. Confidence anchors and agent names stay in the artifact, off the terminal surface. Then stop — do not ask what to do next; the `ask_user` findings are the user's to act on.
+
+Examples of false positives (drop these in step 2 before gating):
 
 - Pre-existing issues
 - Something that looks like a bug but is not actually a bug
 - Pedantic nitpicks that a senior engineer wouldn't call out
-- Issues that a linter, typechecker, or compiler would catch (eg. missing or incorrect imports, type errors, broken tests, formatting issues, pedantic style issues like newlines). No need to run these build steps yourself -- it is safe to assume that they will be run separately as part of CI.
+- Styling, formatting, linting, compilation, or type-checking issues, and anything a linter, typechecker, or compiler would catch (eg. missing or incorrect imports, type errors, broken tests, formatting issues, pedantic style issues like newlines). No need to run these build steps yourself -- it is safe to assume that they will be run separately as part of CI.
 - General code quality issues (eg. lack of test coverage, general security issues, poor documentation), unless explicitly required in CLAUDE.md
 - Issues that are called out in CLAUDE.md, but explicitly silenced in the code (eg. due to a lint ignore comment)
 - Changes in functionality that are likely intentional or are directly related to the broader change
-- Real issues, but on lines that the user did not modify in their pull request
+- Real issues, but on lines outside the reviewed change set
 
 Notes:
 
-- Do not check build signal or attempt to build or typecheck the app. These will run separately, and are not relevant to your code review.
-- Use `gh` to interact with Github (eg. to fetch a pull request, or to create inline comments), rather than web fetch
-- Make a todo list first
-- You must cite and link each bug (eg. if referring to a CLAUDE.md, you must link it)
-- For your final comment (PR mode) or terminal output (local mode), follow the following format precisely (assuming for this example that you found 3 issues). In local mode, omit the trailing `<sub>...</sub>` reaction footer — there's nothing to react to.
+- Do not check build signal or attempt to build or typecheck the app for review purposes. (Verifying an applied `auto_apply` fix in step 3 is different — that targeted test/lint run is required.)
+- Make a todo list first.
+- The presentation in step 5 follows `references/review-output-template.md` exactly — lead with the situation summary, `ask_user` as prose, no confidence/agent provenance on screen.
 
 ---
 
-### Code review
+## Included References
 
-Found 3 issues:
+### Findings Schema
 
-1. <brief description of bug> (CLAUDE.md says "<...>")
+@./references/findings-schema.json
 
-<link to file and line with full sha1 + line range for context, note that you MUST provide the full sha and not use bash here, eg. https://github.com/anthropics/claude-code/blob/1d54823877c4de72b2316a64032a54afc404e619/README.md#L13-L17>
+### Review Output Template
 
-2. <brief description of bug> (some/other/CLAUDE.md says "<...>")
-
-<link to file and line with full sha1 + line range for context>
-
-3. <brief description of bug> (bug due to <file and code snippet>)
-
-<link to file and line with full sha1 + line range for context>
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-<sub>- If this code review was useful, please react with 👍. Otherwise, react with 👎.</sub>
-
----
-
-- Or, if you found no issues:
-
----
-
-### Code review
-
-No issues found. Checked for bugs and CLAUDE.md compliance.
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-- When linking to code, follow the following format precisely, otherwise the Markdown preview won't render correctly: https://github.com/anthropics/claude-cli-internal/blob/c21d3c10bc8e898b7ac1a2d745bdc9bc4e423afe/package.json#L10-L15
-  - Requires full git sha
-  - You must provide the full sha. Commands like `https://github.com/owner/repo/blob/$(git rev-parse HEAD)/foo/bar` will not work, since your comment will be directly rendered in Markdown.
-  - Repo name must match the repo you're code reviewing
-  - # sign after the file name
-  - Line range format is L[start]-L[end]
-  - Provide at least 1 line of context before and after, centered on the line you are commenting about (eg. if you are commenting about lines 5-6, you should link to `L4-7`)
+@./references/review-output-template.md

@@ -38,24 +38,23 @@ The schema below describes the **full artifact file format** (all fields require
 
 {schema}
 
-Confidence rubric (0.0-1.0 scale):
-- 0.00-0.29: Not confident / likely false positive. Do not report.
-- 0.30-0.49: Somewhat confident. Do not report -- too speculative for actionable review.
-- 0.50-0.59: Moderately confident. Real but uncertain. Do not report unless P0 severity.
-- 0.60-0.69: Confident enough to flag. Include only when the issue is clearly actionable.
-- 0.70-0.84: Highly confident. Real and important. Report with full evidence.
-- 0.85-1.00: Certain. Verifiable from the code alone. Report.
+Confidence is one of 5 discrete anchors. Pick the anchor whose definition matches your evidence — do not interpolate or invent intermediate values:
+- 0: Not a real finding / false positive. Do not report.
+- 25: Speculative. Weak or circumstantial evidence; likely noise. Do not report.
+- 50: Plausible but unverified -- real but uncertain. Do not report unless P0 severity (the orchestrator may still promote a corroborated 50 to 75 during merge).
+- 75: Confident. Real and substantiated with concrete, code-grounded evidence. Report.
+- 100: Certain. Verifiable from the code/diff alone -- a definitive logic bug, a compile/type error, or a quotable standards violation with no interpretation. Report.
 
-Suppress threshold: 0.60. Do not emit findings below 0.60 confidence (except P0 at 0.50+).
+Suppress threshold: emit only findings at anchor 75 or 100. The single exception is a P0 at anchor 50 -- a critical issue you believe is real but cannot fully verify. Never emit anchor 0 or 25.
 
 Writing `why_it_matters` (required field, every finding):
 
-The `why_it_matters` field is how the reader — a developer triaging findings, a ticket-body reader months later, or a downstream automated surface — understands the problem without re-reading the file. Treat it as the most important prose field in your output; every downstream surface (walk-through questions, bulk-action previews, ticket bodies, headless output) depends on it being good.
+The `why_it_matters` field is how the reader — a developer triaging findings, a ticket-body reader months later, or a downstream automated surface — understands the problem without re-reading the file. Treat it as the most important prose field in your output; every downstream surface (the "Needs your call" report section, headless output, the on-disk artifact) depends on it being good.
 
 - **Lead with observable behavior.** Describe what the bug does from the outside — what a user, attacker, operator, or downstream caller experiences. Do not lead with code structure ("The function X does Y..."). Start with the effect ("Any signed-in user can read another user's orders..."). Function and variable names appear later, only when the reader needs them to locate the issue.
 - **Explain why the fix resolves the problem.** If you include a `suggested_fix`, the `why_it_matters` should make clear why that specific fix addresses the root cause. When a similar pattern exists elsewhere in the codebase (an existing guard, an established convention, a parallel handler), reference it so the recommendation is grounded in the project's own conventions rather than theoretical best practice.
 - **Keep it tight.** Approximately 2-4 sentences plus the minimum code quoted inline to ground the point. Longer framings are a regression — downstream surfaces have narrow display budgets, and verbose `why_it_matters` content gets truncated or skimmed.
-- **Always produce substantive content.** `why_it_matters` is required by the schema. Empty strings, nulls, and single-phrase entries are validation failures. If you found something worth flagging (confidence >= 0.60), you can explain it — the field exists because every finding needs a reason.
+- **Always produce substantive content.** `why_it_matters` is required by the schema. Empty strings, nulls, and single-phrase entries are validation failures. If you found something worth flagging (anchor 75+), you can explain it — the field exists because every finding needs a reason.
 
 Illustrative pair — same finding, weak vs. strong framing:
 
@@ -85,13 +84,12 @@ Rules:
 - Every finding in the full artifact file MUST include at least one evidence item grounded in the actual code. The compact return omits evidence -- the evidence requirement applies to the disk artifact only.
 - Set pre_existing to true ONLY for issues in unchanged code that are unrelated to this diff. If the diff makes the issue newly relevant, it is NOT pre-existing.
 - You are operationally read-only. The one permitted exception is writing your full analysis to the `.context/` artifact path when a run ID is provided. You may also use non-mutating inspection commands, including read-oriented `git` / `gh` commands, to gather evidence. Do not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
-- Set `autofix_class` accurately -- not every finding is `advisory`. Use this decision guide:
-  - `safe_auto`: The fix is local and deterministic — the fixer can apply it mechanically without design judgment. Examples: extracting a duplicated helper, adding a missing nil/null check, fixing an off-by-one, adding a missing test for an untested code path, removing dead code.
-  - `gated_auto`: A concrete fix exists but it changes contracts, permissions, or crosses a module boundary in a way that deserves explicit approval. Examples: adding authentication to an unprotected endpoint, changing a public API response shape, switching from soft-delete to hard-delete.
-  - `manual`: Actionable work that requires design decisions or cross-cutting changes. Examples: redesigning a data model, choosing between two valid architectural approaches, adding pagination to an unbounded query.
-  - `advisory`: Report-only items that should not become code-fix work. Examples: noting a design asymmetry the PR improves but doesn't fully resolve, flagging a residual risk, deployment notes.
-  Do not default to `advisory` when uncertain -- if a concrete fix is obvious, classify it as `safe_auto` or `gated_auto`.
-- Set `owner` to the default next actor for this finding: `review-fixer`, `downstream-resolver`, `human`, or `release`.
+- Set `autofix_class` accurately -- not every finding is `fyi`. There are exactly three classes:
+  - `auto_apply`: The fix is local, deterministic, and safe to apply automatically — correctness, error handling, security, performance, or mechanical code quality, with no question about the author's intent. Examples: extracting a duplicated helper, adding a missing nil/null check, fixing an off-by-one, adding a missing test for an untested code path, removing dead code.
+  - `ask_user`: The user should review this before anything changes — because the fix touches behavior, contracts, permissions, product decisions, or the author's deliberate intent, OR because it is actionable work that needs a design decision or cross-cutting change. Examples: adding authentication to an unprotected endpoint, changing a public API response shape, switching from soft-delete to hard-delete, redesigning a data model, choosing between two valid architectural approaches, adding pagination to an unbounded query. When in doubt between auto_apply and ask_user, choose ask_user.
+  - `fyi`: Report-only items that should not become code-fix work — no action required. Examples: noting a design asymmetry the PR improves but doesn't fully resolve, flagging a residual risk, deployment notes, acknowledged tradeoffs.
+  Do not default to `fyi` when uncertain -- if a concrete fix is obvious, classify it as `auto_apply` or `ask_user`.
+- Set `owner` to the default next actor for this finding: `review-fixer` (auto_apply only), `human` (every `ask_user` finding, plus informational items), or `release`.
 - Set `requires_verification` to true whenever the likely fix needs targeted tests, a focused re-review, or operational validation before it should be trusted.
 - suggested_fix is optional. Only include it when the fix is obvious and correct. A bad suggestion is worse than none.
 - If you find no issues, return an empty findings array. Still populate residual_risks and testing_gaps if applicable.

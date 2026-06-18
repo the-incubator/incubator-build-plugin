@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""
+replay-ci-checks: parse .github/workflows/*.yml and emit replayable steps as NDJSON.
+
+The skill's pre-push CI-replay step invokes this to discover what CI will gate
+the PR on, then iterates the output to run each step locally before pushing.
+Filtering by changed files (diff-relevance) is the caller's job — this script
+emits every step that survives the static skip filters.
+
+Usage:
+  replay-ci-checks [REPO_ROOT]
+
+Output (one JSON object per line):
+  {"step": "...", "dir": "...", "env": {...}, "cmd": "...", "workflow": "...", "job": "..."}
+
+Exit codes:
+  0  steps emitted (possibly zero — also when no workflow triggers on pull_request)
+  2  PyYAML missing or unrecoverable error
+"""
+from __future__ import annotations
+import glob
+import json
+import os
+import re
+import sys
+
+try:
+    import yaml
+except ImportError:
+    print("ERROR: PyYAML not installed. Install with: pip3 install pyyaml", file=sys.stderr)
+    sys.exit(2)
+
+
+# Skip a step when its `name:` matches one of these (case-insensitive).
+SKIP_NAME_PATTERNS = [
+    re.compile(r"\bbuild\b", re.IGNORECASE),
+    re.compile(r"\btests?\b", re.IGNORECASE),
+    re.compile(r"\be2e\b", re.IGNORECASE),
+    re.compile(r"\bplaywright\b", re.IGNORECASE),
+    re.compile(r"\bcoverage\b", re.IGNORECASE),
+    re.compile(r"^install\b", re.IGNORECASE),
+    re.compile(r"^checkout\b", re.IGNORECASE),
+    re.compile(r"^setup\b", re.IGNORECASE),
+    re.compile(r"\bdeploy\b", re.IGNORECASE),
+    re.compile(r"\bpublish\b", re.IGNORECASE),
+    re.compile(r"\brelease\b", re.IGNORECASE),
+    re.compile(r"\bbenchmark\b", re.IGNORECASE),
+]
+
+# Skip a step when its `run:` (first non-comment line OR whole body) matches.
+SKIP_RUN_PATTERNS = [
+    # Package installers — node_modules already present locally
+    re.compile(r"^\s*pnpm\s+(install|i)\b"),
+    re.compile(r"^\s*npm\s+(ci|install|i)\b"),
+    re.compile(r"^\s*yarn\s+install\b"),
+    re.compile(r"^\s*yarn\s*$", re.MULTILINE),
+    re.compile(r"^\s*bun\s+install\b"),
+    # JS-ecosystem build/test/e2e/coverage/bench
+    re.compile(r"^\s*(pnpm|npm|yarn|bun)\s+(run\s+)?(build|test|e2e|coverage|bench)\b"),
+    re.compile(r"^\s*(next|vite|tsup|esbuild|webpack|rollup)\s+build\b"),
+    re.compile(r"^\s*(jest|vitest|mocha|ava)\b"),
+    re.compile(r"^\s*playwright\s+test\b"),
+    # Other-ecosystem build/test
+    re.compile(r"^\s*forge\s+(build|test|coverage)\b"),
+    re.compile(r"^\s*hardhat\s+(test|coverage|compile)\b"),
+    re.compile(r"^\s*go\s+test\b"),
+    re.compile(r"^\s*cargo\s+(build|test|bench)\b"),
+    re.compile(r"^\s*pytest\b"),
+    re.compile(r"^\s*rspec\b"),
+    re.compile(r"^\s*make\s+(build|test|all|release)\b"),
+    # System / network — unsafe or unnecessary locally
+    re.compile(r"\bapt-get\b"),
+    re.compile(r"\bbrew\s+install\b"),
+    re.compile(r"\bdocker\s+(build|push|run)\b"),
+    re.compile(r"\bcurl\s+.*\|\s*(sh|bash)\b"),
+    re.compile(r"\bwget\s+.*\|\s*(sh|bash)\b"),
+    re.compile(r"\b(codecov|coveralls)\b"),
+    # Deploy / publish / release
+    re.compile(r"\b(vercel|wrangler|fly|flyctl|railway|netlify|gcloud|aws|firebase|heroku)\s+(deploy|publish|run)\b", re.IGNORECASE),
+    re.compile(r"\b(npm|pnpm|yarn)\s+publish\b"),
+    re.compile(r"\bgh\s+release\b"),
+    re.compile(r"\bsemantic-release\b"),
+]
+
+# A step's `if:` clause looks like a main-branch-only gate.
+IF_EXCLUDES_PR = [
+    re.compile(r"github\.event_name\s*==\s*['\"]push['\"]"),
+    re.compile(r"github\.ref\s*==\s*['\"]refs/heads/(main|master)['\"]"),
+    re.compile(r"github\.ref_name\s*==\s*['\"](main|master)['\"]"),
+]
+
+
+def workflow_triggers_on_pr(workflow: dict) -> bool:
+    # PyYAML treats bare `on:` in YAML 1.1 as the boolean True. Tolerate both.
+    on = workflow.get("on")
+    if on is None:
+        on = workflow.get(True)
+    if on is None:
+        return False
+    if isinstance(on, str):
+        return on == "pull_request"
+    if isinstance(on, list):
+        return "pull_request" in on
+    if isinstance(on, dict):
+        return "pull_request" in on
+    return False
+
+
+def excluded_by_if(if_clause) -> bool:
+    if not if_clause:
+        return False
+    s = str(if_clause)
+    if "pull_request" in s:
+        return False
+    return any(pat.search(s) for pat in IF_EXCLUDES_PR)
+
+
+def name_skipped(name: str) -> bool:
+    if not name:
+        return False
+    return any(pat.search(name) for pat in SKIP_NAME_PATTERNS)
+
+
+def run_skipped(run: str) -> bool:
+    if not run:
+        return True
+    first_line = next(
+        (ln for ln in run.splitlines() if ln.strip() and not ln.strip().startswith("#")),
+        "",
+    )
+    for pat in SKIP_RUN_PATTERNS:
+        if pat.search(first_line) or pat.search(run):
+            return True
+    return False
+
+
+def filter_env(env: dict) -> dict:
+    out = {}
+    for k, v in (env or {}).items():
+        sv = str(v)
+        if "${{" in sv and any(ctx in sv for ctx in ("secrets.", "vars.", "github.", "runner.")):
+            continue
+        out[k] = sv
+    return out
+
+
+def emit_steps(repo_root: str) -> int:
+    workflows = []
+    for pat in ("*.yml", "*.yaml"):
+        workflows.extend(glob.glob(os.path.join(repo_root, ".github", "workflows", pat)))
+    workflows.sort()
+    if not workflows:
+        return 0
+
+    for wf_path in workflows:
+        try:
+            with open(wf_path) as f:
+                wf = yaml.safe_load(f)
+        except (yaml.YAMLError, OSError) as e:
+            print(f"WARN: failed to parse {wf_path}: {e}", file=sys.stderr)
+            continue
+        if not isinstance(wf, dict):
+            continue
+        if not workflow_triggers_on_pr(wf):
+            continue
+
+        wf_env = wf.get("env") or {}
+        wf_defaults_dir = ((wf.get("defaults") or {}).get("run") or {}).get("working-directory")
+
+        for job_id, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            if excluded_by_if(job.get("if")):
+                continue
+            job_env = job.get("env") or {}
+            job_defaults_dir = ((job.get("defaults") or {}).get("run") or {}).get("working-directory")
+
+            for step in job.get("steps") or []:
+                if not isinstance(step, dict):
+                    continue
+                run = step.get("run")
+                if not run:
+                    continue
+                if excluded_by_if(step.get("if")):
+                    continue
+                name = step.get("name") or ""
+                if name_skipped(name):
+                    continue
+                if run_skipped(run):
+                    continue
+
+                step_env = step.get("env") or {}
+                merged_env = filter_env({**wf_env, **job_env, **step_env})
+                wd = step.get("working-directory") or job_defaults_dir or wf_defaults_dir or "."
+
+                record = {
+                    "step": name or run.strip().splitlines()[0][:60],
+                    "dir": wd,
+                    "env": merged_env,
+                    "cmd": run.strip(),
+                    "workflow": os.path.relpath(wf_path, repo_root),
+                    "job": str(job_id),
+                }
+                print(json.dumps(record))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(emit_steps(sys.argv[1] if len(sys.argv) > 1 else os.getcwd()))

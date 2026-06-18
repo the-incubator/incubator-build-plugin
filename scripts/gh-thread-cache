@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+
+# Fetches and caches PR review thread state from GitHub.
+#
+# Thread IDs, isResolved, isOutdated, and per-thread comment IDs only exist in
+# GraphQL — REST has no concept of "review threads." This helper centralizes
+# that one unavoidable GraphQL call, caches it per (owner, repo, PR, head SHA),
+# and lets every other script read comment bodies / authors / CI state over REST.
+#
+# Usage:
+#   gh-thread-cache get OWNER REPO PR              # prints cached or fresh thread map JSON
+#   gh-thread-cache path OWNER REPO PR             # prints cache file path (whether or not it exists)
+#   gh-thread-cache pending-file OWNER REPO PR KIND  # prints path to pending-{kind}-{pr}.txt marker
+#
+# Exit codes for `get`:
+#   0  cache hit or successful GraphQL fetch (JSON on stdout)
+#   2  GraphQL quota exhausted or auth failure — stdout is `[]`, manual command printed to stderr
+#   1  other error
+
+set -e
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/incubator-build/pr-threads"
+
+cache_file() {
+    local owner=$1 repo=$2 pr=$3 sha=$4
+    echo "$CACHE_DIR/${owner}-${repo}-${pr}-${sha}.json"
+}
+
+pending_file() {
+    local owner=$1 repo=$2 pr=$3 kind=$4
+    echo "$CACHE_DIR/pending-${kind}-${owner}-${repo}-${pr}.txt"
+}
+
+gc_old_entries() {
+    [ -d "$CACHE_DIR" ] || return 0
+    find "$CACHE_DIR" -maxdepth 1 -type f -name '*.json' -mtime +7 -delete 2>/dev/null || true
+}
+
+fetch_head_sha() {
+    local owner=$1 repo=$2 pr=$3
+
+    # Prefer git: when CWD is a git checkout whose origin matches owner/repo,
+    # the upstream-tracking SHA is identical to GitHub's PR head and costs zero
+    # REST budget. `@{u}` resolves to the remote-tracking branch, which reflects
+    # the last `git fetch` — accurate as long as we fetched recently or are the
+    # last pusher (the common case during /ship-it).
+    local origin_url owner_repo
+    origin_url=$(git config --get remote.origin.url 2>/dev/null || echo "")
+    if [ -n "$origin_url" ]; then
+        owner_repo=$(printf '%s' "$origin_url" \
+            | sed -E 's#.*[:/]([^/:]+/[^/]+)/?$#\1#' \
+            | sed -E 's#\.git$##')
+        if [ "$owner_repo" = "$owner/$repo" ]; then
+            local sha
+            # Try upstream-tracking first; fall back to local HEAD if no upstream
+            # is configured (e.g. branch hasn't been pushed yet).
+            sha=$(git rev-parse --verify --quiet '@{u}' 2>/dev/null \
+                  || git rev-parse --verify --quiet HEAD 2>/dev/null \
+                  || echo "")
+            if [ -n "$sha" ]; then
+                printf '%s' "$sha"
+                return 0
+            fi
+        fi
+    fi
+
+    # Fallback: REST. Costs 1 unit, but unavoidable when CWD isn't the matching
+    # git checkout (e.g. someone runs `gh-thread-cache get other-org/other-repo`).
+    gh api "repos/$owner/$repo/pulls/$pr" -q .head.sha 2>/dev/null
+}
+
+fetch_thread_map() {
+    local owner=$1 repo=$2 pr=$3
+    # Paginated GraphQL fetch. `gh api graphql --paginate` only follows the
+    # first pageInfo in a response, so we loop reviewThreads ourselves. PRs
+    # with >100 threads were silently truncated before this loop was added.
+    # Per-thread `comments(first: 100)` stays un-paginated — threads with
+    # more than 100 comments are rare and not worth a nested loop here.
+    local cursor=""
+    local all_nodes="[]"
+    local raw_page rc page has_next
+
+    while :; do
+        if [ -z "$cursor" ]; then
+            raw_page=$(gh api graphql \
+                -f owner="$owner" -f repo="$repo" -F pr="$pr" \
+                -f query='
+query ThreadMap($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 100) {
+            nodes { id author { login } }
+          }
+        }
+      }
+    }
+  }
+}' 2>&1)
+        else
+            raw_page=$(gh api graphql \
+                -f owner="$owner" -f repo="$repo" -F pr="$pr" -f cursor="$cursor" \
+                -f query='
+query ThreadMap($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          comments(first: 100) {
+            nodes { id author { login } }
+          }
+        }
+      }
+    }
+  }
+}' 2>&1)
+        fi
+        rc=$?
+
+        # Bubble up rate-limit / auth / network failures verbatim so the
+        # caller's existing error-detection grep still fires.
+        if [ $rc -ne 0 ] || printf '%s' "$raw_page" \
+            | grep -qE 'RATE_LIMITED|rate limit|API rate limit|Bad credentials|HTTP 401|HTTP 403'; then
+            printf '%s' "$raw_page"
+            return 0
+        fi
+
+        page=$(printf '%s' "$raw_page" | jq -c '.data.repository.pullRequest.reviewThreads' 2>/dev/null || echo "")
+        if [ -z "$page" ] || [ "$page" = "null" ]; then
+            # Malformed/unparseable response — pass through so the caller's
+            # parse-failure branch handles it the same as before.
+            printf '%s' "$raw_page"
+            return 0
+        fi
+
+        all_nodes=$(jq -c --argjson p "$page" '. + $p.nodes' <<< "$all_nodes")
+        has_next=$(printf '%s' "$page" | jq -r '.pageInfo.hasNextPage')
+        [ "$has_next" = "true" ] || break
+        cursor=$(printf '%s' "$page" | jq -r '.pageInfo.endCursor')
+    done
+
+    # Re-wrap the aggregated nodes in the original response shape so the
+    # caller (cmd_get) can keep its existing `.data.repository.pullRequest
+    # .reviewThreads.nodes[]` jq pipeline unchanged.
+    jq -nc --argjson nodes "$all_nodes" \
+        '{data:{repository:{pullRequest:{reviewThreads:{nodes:$nodes}}}}}'
+}
+
+cmd_get() {
+    local owner=$1 repo=$2 pr=$3
+    mkdir -p "$CACHE_DIR"
+    gc_old_entries
+
+    local sha
+    sha=$(fetch_head_sha "$owner" "$repo" "$pr") || true
+    if [ -z "$sha" ]; then
+        echo "gh-thread-cache: could not resolve head SHA for $owner/$repo#$pr via REST." >&2
+        echo "  Manual check: gh api repos/$owner/$repo/pulls/$pr -q .head.sha" >&2
+        echo "[]"
+        return 1
+    fi
+
+    local file
+    file=$(cache_file "$owner" "$repo" "$pr" "$sha")
+    if [ -f "$file" ]; then
+        cat "$file"
+        return 0
+    fi
+
+    local raw threads
+    raw=$(fetch_thread_map "$owner" "$repo" "$pr") || raw="$raw"
+    # Detect GraphQL errors (rate limit, auth, etc.). gh returns nonzero on most
+    # of these and prints to stderr+stdout; check for the structured error.
+    if echo "$raw" | grep -qE 'RATE_LIMITED|rate limit|API rate limit|Bad credentials|HTTP 401|HTTP 403'; then
+        cat >&2 <<EOF
+gh-thread-cache: GraphQL unavailable (rate limit or auth). Degrading.
+  Reset/diagnose: gh api graphql -f query='query { rateLimit { remaining resetAt } }'
+  Or check auth:  gh auth status
+  Manual thread map fetch (run later to warm cache):
+    gh-thread-cache get $owner $repo $pr
+EOF
+        echo "[]"
+        return 2
+    fi
+
+    threads=$(echo "$raw" | jq -c '[
+      .data.repository.pullRequest.reviewThreads.nodes[]
+      | {
+          thread_id: .id,
+          isResolved: .isResolved,
+          isOutdated: .isOutdated,
+          path: .path,
+          line: .line,
+          comments: [.comments.nodes[] | {id: .id, author: .author.login}]
+        }
+    ]' 2>/dev/null) || threads=""
+
+    if [ -z "$threads" ] || [ "$threads" = "null" ]; then
+        echo "gh-thread-cache: GraphQL response could not be parsed. Raw output:" >&2
+        echo "$raw" | head -20 >&2
+        echo "[]"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -nc \
+        --arg sha "$sha" \
+        --arg fetched_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson threads "$threads" \
+        '{fetched_at: $fetched_at, head_sha: $sha, threads: $threads}')
+    echo "$payload" > "$file"
+    echo "$payload"
+}
+
+cmd_path() {
+    local owner=$1 repo=$2 pr=$3
+    local sha
+    sha=$(fetch_head_sha "$owner" "$repo" "$pr") || sha="unknown"
+    cache_file "$owner" "$repo" "$pr" "$sha"
+}
+
+cmd_pending_file() {
+    local owner=$1 repo=$2 pr=$3 kind=$4
+    mkdir -p "$CACHE_DIR"
+    pending_file "$owner" "$repo" "$pr" "$kind"
+}
+
+main() {
+    local sub=${1:-}
+    case "$sub" in
+        get)
+            shift
+            [ $# -ge 3 ] || { echo "Usage: gh-thread-cache get OWNER REPO PR" >&2; exit 1; }
+            cmd_get "$1" "$2" "$3"
+            ;;
+        path)
+            shift
+            [ $# -ge 3 ] || { echo "Usage: gh-thread-cache path OWNER REPO PR" >&2; exit 1; }
+            cmd_path "$1" "$2" "$3"
+            ;;
+        pending-file)
+            shift
+            [ $# -ge 4 ] || { echo "Usage: gh-thread-cache pending-file OWNER REPO PR KIND" >&2; exit 1; }
+            cmd_pending_file "$1" "$2" "$3" "$4"
+            ;;
+        *)
+            cat >&2 <<EOF
+Usage:
+  gh-thread-cache get OWNER REPO PR              Fetch/cache thread map (JSON)
+  gh-thread-cache path OWNER REPO PR             Print cache file path
+  gh-thread-cache pending-file OWNER REPO PR KIND  Print path to pending-{kind}-{pr}.txt
+EOF
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,5 +1,5 @@
 ---
-name: inc:deep-review-3b
+name: inc:review-deep-3b
 description: "Structured code review using tiered persona agents, confidence-gated findings, and a merge/dedup pipeline. Use when reviewing code changes before creating a PR."
 argument-hint: "[blank to review current branch, or provide PR link]"
 ---
@@ -36,17 +36,17 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 | Mode | When | Behavior |
 |------|------|----------|
-| **Interactive** (default) | No mode token present | Review, apply safe_auto fixes automatically, present findings, ask for policy decisions on gated/manual findings, and optionally continue into fix/push/PR next steps |
-| **Autofix** | `mode:autofix` in arguments | No user interaction. Review, apply only policy-allowed `safe_auto` fixes, re-review in bounded rounds, write a run artifact, and emit residual downstream work when needed |
+| **Interactive** (default) | No mode token present | Review, apply auto_apply fixes automatically, present the report (auto-applied fixes, then informational context, with the `ask_user` findings for your review placed just above the verdict), then stop. No routing question, no walk-through, no ticket-filing |
+| **Autofix** | `mode:autofix` in arguments | No user interaction. Review, apply only policy-allowed `auto_apply` fixes, re-review in bounded rounds, write a run artifact, and emit residual downstream work when needed |
 | **Report-only** | `mode:report-only` in arguments | Strictly read-only. Review and report only, then stop with no edits, artifacts, todos, commits, pushes, or PR actions |
-| **Headless** | `mode:headless` in arguments | Programmatic mode for skill-to-skill invocation. Apply `safe_auto` fixes silently (single pass), return all other findings as structured text output, write run artifacts, skip todos, and return "Review complete" signal. No interactive prompts. |
+| **Headless** | `mode:headless` in arguments | Programmatic mode for skill-to-skill invocation. Apply `auto_apply` fixes silently (single pass), return all other findings as structured text output, write run artifacts, skip todos, and return "Review complete" signal. No interactive prompts. |
 
 ### Autofix mode rules
 
 - **Skip all user questions.** Never pause for approval or clarification once scope has been established.
-- **Apply only `safe_auto -> review-fixer` findings.** Leave `gated_auto`, `manual`, `human`, and `release` work unresolved.
-- **Write a run artifact** under `.context/incubator/inc-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs.
-- **Create durable todo files only for unresolved actionable findings** whose final owner is `downstream-resolver`.
+- **Apply only `auto_apply -> review-fixer` findings.** Leave `ask_user` and informational (`human` / `release`) work unresolved.
+- **Write a run artifact** under `.context/incubator/inc-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and fyi outputs.
+- **Create durable todo files only for unresolved actionable findings** whose final owner is `human`.
 - **Never commit, push, or create a PR** from autofix mode. Parent workflows own those decisions.
 
 ### Report-only mode rules
@@ -61,19 +61,19 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 - **Skip all user questions.** Never use the platform question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini) or other interactive prompts. Infer intent conservatively if the diff metadata is thin.
 - **Require a determinable diff scope.** If headless mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed (headless mode). Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents.
-- **Apply only `safe_auto -> review-fixer` findings in a single pass.** No bounded re-review rounds. Leave `gated_auto`, `manual`, `human`, and `release` work unresolved and return them in the structured output.
+- **Apply only `auto_apply -> review-fixer` findings in a single pass.** No bounded re-review rounds. Leave `ask_user` and informational (`human` / `release`) work unresolved and return them in the structured output.
 - **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the per-agent artifact files on disk (see Detail enrichment in Stage 6).
-- **Write a run artifact** under `.context/incubator/inc-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
+- **Write a run artifact** under `.context/incubator/inc-review/<run-id>/` summarizing findings, applied fixes, and fyi outputs. Include the artifact path in the structured output.
 - **Do not create todo files.** The caller receives structured findings and routes downstream work itself.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:headless` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. When stopping, emit `Review failed (headless mode). Reason: cannot switch shared checkout. Re-invoke with base:<ref> to review the current checkout, or run from an isolated worktree.`
-- **Not safe for concurrent use on a shared checkout.** Unlike `mode:report-only`, headless mutates files (applies `safe_auto` fixes). Callers must not run headless concurrently with other mutating operations on the same checkout.
+- **Not safe for concurrent use on a shared checkout.** Unlike `mode:report-only`, headless mutates files (applies `auto_apply` fixes). Callers must not run headless concurrently with other mutating operations on the same checkout.
 - **Never commit, push, or create a PR** from headless mode. The caller owns those decisions.
 - **End with "Review complete" as the terminal signal** so callers can detect completion. If all reviewers fail or time out, emit `Code review degraded (headless mode). Reason: 0 of N reviewers returned results.` followed by "Review complete".
 
 ### Interactive mode rules
 
-- **Pre-load the platform question tool before any question fires.** In Claude Code, `AskUserQuestion` is a deferred tool — its schema is not available at session start. At the start of Interactive-mode work (before Stage 2 intent-ambiguity questions, the After-Review routing question, walk-through per-finding questions, bulk-preview Proceed/Cancel, and tracker-defer failure sub-questions), call `ToolSearch` with query `select:AskUserQuestion` to load the schema. Load it **once, eagerly, at the top of the Interactive flow** — do not wait for the first question site and do not decide it on a per-site basis. On Codex (`request_user_input`) and Gemini (`ask_user`) this step is not required; the tools are loaded by default.
-- **The numbered-list fallback only applies on confirmed load failure.** The skill's fallback pattern — "present the options as a numbered list and wait for the user's reply" — is valid **only** when `ToolSearch` returns no match or the tool call explicitly fails. Rendering a question as narrative text because the tool feels inconvenient, because the model is in report-formatting mode, or because the instruction was buried in a long skill is a bug. A question that calls for a user decision must either fire the tool or fail loudly.
+- **No blocking questions, ever.** Interactive mode never uses `AskUserQuestion` / `request_user_input` / `ask_user` or any other blocking prompt. It applies `auto_apply` fixes, presents the report (auto-applied fixes, then informational, with the `ask_user` findings for the user to act on placed just above the verdict), and stops. There is no routing question, no per-finding walk-through, and no ticket-filing. The report *is* the interaction.
+- **Infer, don't ask.** When intent, scope, or plan is ambiguous, infer conservatively from explicit tokens, git state, PR metadata, and conversation, and note the uncertainty in Coverage or the verdict — never stop to ask.
 
 ## Severity Scale
 
@@ -88,20 +88,19 @@ All reviewers use P0-P3:
 
 ## Action Routing
 
-Severity answers **urgency**. Routing answers **who acts next** and **whether this skill may mutate the checkout**.
+Severity answers **urgency**. Routing answers **who acts next**. There are exactly three buckets:
 
 | `autofix_class` | Default owner | Meaning |
 |-----------------|---------------|---------|
-| `safe_auto` | `review-fixer` | Local, deterministic fix suitable for the in-skill fixer when the current mode allows mutation |
-| `gated_auto` | `downstream-resolver` or `human` | Concrete fix exists, but it changes behavior, contracts, permissions, or another sensitive boundary that should not be auto-applied by default |
-| `manual` | `downstream-resolver` or `human` | Actionable work that should be handed off rather than fixed in-skill |
-| `advisory` | `human` or `release` | Report-only output such as learnings, rollout notes, or residual risk |
+| `auto_apply` | `review-fixer` | Local, deterministic fix safe to apply automatically — correctness, error handling, security, performance, mechanical code quality, with no question about the author's intent. Applied (in mutating modes) and reported. |
+| `ask_user` | `human` | A concrete issue the user should review: it changes behavior, contracts, permissions, product decisions, or otherwise touches the author's deliberate intent. Presented in "Needs your call" and left for the user — never auto-applied. Use this for anything that previously would have been "needs input" *or* "defer". |
+| `fyi` | `human` or `release` | Informational only — learnings, rollout notes, residual risk, acknowledged tradeoffs. No action required. |
 
 Routing rules:
 
 - **Synthesis owns the final route.** Persona-provided routing metadata is input, not the last word.
-- **Choose the more conservative route on disagreement.** A merged finding may move from `safe_auto` to `gated_auto` or `manual`, but never the other way without stronger evidence.
-- **Only `safe_auto -> review-fixer` enters the in-skill fixer queue automatically.**
+- **Choose the more conservative route on disagreement.** A merged finding may move from `auto_apply` to `ask_user`, but never the other way without stronger evidence.
+- **Only `auto_apply -> review-fixer` enters the in-skill fixer queue automatically.** `ask_user` is presented, never auto-applied; `fyi` is informational.
 - **`requires_verification: true` means a fix is not complete without targeted tests, a focused re-review, or operational validation.**
 
 ## Reviewers
@@ -319,10 +318,7 @@ with a flat-rate computation. Must not regress edge cases in tax-exempt handling
 
 Pass this to every reviewer in their spawn prompt. Intent shapes *how hard each reviewer looks*, not which reviewers are selected.
 
-**When intent is ambiguous:**
-
-- **Interactive mode:** Ask one question using the platform's interactive question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini): "What is the primary goal of these changes?" Do not spawn reviewers until intent is established. **Claude Code only:** if `AskUserQuestion` has not yet been loaded this session (per the Interactive mode rules pre-load), call `ToolSearch` with query `select:AskUserQuestion` first before asking. On Codex (`request_user_input`) and Gemini (`ask_user`) this preload step does not apply — the platform-native question tool is loaded by default.
-- **Autofix/report-only/headless modes:** Infer intent conservatively from the branch name, diff, PR metadata, and caller context. Note the uncertainty in Coverage or Verdict reasoning instead of blocking.
+**When intent is ambiguous:** In every mode, infer intent conservatively from the branch name, commits, diff, PR metadata, `plan:`, and conversation context. Note the uncertainty in Coverage or the Verdict reasoning instead of blocking. Never stop to ask a clarifying question — the skill has no blocking prompts.
 
 ### Stage 2b: Plan discovery (requirements verification)
 
@@ -434,9 +430,9 @@ Each persona sub-agent writes full JSON (all schema fields) to `.context/incubat
       "severity": "P0",
       "file": "orders_controller.rb",
       "line": 42,
-      "confidence": 0.92,
-      "autofix_class": "gated_auto",
-      "owner": "downstream-resolver",
+      "confidence": 100,
+      "autofix_class": "ask_user",
+      "owner": "human",
       "requires_verification": true,
       "pre_existing": false,
       "suggested_fix": "Add current_user.owns?(account) guard before lookup"
@@ -462,54 +458,58 @@ Convert multiple reviewer compact JSON returns into one deduplicated, confidence
    - **Per-finding required:** title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing
    - **Value constraints:**
      - severity: P0 | P1 | P2 | P3
-     - autofix_class: safe_auto | gated_auto | manual | advisory
-     - owner: review-fixer | downstream-resolver | human | release
-     - confidence: numeric, 0.0-1.0
+     - autofix_class: auto_apply | ask_user | fyi
+     - owner: review-fixer | human | release
+     - confidence: integer anchor in {0, 25, 50, 75, 100}
      - line: positive integer
      - pre_existing, requires_verification: boolean
    - Do not validate against the full schema here -- the full schema (including why_it_matters and evidence) applies to the artifact files on disk, not the compact returns.
-2. **Confidence gate.** Suppress findings below 0.60 confidence. Exception: P0 findings at 0.50+ confidence survive the gate -- critical-but-uncertain issues must not be silently dropped. Record the suppressed count. This matches the persona instructions and the schema's confidence thresholds.
-3. **Deduplicate.** Compute fingerprint: `normalize(file) + line_bucket(line, +/-3) + normalize(title)`. When fingerprints match, merge: keep highest severity, keep highest confidence, note which reviewers flagged it.
-4. **Cross-reviewer agreement.** When 2+ independent reviewers flag the same issue (same fingerprint), boost the merged confidence by 0.10 (capped at 1.0). Cross-reviewer agreement is strong signal -- independent reviewers converging on the same issue is more reliable than any single reviewer's confidence. Note the agreement in the Reviewer column of the output (e.g., "security, correctness").
+2. **Deduplicate.** Compute fingerprint: `normalize(file) + line_bucket(line, +/-3) + normalize(title)`. When fingerprints match, merge: keep highest severity, keep highest anchor, note which reviewers flagged it. Dedup runs over the full validated set (including anchor 50) so step 3 can promote corroborated findings before the gate in step 4 drops anything.
+3. **Cross-reviewer agreement.** When 2+ independent reviewers flag the same issue (same fingerprint), promote the merged finding by one anchor step: `50 -> 75`, `75 -> 100`, `100 -> 100`. Independent reviewers converging on the same issue is stronger signal than any single reviewer's anchor. Note the agreement in the Reviewer column of the output (e.g., "security, correctness").
+4. **Confidence gate.** After dedup and promotion have shaped the set, suppress findings below anchor 75. Exception: P0 findings at anchor 50+ survive the gate -- critical-but-uncertain issues must not be silently dropped. The gate runs late deliberately: an anchor-50 finding needs the chance to be promoted by step 3 (cross-reviewer corroboration) before any drop decision. Suppression is silent: a suppressed finding is one the reviewer wasn't confident is real, which is different from a real-but-no-action finding — do not surface suppressed findings, and do not report a suppressed count, anywhere in the user-facing report. The full set lives in the on-disk artifact for debugging.
 5. **Separate pre-existing.** Pull out findings with `pre_existing: true` into a separate list.
 6. **Resolve disagreements.** When reviewers flag the same code region but disagree on severity, autofix_class, or owner, annotate the Reviewer column with the disagreement (e.g., "security (P0), correctness (P1) -- kept P0"). This transparency helps the user understand why a finding was routed the way it was.
-7. **Normalize routing.** For each merged finding, set the final `autofix_class`, `owner`, and `requires_verification`. If reviewers disagree, keep the most conservative route. Synthesis may narrow a finding from `safe_auto` to `gated_auto` or `manual`, but must not widen it without new evidence.
-7b. **Tie-break the recommended action.** Interactive mode's walk-through and LFG paths present a per-finding recommended action (Apply / Defer / Skip / Acknowledge) derived from the normalized `autofix_class` and `suggested_fix`. When contributing reviewers implied different actions for the same merged finding, synthesis picks the most conservative using the order `Skip > Defer > Apply > Acknowledge`. This guarantees that identical review artifacts produce the same recommendation deterministically, so LFG results are auditable after the fact and the walk-through's recommendation is stable across re-runs. The user may still override per finding via the walk-through's options; this rule only determines what gets labeled "recommended."
+7. **Normalize routing.** For each merged finding, set the final `autofix_class`, `owner`, and `requires_verification`. If reviewers disagree, keep the most conservative route. Synthesis may narrow a finding from `auto_apply` to `ask_user`, but must not widen it without new evidence.
 8. **Partition the work.** Build three sets:
-   - in-skill fixer queue: only `safe_auto -> review-fixer`
-   - residual actionable queue: unresolved `gated_auto` or `manual` findings whose owner is `downstream-resolver`
-   - report-only queue: `advisory` findings plus anything owned by `human` or `release`
-9. **Sort.** Order by severity (P0 first) -> confidence (descending) -> file path -> line number.
+   - fixer queue: `auto_apply -> review-fixer` (applied automatically in mutating modes)
+   - your-call set: `ask_user` findings (owner `human`) — presented, never auto-applied
+   - informational set: `fyi` findings plus anything owned by `human` or `release`
+9. **Sort.** Order by severity (P0 first) -> anchor (descending) -> file path -> line number.
 10. **Collect coverage data.** Union residual_risks and testing_gaps across reviewers.
 11. **Preserve CE agent artifacts.** Keep the learnings, agent-native, schema-drift, and deployment-verification outputs alongside the merged finding set. Do not drop unstructured agent output just because it does not match the persona JSON schema.
 
 ### Stage 6: Synthesize and present
 
-Assemble the final report using **pipe-delimited markdown tables for findings** from the review output template included below. The table format is mandatory for finding rows in interactive mode — do not render findings as freeform text blocks or horizontal-rule-separated prose. Other report sections (Applied Fixes, Learnings, Coverage, etc.) use bullet lists and the `---` separator before the verdict, as shown in the template.
+**Lead with the decision, not the metadata.** The first sentence must tell the reader the risk level, how many findings need their input, and what was handled for them. The provenance the merge produced — per-finding confidence scores, which personas flagged each issue, the raw `autofix_class -> owner` route string — is internal bookkeeping. It stays in the on-disk artifact (the Stage 4 per-agent JSON and the Stage 5 synthesized set), **off the terminal surface.** Surface the route as human framing ("needs your call", "auto-applied", "informational"), never as the raw token or a confidence number.
 
-1. **Header.** Scope, intent, mode, reviewer team with per-conditional justifications.
-2. **Findings.** Rendered as pipe-delimited tables grouped by severity (`### P0 -- Critical`, `### P1 -- High`, `### P2 -- Moderate`, `### P3 -- Low`). Each finding row shows `#`, file, issue, reviewer(s), confidence, and synthesized route. Omit empty severity levels. Never render findings as freeform text blocks or numbered lists.
-3. **Requirements Completeness.** Include only when a plan was found in Stage 2b. For each requirement (R1, R2, etc.) and implementation unit in the plan, report whether corresponding work appears in the diff. Use a simple checklist: met / not addressed / partially addressed. Routing depends on `plan_source`:
-   - **`explicit`** (caller-provided or PR body): Flag unaddressed requirements as P1 findings with `autofix_class: manual`, `owner: downstream-resolver`. These enter the residual actionable queue and can become todos.
-   - **`inferred`** (auto-discovered): Flag unaddressed requirements as P3 findings with `autofix_class: advisory`, `owner: human`. These stay in the report only — no todos, no autonomous follow-up. An inferred plan match is a hint, not a contract.
+**Default to prose.** A finding is an argument the reader has to evaluate — it needs a sentence or two of explanation, not a cell in a narrow table that wraps into mush in a terminal. Render findings as explained prose. Use a compact table **only** for a low-severity long tail, and only past the volume threshold in step 4.
+
+This format governs the interactive report. `mode:headless` uses its own structured envelope (see below) and is unaffected.
+
+1. **Situation summary (the lead).** One or two sentences: the risk level, the count of findings needing the user's decision, and what was auto-applied or is purely informational. When something is the user's call, say so plainly and say you are stopping there rather than deciding it for them. Example: *"Review complete. Risk: low. Two findings are informational; one needs your call — it's a product decision that's yours to make, so I'm stopping there rather than deciding for you."*
+2. **Context (compact).** A few lines, not a wall: scope (files/lines), the 2-3 line intent summary, and the reviewer team with per-conditional justifications. Orienting info only — keep it short.
+3. **✅ Auto-applied.** Include only if a fix phase ran this invocation. A brief bullet list — one line per fix.
+4. **ℹ️ Informational (demoted, shown for context).** The `fyi` findings and anything the user chose not to act on, rendered as a short bullet list with a one-line explanation each. **Long-tail table exception:** when the report carries more than ~8 findings total, render this informational tail (plus any P2/P3 the user is not being asked to decide) as a single compact `| # | File | Issue |` table so it stays scannable. The needs-your-call section in step 12 stays prose regardless of count.
+5. **📋 Requirements Completeness.** Include only when a plan was found in Stage 2b. For each requirement (R1, R2, etc.) and implementation unit in the plan, report whether corresponding work appears in the diff. Use a simple checklist: met / not addressed / partially addressed. Routing depends on `plan_source`:
+   - **`explicit`** (caller-provided or PR body): Flag unaddressed requirements as P1 findings with `autofix_class: ask_user`, `owner: human`. These appear in "Needs your call".
+   - **`inferred`** (auto-discovered): Flag unaddressed requirements as P3 findings with `autofix_class: fyi`, `owner: human`. These stay in the report only — no todos, no autonomous follow-up. An inferred plan match is a hint, not a contract.
    Omit this section entirely when no plan was found — do not mention the absence of a plan.
-4. **Applied Fixes.** Include only if a fix phase ran in this invocation.
-5. **Residual Actionable Work.** Include when unresolved actionable findings were handed off or should be handed off.
-6. **Pre-existing.** Separate section, does not count toward verdict.
-7. **Learnings & Past Solutions.** Surface inc-learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
-8. **Agent-Native Gaps.** Surface inc-agent-native-reviewer results. Omit section if no gaps found.
-9. **Schema Drift Check.** If inc-schema-drift-detector ran, summarize whether drift was found. If drift exists, list the unrelated schema objects and the required cleanup command. If clean, say so briefly.
-10. **Deployment Notes.** If inc-deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, and any intent uncertainty carried by non-interactive modes.
-12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
+6. **🗂️ Pre-existing.** Separate section, does not count toward verdict. A short bullet list — `file:line` and a one-line description each.
+7. **📚 Learnings & Past Solutions.** Surface inc-learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
+8. **🤖 Agent-Native Gaps.** Surface inc-agent-native-reviewer results. Omit section if no gaps found.
+9. **🧬 Schema Drift Check.** If inc-schema-drift-detector ran, summarize whether drift was found. If drift exists, list the unrelated schema objects and the required cleanup command. If clean, say so briefly.
+10. **🚀 Deployment Notes.** If inc-deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
+11. **🧪 Coverage.** Residual risks, testing gaps, failed/timed-out reviewers, and any intent uncertainty carried by non-interactive modes. Do not include a suppressed-findings count — suppression is silent.
+12. **⚠️ Needs your call (just above the verdict).** The `ask_user` findings — the only items that require the user. In severity order, render each as prose: a short plain-English heading, the `file:line`, a paragraph on what's wrong and why it matters, and a one-line proposed direction. No confidence numbers, no reviewer names, no route tokens. Add a plain-language "In short:" restatement when the explanation runs long. If there are none, say so in one line. Do not ask the user what to do with these — present them and stop; acting on them is theirs.
+13. **🏁 Verdict.** Ready to merge / Ready with fixes / Not ready, in a blockquote. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
 
 Do not include time estimates.
 
-**Format verification:** Before delivering the report, verify the findings sections use pipe-delimited table rows (`| # | File | Issue | ... |`) not freeform text. If you catch yourself rendering findings as prose blocks separated by horizontal rules or bullet points, stop and reformat into tables.
+**Format check:** Before delivering, verify the report leads with the situation summary and presents the needs-your-call findings — placed just above the verdict — as explained prose, not as a table. Confidence scores, reviewer names, and raw route tokens must not appear on the terminal surface; they live in the artifact. A compact table is allowed only for the informational long tail past the volume threshold.
 
 ### Headless output format
 
-In `mode:headless`, replace the interactive pipe-delimited table report with a structured text envelope. The envelope follows the same structural pattern as document-review's headless output (completion header, metadata block, findings grouped by autofix_class, trailing sections) while using inc-review's own section headings and per-finding fields.
+In `mode:headless`, replace the interactive report with a structured text envelope. The envelope follows the same structural pattern as document-review's headless output (completion header, metadata block, findings grouped by autofix_class, trailing sections) while using inc-review's own section headings and per-finding fields.
 
 ```
 Code review complete (headless mode).
@@ -520,29 +520,23 @@ Reviewers: <reviewer-list with conditional justifications>
 Verdict: <Ready to merge | Ready with fixes | Not ready>
 Artifact: .context/incubator/inc-review/<run-id>/
 
-Applied N safe_auto fixes.
+Applied N auto_apply fixes.
 
-Gated-auto findings (concrete fix, changes behavior/contracts):
+Needs-your-call findings (ask_user -- the user should review; never auto-applied):
 
-[P1][gated_auto -> downstream-resolver][needs-verification] File: <file:line> -- <title> (<reviewer>, confidence <N>)
+[P1][ask_user -> human][needs-verification] File: <file:line> -- <title> (<reviewer>, confidence <N>)
   Why: <why_it_matters>
   Suggested fix: <suggested_fix or "none">
   Evidence: <evidence[0]>
   Evidence: <evidence[1]>
 
-Manual findings (actionable, needs handoff):
+FYI findings (informational -- no action required):
 
-[P1][manual -> downstream-resolver] File: <file:line> -- <title> (<reviewer>, confidence <N>)
-  Why: <why_it_matters>
-  Evidence: <evidence[0]>
-
-Advisory findings (report-only):
-
-[P2][advisory -> human] File: <file:line> -- <title> (<reviewer>, confidence <N>)
+[P2][fyi -> human] File: <file:line> -- <title> (<reviewer>, confidence <N>)
   Why: <why_it_matters>
 
 Pre-existing issues:
-[P2][gated_auto -> downstream-resolver] File: <file:line> -- <title> (<reviewer>, confidence <N>)
+[P2][ask_user -> human] File: <file:line> -- <title> (<reviewer>, confidence <N>)
   Why: <why_it_matters>
 
 Residual risks:
@@ -564,7 +558,7 @@ Testing gaps:
 - <gap>
 
 Coverage:
-- Suppressed: <N> findings below 0.60 confidence (P0 at 0.50+ retained)
+- Suppressed: <N> findings below anchor 75 (P0 at anchor 50+ retained)
 - Untracked files excluded: <file1>, <file2>
 - Failed reviewers: <reviewer>
 
@@ -580,7 +574,7 @@ Review complete
 **Formatting rules:**
 - The `[needs-verification]` marker appears only on findings where `requires_verification: true`.
 - The `Artifact:` line gives callers the path to the full run artifact for machine-readable access to the complete findings schema. The text envelope is the primary handoff; the artifact is for debugging and full-fidelity access.
-- Findings with `owner: release` appear in the Advisory section (they are operational/rollout items, not code fixes).
+- Findings with `owner: release` appear in the FYI section (they are operational/rollout items, not code fixes).
 - Findings with `pre_existing: true` appear in the Pre-existing section regardless of autofix_class.
 - The Verdict appears in the metadata header (deliberately reordered from the interactive format where it appears at the bottom) so programmatic callers get the verdict first.
 - Omit any section with zero items.
@@ -606,86 +600,42 @@ Do not spawn them mechanically from file extensions alone. The trigger is meanin
 
 ## After Review
 
-### Mode-Driven Post-Review Flow
+**There are no routing questions, walk-throughs, or ticket-filing prompts.** The report is the interaction: `auto_apply` fixes are applied and reported, `ask_user` findings are presented for you to act on, and everything else is informational. Modes differ only in how much they mutate and how they serialize output — none of them stops to ask.
 
-After presenting findings and verdict (Stage 6), route the next steps by mode. Review and synthesis stay the same in every mode; only mutation and handoff behavior changes.
+### Step 1: Build the action sets
 
-#### Step 1: Build the action sets
+- **Clean review** = zero findings after suppression and pre-existing separation. Skip the fix step when clean.
+- **Fixer queue:** `auto_apply -> review-fixer` findings.
+- **Your-call set:** `ask_user` findings (owner `human`). Presented in the "Needs your call" section; never auto-applied, never auto-ticketed.
+- **Informational set:** `fyi` findings plus anything owned by `human` or `release`.
+- **Never convert informational outputs into fix work or todos.** Deployment notes, residual risks, and release-owned items stay in the report.
 
-- **Clean review** means zero findings after suppression and pre-existing separation. Skip the fix/handoff phase when the review is clean.
-- **Fixer queue:** final findings routed to `safe_auto -> review-fixer`.
-- **Residual actionable queue:** unresolved `gated_auto` or `manual` findings whose final owner is `downstream-resolver`.
-- **Report-only queue:** `advisory` findings and any outputs owned by `human` or `release`.
-- **Never convert advisory-only outputs into fix work or todos.** Deployment notes, residual risks, and release-owned items stay in the report.
+### Step 2: Apply auto_apply fixes
 
-#### Step 2: Choose policy by mode
+Runs in default (interactive), autofix, and headless modes. **Report-only mode skips this step** — no fixer queue, no mutation.
 
-**Interactive mode**
+- Apply the `auto_apply -> review-fixer` queue automatically, no question — these are safe by definition.
+- Spawn exactly one fixer subagent for the queue in the current checkout; it applies all changes and runs the relevant targeted tests in one pass against a consistent tree. Do not fan out multiple fixers against the same checkout (parallel fixers need isolated worktrees/branches and deliberate mergeback).
+- **Verify, then keep.** Run the affected tests/lint. If a fix fails verification, revert that one fix and report it as an unresolved `ask_user` finding instead — never leave the tree red. `requires_verification: true` means the work isn't done until the targeted verification runs.
+- **Re-review** the changed scope after fixes land, bounded by `max_rounds: 2`. If issues remain after the second round, stop and report them as unresolved. **Headless applies in a single pass — no re-review loop.**
+- Do not start a mutating fix round concurrently with browser testing on the same checkout. An orchestrator that wants both runs `mode:report-only` during the parallel phase or isolates the mutating review in its own checkout/worktree.
 
-- Apply `safe_auto -> review-fixer` findings automatically without asking. These are safe by definition.
-- **Zero-remaining case:** if no `gated_auto` or `manual` findings remain after the `safe_auto` pass, skip the routing question entirely. Emit a one-line completion summary phrased so advisory and pre-existing findings (which are not handled by this flow) are not implied to be cleared. When no advisory or pre-existing findings remain in the report, `All findings resolved — N safe_auto fixes applied.` is accurate. When advisory and/or pre-existing findings do remain, use the qualified form `All actionable findings resolved — N safe_auto fixes applied. (K advisory, J pre-existing findings remain in the report.)`, omitting any zero-count clause. Follow the summary with the existing end-of-review verdict, then proceed to Step 5 per the gating rule there.
-- **Tracker pre-detection:** before rendering the routing question, consult `references/tracker-defer.md` for the session's tracker tuple `{ tracker_name, confidence, named_sink_available, any_sink_available }`. The probe runs at most once per session and is cached for the rest of the run. `named_sink_available` drives the option C label (inline tracker name only when the named sink can actually be invoked). `any_sink_available` drives whether option C is offered at all (it can still be offered when the named tracker is unreachable but `gh` or the harness task primitive works).
-- **Verify question-tool pre-load (checklist, Claude Code only).** Before firing the routing question in Claude Code, confirm `AskUserQuestion` is loaded (per Interactive mode rules at the top of this skill). If not yet loaded this session, call `ToolSearch` with query `select:AskUserQuestion` now. Do not proceed to the routing question without this verification. Rendering the question as narrative text is a bug, not a valid fallback. On Codex (`request_user_input`) and Gemini (`ask_user`) this checklist does not apply — the platform-native question tool is loaded by default and there is no `ToolSearch` preload step to perform.
-- **Routing question.** Ask using the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). Stem: `What should the agent do with the remaining N findings?` — use third-person voice referring to "the agent", not first-person "me" / "I". Options:
+### Step 3: Present and stop
 
-  ```
-  (A) Review each finding one by one — accept the recommendation or choose another action
-  (B) LFG. Apply the agent's best-judgment action per finding
-  (C) File a [TRACKER] ticket per finding without applying fixes
-  (D) Report only — take no further action
-  ```
+- **Default (interactive):** present the Stage 6 report — situation summary, the "Needs your call" (`ask_user`) findings as prose, the auto-applied fixes, then informational. Then **stop.** Do not ask what to do next, do not walk through findings, do not file tickets. The `ask_user` findings are yours to act on; the applied fixes are in your working tree to review and commit; push and PRs are yours to run when ready.
+- **Autofix:** apply `auto_apply` only; leave `ask_user` and informational unresolved; write todos for the `ask_user` set (Step 4).
+- **Report-only:** stop after Stage 6 — nothing mutated, no todos, no artifacts.
+- **Headless:** emit the structured envelope (Stage 6), write the run artifact, no todos, then stop after "Review complete". No commit/push/PR.
 
-  Render option C per `references/tracker-defer.md`: when `confidence = high` AND `named_sink_available = true`, replace `[TRACKER]` with the concrete name and keep the full label (e.g., `File a Linear ticket per finding without applying fixes`). When `any_sink_available = true` but either `confidence = low` or `named_sink_available = false` (a fallback tier like GitHub Issues or the harness task primitive is working instead), use the generic label `File an issue per finding without applying fixes` — this is a whole-label substitution, not a `[TRACKER]` token swap. When `any_sink_available = false`, **omit option C entirely** and add one line to the stem explaining why (e.g., `Defer unavailable — no tracker or task-tracking primitive detected on this platform.`). The three remaining options (A, B, D) survive.
+**Never push, open a PR, or commit on the user's behalf from this skill** — push is the outward step the user owns. Applied `auto_apply` fixes land in the working tree for the user to review and commit.
 
-  The numbered-list text fallback applies only when `ToolSearch` explicitly returns no match for the platform's question tool or the tool call errors. It does not apply when the agent simply hasn't loaded the tool yet — in that case, load it now (see the verification checklist above). On platforms genuinely without a blocking question tool, present the applicable options as a numbered list and wait for the user's reply.
-
-- **Dispatch on selection.** Route by the option letter (A / B / C / D), not by the rendered label string. The option-C label varies by tracker-detection confidence (`File a [TRACKER] ticket per finding without applying fixes` for a named tracker, `File an issue per finding without applying fixes` as the generic fallback, or omitted entirely when no sink is available — see `references/tracker-defer.md`), and options A / B / D have a single canonical label each. The letter is the stable dispatch signal; the canonical labels below are shown for documentation only. A low-confidence run that rendered option C as the generic label routes to the same branch as a high-confidence run that rendered it with the named tracker.
-  - (A) `Review each finding one by one` — load `references/walkthrough.md` and enter the per-finding walk-through loop. The walk-through accumulates Apply decisions in memory; Defer decisions execute inline via `references/tracker-defer.md`; Skip / Acknowledge decisions are recorded as no-action; `LFG the rest` routes through `references/bulk-preview.md`. At end of the loop, dispatch one fixer subagent for the accumulated Apply set (Step 3). Emit the unified completion report.
-  - (B) `LFG. Apply the agent's best-judgment action per finding` — load `references/bulk-preview.md` scoped to every pending `gated_auto` / `manual` finding. On `Proceed`, execute the plan: Apply set → Step 3 fixer dispatch; Defer set → `references/tracker-defer.md`; Skip / Acknowledge → no-op. On `Cancel`, return to this routing question. Emit the unified completion report after execution.
-  - (C) `File a [TRACKER] ticket per finding without applying fixes` (or the generic `File an issue per finding without applying fixes` when the named-tracker label is not used) — load `references/bulk-preview.md` with every pending finding in the file-tickets bucket (regardless of the agent's natural recommendation). On `Proceed`, route every finding through `references/tracker-defer.md`; no fixes are applied. On `Cancel`, return to this routing question. Emit the unified completion report.
-  - (D) `Report only — take no further action` — do not enter any dispatch phase. Emit the completion report, then proceed to Step 5 per its gating rule (`fixes_applied_count > 0` from earlier `safe_auto` passes). If no fixes were applied this run, stop after the report.
-
-- The walk-through's completion report, the LFG / File-tickets completion report, and the zero-remaining completion summary all follow the unified completion-report structure documented in `references/walkthrough.md`. Use the same structure across every terminal path.
-
-**Autofix mode**
-
-- Ask no questions.
-- Apply only the `safe_auto -> review-fixer` queue.
-- Leave `gated_auto`, `manual`, `human`, and `release` items unresolved.
-- Prepare residual work only for unresolved actionable findings whose final owner is `downstream-resolver`.
-
-**Report-only mode**
-
-- Ask no questions.
-- Do not build a fixer queue.
-- Do not create residual todos or `.context` artifacts.
-- Stop after Stage 6. Everything remains in the report.
-
-**Headless mode**
-
-- Ask no questions.
-- Apply only the `safe_auto -> review-fixer` queue in a single pass. Do not enter the bounded re-review loop (Step 3). Spawn one fixer subagent, apply fixes, then proceed directly to Step 4.
-- Leave `gated_auto`, `manual`, `human`, and `release` items unresolved — they appear in the structured text output.
-- Output the headless output envelope (see Stage 6) instead of the interactive report.
-- Write a run artifact (Step 4) but do not create todo files.
-- Stop after the structured text output and "Review complete" signal. No commit/push/PR.
-
-#### Step 3: Apply fixes with one fixer and bounded rounds
-
-- Spawn exactly one fixer subagent for the current fixer queue in the current checkout. That fixer applies all approved changes and runs the relevant targeted tests in one pass against a consistent tree.
-- Do not fan out multiple fixers against the same checkout. Parallel fixers require isolated worktrees/branches and deliberate mergeback.
-- Re-review only the changed scope after fixes land.
-- Bound the loop with `max_rounds: 2`. If issues remain after the second round, stop and hand them off as residual work or report them as unresolved.
-- If any applied finding has `requires_verification: true`, the round is incomplete until the targeted verification runs.
-- Do not start a mutating review round concurrently with browser testing on the same checkout. Future orchestrators that want both must either run `mode:report-only` during the parallel phase or isolate the mutating review in its own checkout/worktree.
-
-#### Step 4: Emit artifacts and downstream handoff
+### Step 4: Emit artifacts and downstream handoff
 
 - In interactive, autofix, and headless modes, write a per-run artifact under `.context/incubator/inc-review/<run-id>/` containing:
-  - synthesized findings (merged output from Stage 5)
+  - synthesized findings (merged output from Stage 5) — written as `findings.json`, a JSON array where each object carries at least `autofix_class`, `severity`, `file`, `line`, `title` (plus `why_it_matters` and optional `suggested_fix`). This is the gate signal downstream skills (e.g. `inc:review-and-pr`) read to count `ask_user` findings — the filename is load-bearing, not freeform.
   - applied fixes
-  - residual actionable work
-  - advisory-only outputs
+  - the `ask_user` (your-call) set
+  - informational outputs
   Per-agent full-detail JSON files (`{reviewer_name}.json`) are already present in this directory from Stage 4 dispatch.
 - Also write `metadata.json` alongside the findings so downstream skills can verify the artifact matches the current branch and HEAD. Minimum fields:
   ```json
@@ -698,41 +648,9 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
   }
   ```
   Capture `branch` and `head_sha` at dispatch time (before any autofixes land), and write the file after the verdict is finalized. This file is additive -- pre-existing artifacts that predate this field are still valid, and downstream skills fall back to file mtime when it is missing.
-- In autofix mode, create durable todo files only for unresolved actionable findings whose final owner is `downstream-resolver`. Each todo should map the finding's severity to the todo priority (`P0`/`P1` -> `p1`, `P2` -> `p2`, `P3` -> `p3`) and set `status: ready` since these findings have already been triaged by synthesis.
-- Do not create todos for `advisory` findings, `owner: human`, `owner: release`, or protected-artifact cleanup suggestions.
-- If only advisory outputs remain, create no todos.
-- Interactive mode may offer to externalize residual actionable work after fixes, but it is not required to finish the review.
-
-#### Step 5: Final next steps
-
-**Interactive mode only.** After the fix-review cycle completes (clean verdict or the user chose to stop), offer next steps based on the entry mode. Reuse the resolved review base/default branch from Stage 1 when known; do not hard-code only `main`/`master`.
-
-**The gate is total fixes applied this run, not routing option.** Track `fixes_applied_count` across the whole Interactive invocation. This counter includes both the `safe_auto` fixes applied automatically before the routing question (see Step 2 Interactive mode) AND any Apply decisions executed by routing option A (walk-through) or option B (LFG). Routing options C (File tickets) and D (Report only) add zero to this counter; neither does a walk-through that ends with only Skip / Defer / Acknowledge, and neither does an LFG whose recommendations were all Defer / Skip / Acknowledge.
-
-Step 5 runs only when `fixes_applied_count > 0`. If the counter is zero — no `safe_auto` fixes were applied AND the routing path produced no additional Apply — skip Step 5 entirely and exit after the completion report. Asking "push fixes?" when nothing changed in the working tree is incoherent.
-
-Common outcomes:
-
-- `safe_auto` produced fixes AND the user picked any routing option → Step 5 runs (counter > 0 from the safe_auto pass alone).
-- No `safe_auto` fixes AND the user picked option C or D → Step 5 skipped.
-- No `safe_auto` fixes AND walk-through / LFG finished with zero Applies → Step 5 skipped.
-- Zero-remaining case (no `gated_auto` / `manual` after `safe_auto`) with at least one `safe_auto` fix → Step 5 runs; the routing question was never asked but the counter is > 0.
-
-- **PR mode (entered via PR number/URL):**
-  - **Push fixes** -- push commits to the existing PR branch
-  - **Exit** -- done for now
-- **Branch mode (feature branch with no PR, and not the resolved review base/default branch):**
-  - **Create a PR (Recommended)** -- push and open a pull request
-  - **Continue without PR** -- stay on the branch
-  - **Exit** -- done for now
-- **On the resolved review base/default branch:**
-  - **Continue** -- proceed with next steps
-  - **Exit** -- done for now
-
-If "Create a PR": first publish the branch with `git push --set-upstream origin HEAD`, then use `gh pr create` with a title and summary derived from the branch changes.
-If "Push fixes": push the branch with `git push` to update the existing PR.
-
-**Autofix, report-only, and headless modes:** stop after the report, artifact emission, and residual-work handoff. Do not commit, push, or create a PR.
+- In autofix mode, create durable todo files only for `ask_user` findings whose owner is `human`. Map the finding's severity to the todo priority (`P0`/`P1` -> `p1`, `P2` -> `p2`, `P3` -> `p3`) and set `status: ready` since synthesis has already triaged them.
+- Do not create todos for `fyi` findings, `owner: release`, or protected-artifact cleanup suggestions.
+- If only informational outputs remain, create no todos.
 
 ## Fallback
 
