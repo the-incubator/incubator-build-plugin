@@ -48,9 +48,12 @@ function addContext(text) {
 
 async function main() {
   const payload = await readStdinJson();
-  // Prefer the dir Claude reports; fall back to env, then cwd.
-  const root =
-    payload?.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // The SessionStart payload carries the session cwd; CLAUDE_PROJECT_DIR is the
+  // harness fallback (and is required to even launch this script). Don't fall
+  // back to process.cwd() - inside a hook the cwd is the runner's, not the
+  // project root, so it could silently target the wrong package in a monorepo.
+  const root = payload?.cwd || process.env.CLAUDE_PROJECT_DIR;
+  if (!root) return;
 
   const pkgPath = path.join(root, "package.json");
   if (!existsSync(pkgPath)) return; // nothing to install for
@@ -89,10 +92,13 @@ async function main() {
   try {
     run(args);
   } catch {
+    // Without a lockfile the first command was already `npm install`; retrying
+    // the identical command would just burn another timeout, so stop here.
+    if (!hasLock) return;
     // `npm ci` is strict (fails on lockfile drift). Fall back to install so the
     // session is never blocked - but flag it, since a silent fallback would
     // hide a lockfile that's out of sync with package.json.
-    drifted = hasLock;
+    drifted = true;
     installedVia = "npm install";
     try {
       run(["install", "--no-audit", "--no-fund"]);
