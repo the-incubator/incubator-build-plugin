@@ -20,7 +20,8 @@
 // Fails open on any unexpected error — never bricks a session.
 
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { readStdinJson } from "./_util.mjs";
 
 const SKILL_NAME = "inc-commit-push-pr";
@@ -37,11 +38,14 @@ const GH_PR_CREATE_RE = /\bgh\b[^|;&\n]*?\bpr\s+create\b/;
 const GRAPHQL_CREATE_RE = /createPullRequest\b/;
 
 // References the pulls *collection* endpoint (.../pulls) — the create target.
-// Excludes sub-resources like .../pulls/123 or .../pulls/comments.
-const PULLS_COLLECTION_RE = /\/pulls(?![\w/-])/;
+// Excludes sub-resources (.../pulls/123, .../pulls/comments) via the trailing
+// [\w/-], and read forms that carry a query string, extension, or fragment
+// (.../pulls?state=open, .../pulls.json, .../pulls#x) via ? . # — those are GETs.
+const PULLS_COLLECTION_RE = /\/pulls(?![\w/?.#-])/;
 
-// Signals that an HTTP request is a write rather than a read.
-const HTTP_WRITE_RE =
+// Signals that an HTTP request is a write rather than a read. Assembled from
+// per-channel sub-patterns; `IS_WRITE_RE` owns the `i` flag for the whole set.
+const HTTP_WRITE_SOURCE =
   // explicit method
   /(?:^|\s)(?:-X|--request|--method)[=\s]+POST\b/i.source +
   "|" +
@@ -50,15 +54,20 @@ const HTTP_WRITE_RE =
   "|" +
   // curl/wget data flags default to POST
   /(?:^|\s)(?:-d|--data(?:-raw|-binary|-urlencode|-ascii)?|--post-data|--body)\b/.source;
-const IS_WRITE_RE = new RegExp(HTTP_WRITE_RE, "i");
+const IS_WRITE_RE = new RegExp(HTTP_WRITE_SOURCE, "i");
 
-function looksLikePrCreate(command) {
+export function looksLikePrCreate(command) {
   if (!command) return false;
   if (GH_PR_CREATE_RE.test(command)) return true;
   if (GRAPHQL_CREATE_RE.test(command)) return true;
   // REST create: must hit the pulls collection AND look like a write.
   if (PULLS_COLLECTION_RE.test(command) && IS_WRITE_RE.test(command)) return true;
   return false;
+}
+
+// A tool name (not a Bash command) that opens a PR directly — the MCP path.
+export function isPrCreateTool(toolName) {
+  return PR_CREATE_TOOL_RE.test(String(toolName ?? ""));
 }
 
 function deny(reason) {
@@ -113,7 +122,7 @@ async function main() {
   let triggered = false;
   if (tool === "Bash") {
     triggered = looksLikePrCreate(String(payload.tool_input?.command ?? ""));
-  } else if (PR_CREATE_TOOL_RE.test(tool)) {
+  } else if (isPrCreateTool(tool)) {
     triggered = true;
   }
   if (!triggered) return 0;
@@ -126,12 +135,25 @@ async function main() {
       `\`create_pull_request\` tools — not just the CLI shortcut. Do not route around this. ` +
       `Load the \`inc-commit-push-pr\` skill first (Skill tool, skill: "inc-commit-push-pr"); ` +
       `it extracts the business intent, writes a value-first description, and opens the PR itself. ` +
-      `If this is an intentional hotfix that should skip the normal flow, stop and ask the user to ` +
-      `confirm rather than bypassing the gate.`,
+      `There is no in-session bypass — if a PR must skip the skill (e.g. an urgent hotfix), stop and ask ` +
+      `the user to open it themselves in a terminal outside this Claude session, where this gate does not run.`,
   );
   return 0;
 }
 
-main()
-  .then((code) => process.exit(code ?? 0))
-  .catch(() => process.exit(0));
+// Run the gate only when executed directly (`node gh-pr-gate.mjs`), not when a
+// test imports the detection helpers. Fail safe: if the check throws, default to
+// running — a guardrail must never silently disable itself.
+function invokedDirectly() {
+  try {
+    return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? "");
+  } catch {
+    return true;
+  }
+}
+
+if (invokedDirectly()) {
+  main()
+    .then((code) => process.exit(code ?? 0))
+    .catch(() => process.exit(0));
+}

@@ -220,12 +220,18 @@ The Step 2 branch-identity gate should already have moved you off the default br
 
 ```bash
 CURRENT=$(git branch --show-current)
-test -n "$CURRENT" && test "$CURRENT" != "<default>" || {
+DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+test -n "$CURRENT" \
+  && test "$CURRENT" != "${DEFAULT_BRANCH:-main}" \
+  && test "$CURRENT" != "main" \
+  && test "$CURRENT" != "master" || {
   echo "ABORT: refusing to push branch '$CURRENT' (detached or default branch) — re-run Step 2 to create a feature branch." >&2
   exit 1
 }
 git push -u origin HEAD
 ```
+
+The default branch is resolved inline so this guard is self-contained and never a no-op — do not leave a `<placeholder>` in the runnable block. `main`/`master` are also rejected explicitly in case `origin/HEAD` is unset.
 
 If the guard fires, return to Step 2 to create a feature branch; do not push.
 
