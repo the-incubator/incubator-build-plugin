@@ -38,10 +38,12 @@ const GH_PR_CREATE_RE = /\bgh\b[^|;&\n]*?\bpr\s+create\b/;
 const GRAPHQL_CREATE_RE = /createPullRequest\b/;
 
 // References the pulls *collection* endpoint (.../pulls) — the create target.
-// Excludes sub-resources (.../pulls/123, .../pulls/comments) via the trailing
-// [\w/-], and read forms that carry a query string, extension, or fragment
-// (.../pulls?state=open, .../pulls.json, .../pulls#x) via ? . # — those are GETs.
-const PULLS_COLLECTION_RE = /\/pulls(?![\w/?.#-])/;
+// The trailing [\w/-] exclusion keeps sub-resources (.../pulls/123,
+// .../pulls/comments) out. Query/extension/fragment forms (.../pulls?per_page=1)
+// DO match here on purpose: a POST to /pulls?anything still creates a PR (GitHub
+// ignores unknown query params), so the read-vs-write decision is owned entirely
+// by IS_WRITE_RE, never by the URL shape. Excluding `?` here reopened a bypass.
+const PULLS_COLLECTION_RE = /\/pulls(?![\w/-])/;
 
 // Signals that an HTTP request is a write rather than a read. Assembled from
 // per-channel sub-patterns; `IS_WRITE_RE` owns the `i` flag for the whole set.

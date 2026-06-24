@@ -21,6 +21,9 @@ const BLOCK = [
   ["curl data only", "curl https://api.github.com/repos/o/r/pulls --data {x}"],
   ["graphql mutation inline", "gh api graphql -f query=mutation{createPullRequest(input:{})}"],
   ["wget post-data", "wget --post-data={} https://api.github.com/repos/o/r/pulls"],
+  // A query string on the create URL must NOT evade the gate: `gh api ... -f` is
+  // a POST, and GitHub ignores unknown query params, so this still creates a PR.
+  ["rest create with query string (bypass closed)", "gh api repos/o/r/pulls?per_page=1 -f title=x -f head=b -f base=main"],
 ];
 
 const ALLOW = [
@@ -28,8 +31,7 @@ const ALLOW = [
   ["pr view", "gh pr view 125"],
   ["pr view comments", "gh pr view 125 --comments"],
   ["rest list GET", "gh api repos/o/r/pulls"],
-  ["rest list query GET", 'gh api "repos/o/r/pulls?state=open"'],
-  ["rest list query + field (read)", "gh api repos/o/r/pulls?state=open -f per_page=100"],
+  ["rest list query GET (no write flags)", 'gh api "repos/o/r/pulls?state=open"'],
   ["pulls extension read", "gh api repos/o/r/pulls.json"],
   ["specific pr read", "gh api repos/o/r/pulls/125"],
   ["specific pr write (update, not create)", "gh api -X POST repos/o/r/pulls/125/comments -f body=hi"],
