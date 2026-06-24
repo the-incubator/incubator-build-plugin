@@ -216,9 +216,24 @@ Stream stdout/stderr through. On non-zero exit, stop and enter the self-heal loo
 
 ### Step 6: Push
 
+The Step 2 branch-identity gate should already have moved you off the default branch. Re-assert it here as a final guard — pushing commits directly to `main`/`master` bypasses the PR and is unrecoverable once it lands:
+
 ```bash
+CURRENT=$(git branch --show-current)
+DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+test -n "$CURRENT" \
+  && test "$CURRENT" != "${DEFAULT_BRANCH:-main}" \
+  && test "$CURRENT" != "main" \
+  && test "$CURRENT" != "master" || {
+  echo "ABORT: refusing to push branch '$CURRENT' (detached or default branch) — re-run Step 2 to create a feature branch." >&2
+  exit 1
+}
 git push -u origin HEAD
 ```
+
+The default branch is resolved inline so this guard is self-contained and never a no-op — do not leave a `<placeholder>` in the runnable block. `main`/`master` are also rejected explicitly in case `origin/HEAD` is unset.
+
+If the guard fires, return to Step 2 to create a feature branch; do not push.
 
 ### Step 7: Intent interview
 
