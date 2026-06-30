@@ -71,23 +71,33 @@ elif [ "$PR_BRANCH" = "$DEFAULT_BRANCH" ]; then
   echo "  REASON=on default branch ($PR_BRANCH); check out the PR's feature branch and re-run"
   PREFLIGHT_BLOCKED=1
 else
-  FRESH_OUT=$(bash "$FRESHNESS_BIN" --pr-branch "$PR_BRANCH" 2>/dev/null || true)
-  BEHIND=$(printf '%s\n' "$FRESH_OUT" | sed -n 's/^BEHIND=//p' | head -n1)
-  OVERLAP=$(printf '%s\n' "$FRESH_OUT" | sed -n 's/^OVERLAP=//p')
-  OVERLAP_COUNT=$(printf '%s' "$OVERLAP" | grep -c . || true)
-  if [ -n "$OVERLAP" ]; then
-    echo "PREFLIGHT_FRESHNESS: block_overlap"
+  FRESH_OUT=$(bash "$FRESHNESS_BIN" --pr-branch "$PR_BRANCH" 2>/dev/null); FRESH_RC=$?
+  if [ "$FRESH_RC" -ne 0 ] || ! printf '%s\n' "$FRESH_OUT" | grep -q '^BEHIND='; then
+    # The freshness helper crashed, is missing, or produced no usable output.
+    # Without this guard the `|| true` swallow left OVERLAP empty and emitted a
+    # false "ok" - letting VERDICT: GO through without ever verifying path
+    # overlap. Fail-safe: an unverifiable freshness check blocks.
+    echo "PREFLIGHT_FRESHNESS: error"
+    echo "  REASON=branch-freshness helper failed or produced no output; path overlap could not be verified"
     PREFLIGHT_BLOCKED=1
   else
-    echo "PREFLIGHT_FRESHNESS: ok"
-  fi
-  echo "  DEFAULT=$DEFAULT_BRANCH"
-  echo "  BEHIND=${BEHIND:-0}"
-  echo "  OVERLAP_COUNT=${OVERLAP_COUNT:-0}"
-  if [ -n "$OVERLAP" ]; then
-    printf '%s\n' "$OVERLAP" | while IFS= read -r f; do
-      [ -n "$f" ] && echo "  OVERLAP=$f"
-    done
+    BEHIND=$(printf '%s\n' "$FRESH_OUT" | sed -n 's/^BEHIND=//p' | head -n1)
+    OVERLAP=$(printf '%s\n' "$FRESH_OUT" | sed -n 's/^OVERLAP=//p')
+    OVERLAP_COUNT=$(printf '%s' "$OVERLAP" | grep -c . || true)
+    if [ -n "$OVERLAP" ]; then
+      echo "PREFLIGHT_FRESHNESS: block_overlap"
+      PREFLIGHT_BLOCKED=1
+    else
+      echo "PREFLIGHT_FRESHNESS: ok"
+    fi
+    echo "  DEFAULT=$DEFAULT_BRANCH"
+    echo "  BEHIND=${BEHIND:-0}"
+    echo "  OVERLAP_COUNT=${OVERLAP_COUNT:-0}"
+    if [ -n "$OVERLAP" ]; then
+      printf '%s\n' "$OVERLAP" | while IFS= read -r f; do
+        [ -n "$f" ] && echo "  OVERLAP=$f"
+      done
+    fi
   fi
 fi
 

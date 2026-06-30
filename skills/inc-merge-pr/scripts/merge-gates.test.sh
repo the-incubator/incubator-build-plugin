@@ -95,6 +95,12 @@ check "all-clear -> GO" "VERDICT: GO"
 reset_case; mkfresh 'echo "DEFAULT=main"; echo "BEHIND=1"; echo "AHEAD=1"; echo "OVERLAP=src/app.ts"'
 check "path overlap -> BLOCK" "BLOCK" ; check "path overlap reason" "preflight-overlap"
 
+# Freshness helper crash/empty output must fail-safe to BLOCK, never emit a
+# false "ok" that lets GO through without verifying path overlap.
+reset_case; mkfresh 'exit 1'
+check "freshness helper failure -> BLOCK not GO" "BLOCK" "GO"
+check "freshness helper failure -> preflight reason" "preflight"
+
 reset_case; mkenv 'echo "STATUS: warn"; echo "NEW_VARS:"; echo "  - FOO"; echo "PASTE_BLOCK:"; echo "FOO="'
 check "new env var -> BLOCK" "gate1-env"
 

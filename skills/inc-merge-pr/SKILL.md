@@ -38,7 +38,7 @@ Commit count is a noisy proxy for staleness - 50 commits on files this branch do
 - `ok` - pre-flight OK. If `BEHIND > 0` with `OVERLAP_COUNT=0`, note "`<BEHIND>` commits behind `main`, no path overlap" in the report and continue.
 - `block_default_branch` - **stop.** You're on the default branch, so there's no PR to merge. Tell the user to check out the PR's feature branch and re-run.
 - `block_overlap` - **block the merge**, regardless of `BEHIND`. List the `OVERLAP=` paths so the collision is visible. If the user is on the PR branch locally, invoke the `inc:update-code` skill via the `Skill` tool (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-5`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
-- `error` - freshness couldn't be computed (not a git repo, detached HEAD, or offline). Surface the reason and stop.
+- `error` - **freshness BLOCK (unverifiable).** Freshness couldn't be computed - not a git repo, detached HEAD, or the `branch-freshness` helper crashed / returned no usable output. The script fail-safes this to a block rather than emitting a false "ok" that could let a merge through without checking path overlap. Surface the reason and stop.
 
 **Success criteria:** No files changed on both the branch and on `main` since divergence - or the user has updated the branch and CI is re-running before re-invocation.
 
