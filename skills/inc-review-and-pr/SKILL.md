@@ -18,7 +18,7 @@ Compute the diff once against the resolved base (try PR metadata, then the remot
 git diff --stat <base>...HEAD ; git diff --name-only <base>...HEAD
 ```
 
-Default to **Tier 1 — `inc:review-3a`** (fast multi-agent pass). Escalate to **Tier 2 — `inc:review-deep-3b`** (persona fan-out + dedup) if ANY trigger holds:
+Default to **Tier 1 — `inc:review-3a`** (fast single-agent pass). Escalate to **Tier 2 — `inc:review-deep-3b`** (persona fan-out + dedup) if ANY trigger holds:
 
 1. **Sensitive surface** — the changed files touch authentication/authorization, payments/billing, data migrations or backfills, cryptography or secret handling, security-relevant config, public API or library contracts, or dependency manifests.
 2. **Large + diffuse** — ≥400 changed lines AND (>3 directories OR >2 distinct subsystems). Either alone is a soft signal; together they escalate.

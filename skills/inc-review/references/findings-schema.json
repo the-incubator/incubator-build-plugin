@@ -7,7 +7,7 @@
   "properties": {
     "reviewer": {
       "type": "string",
-      "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+      "description": "Reviewer identity that produced this output"
     },
     "findings": {
       "type": "array",
@@ -23,7 +23,6 @@
           "autofix_class",
           "owner",
           "requires_verification",
-          "confidence",
           "evidence",
           "pre_existing"
         ],
@@ -54,12 +53,12 @@
           "autofix_class": {
             "type": "string",
             "enum": ["auto_apply", "ask_user", "fyi"],
-            "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+            "description": "Reviewer's conservative recommendation for how this issue should be handled"
           },
           "owner": {
             "type": "string",
             "enum": ["review-fixer", "human", "release"],
-            "description": "Who should own the next action for this finding after synthesis"
+            "description": "Who should own the next action for this finding"
           },
           "requires_verification": {
             "type": "boolean",
@@ -68,11 +67,6 @@
           "suggested_fix": {
             "type": ["string", "null"],
             "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none."
-          },
-          "confidence": {
-            "type": "integer",
-            "description": "Reviewer confidence in this finding, as one of 5 discrete anchors with behavioral definitions (see _meta.confidence_anchors). Pick the anchor whose definition matches; do not interpolate.",
-            "enum": [0, 25, 50, 75, 100]
           },
           "evidence": {
             "type": "array",
@@ -100,14 +94,6 @@
     },
 
   "_meta": {
-    "confidence_anchors": {
-      "0": "Not a real finding / false positive. Do not report.",
-      "25": "Speculative. Weak or circumstantial evidence; likely noise. Do not report.",
-      "50": "Plausible but unverified -- real-but-uncertain. Do not report unless P0, or unless cross-reviewer corroboration promotes it to 75 during merge.",
-      "75": "Confident. Real and substantiated with concrete, code-grounded evidence. Report.",
-      "100": "Certain. Verifiable from the code/diff alone -- a definitive logic bug, a compile/type error, or a quotable standards violation with no interpretation. Report."
-    },
-    "confidence_gate": "Suppress below anchor 75. Exception: P0 at anchor 50+ survives. The gate is applied after dedup and cross-reviewer promotion, so an anchor-50 finding corroborated by a second reviewer (promoted to 75) survives.",
     "severity_definitions": {
       "P0": "Critical breakage, exploitable vulnerability, data loss/corruption. Must fix before merge.",
       "P1": "High-impact defect likely hit in normal usage, breaking contract. Should fix.",
@@ -126,7 +112,7 @@
     },
     "return_tiers": {
       "description": "Finding fields are split into two tiers. The full schema (with all required fields) applies to the artifact file on disk. The compact return to the orchestrator omits detail-tier fields. Both are valid uses of this schema in different contexts.",
-      "merge_tier": "Returned to orchestrator: title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing, suggested_fix (optional). Plus top-level reviewer, residual_risks, testing_gaps.",
+      "return_tier": "Returned to orchestrator: title, severity, file, line, autofix_class, owner, requires_verification, pre_existing, suggested_fix (optional). Plus top-level reviewer, residual_risks, testing_gaps.",
       "detail_tier": "Required in artifact file, omitted from compact return: why_it_matters, evidence. The artifact file must pass full schema validation including all required fields. Headless output depends on why_it_matters and evidence being present in the artifact."
     }
   }

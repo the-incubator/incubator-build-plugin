@@ -1,8 +1,8 @@
 # Code Review Output Template
 
-> Duplicated from inc-review-deep. Keep in sync by hand — there is no shared source.
+> Adapted from inc-review-deep and kept loosely in sync by hand. The lightweight tier intentionally omits confidence scores and reviewer/persona provenance, so those sections diverge from the deep copy on purpose.
 
-Use this shape when presenting synthesized review findings in interactive mode. **Lead with the decision; default to prose.** Findings the user must act on are explained in sentences, not crushed into table cells. Confidence scores, reviewer names, and raw `autofix_class -> owner` route tokens are internal bookkeeping — they live in the on-disk run artifact, never on the terminal surface.
+Use this shape when presenting synthesized review findings in interactive mode. **Lead with the decision; default to prose.** Findings the user must act on are explained in sentences, not crushed into table cells. Reviewer names and raw `autofix_class -> owner` route tokens are internal bookkeeping — they live in the on-disk run artifact, never on the terminal surface.
 
 `mode:headless` uses a different, machine-facing envelope (see the end of this file).
 
@@ -64,8 +64,8 @@ The needs-your-call section always stays prose. When the report carries more tha
 Do NOT do these:
 
 - **Leading with metadata.** Scope/intent/reviewer headers before the reader knows the risk level and what needs them. The situation summary comes first.
-- **Findings as table rows when there are only a few.** A `| # | File | Issue | Reviewer | Confidence | Route |` table crushes a finding's reasoning into a cell that wraps badly in a terminal. Explain it in prose.
-- **Leaking provenance onto the surface.** Confidence anchors (`100`), reviewer names (`security, correctness`), and raw route tokens (`ask_user -> human`) belong in the artifact, not the report. Surface the route as human framing: "needs your call", "auto-applied", "informational".
+- **Findings as table rows when there are only a few.** A `| # | File | Issue | Reviewer | Route |` table crushes a finding's reasoning into a cell that wraps badly in a terminal. Explain it in prose.
+- **Leaking provenance onto the surface.** Reviewer names (`security, correctness`) and raw route tokens (`ask_user -> human`) belong in the artifact, not the report. Surface the route as human framing: "needs your call", "auto-applied", "informational".
 - **Box-drawing characters or per-finding horizontal-rule separators.** The only `---` rule in the report is the one before the verdict blockquote.
 
 ## Formatting rules
@@ -76,7 +76,7 @@ Do NOT do these:
 - **Informational** — demoted bullet list with one-line explanations; compact `| # | File | Issue |` table only past the ~8-finding volume threshold.
 - **Pre-existing** — separate short bullet list; does not count toward the verdict.
 - **CE sections** (Requirements Completeness, Learnings & Past Solutions, Agent-Native Gaps, Schema Drift Check, Deployment Notes) — include per the Stage 6 rules; bullet lists, omit when empty or not run.
-- **Coverage** — residual risks, testing gaps, failed reviewers. No suppressed-findings count — suppression is silent.
+- **Coverage** — residual risks, testing gaps.
 - **Verdict in a blockquote** after a `---` rule: Ready to merge / Ready with fixes / Not ready, with reasoning and fix order.
 - **No time estimates.**
 
