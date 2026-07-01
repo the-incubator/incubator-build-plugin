@@ -13,9 +13,6 @@ Review complete. Risk: low. Two findings are informational; one needs your call 
 
 **Scope:** merge-base with the review base branch → working tree (14 files, 342 lines)
 **Intent:** Add order export endpoint with CSV and JSON format support
-**Reviewers:** correctness, testing, maintainability, security, api-contract
-- security — new public endpoint accepts a user-provided format parameter
-- api-contract — new /api/orders/export route with response schema
 
 ## ⚠️ Needs your call — ownership check on export lookup
 
