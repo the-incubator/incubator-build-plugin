@@ -84,7 +84,7 @@ The reviewer sub-agents can run on a different AI engine than the platform hosti
 
 1. `engine:<name>` argument token
 2. `INC_REVIEW_ENGINE` environment variable
-3. Default: the host platform's own engine (running in Claude Code -> `claude`; running in Codex -> `codex`)
+3. Default: the host platform's own engine, whatever the host is -- i.e., native dispatch (running in Claude Code -> `claude`; running in Codex -> `codex`; any other host -> its own native sub-agent mechanism). The default never goes through engine-name validation, so a review with no override always runs.
 
 **Dispatch rule:**
 
@@ -93,7 +93,7 @@ The reviewer sub-agents can run on a different AI engine than the platform hosti
 
 **What never moves engines:** the orchestrator itself (scope, intent, selection, merge, synthesis) always runs on the host platform, and so does the After Review fixer sub-agent -- it mutates the working tree, which cross-engine sandboxes forbid.
 
-**Invalid engine name:** if the resolved engine is not a recognized name, stop before dispatching agents. In `mode:headless`, emit `Review failed (headless mode). Reason: unknown review engine <name>. Valid engines: claude, codex.` Otherwise emit the generic form without the headless prefix.
+**Invalid engine name:** applies only to explicit overrides (an `engine:` token or `INC_REVIEW_ENGINE` value). If the override is not a recognized name, stop before dispatching agents. In `mode:headless`, emit `Review failed (headless mode). Reason: unknown review engine <name>. Valid engines: claude, codex.` Otherwise emit the generic form without the headless prefix. The no-override default is exempt -- it always resolves to native dispatch on the host, even on hosts that are neither Claude Code nor Codex.
 
 **Missing engine CLI:** if the resolved engine's CLI is not installed, fall back to native dispatch and note the fallback in Coverage. A working review on the host engine beats a broken dispatch.
 
