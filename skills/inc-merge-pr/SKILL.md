@@ -175,7 +175,7 @@ Unlike Gates 1–2, Gate 3 never emits a hard BLOCK on its own - both the too-ea
 | `GATE3_WINDOW:` value | Meaning | Action |
 |-----------------------|---------|--------|
 | `ok` | DOW 1–4 and HOUR ≥ 13 | **Gate 3 OK** - proceed. |
-| `block_early` | DOW 1–4 and HOUR < 13 | **Gate 3 NEEDS_DECISION** - too early. Ask the user (blocking question) for an explicit override: a stated reason it must ship now ("deploy anyway, this is a hotfix") passes it; anything else holds until 1 PM. Record the override verbatim in the ship report. |
+| `block_early` | DOW 1–4 and HOUR < 13 | **Gate 3 NEEDS_DECISION** - too early. Ask the user (blocking question) for an explicit override: a stated reason it must ship now ("deploy anyway, this is a hotfix") passes it; anything else holds until 1 PM. Record the override verbatim in the merge-pr report. |
 | `offhours` | DOW 5, 6, or 7 | Run the off-hours decision branch below. |
 
 ### Off-hours decision branch (Fri / Sat / Sun)
@@ -379,7 +379,7 @@ Outcomes:
 
   The skill does not auto-rollback. Surface the signal and stop; the user decides.
 
-### Step 4d - Record the observation in the ship report
+### Step 4d - Record the observation in the merge-pr report
 
 **Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
 

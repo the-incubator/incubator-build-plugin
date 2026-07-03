@@ -62,13 +62,35 @@ merge-pr runs its own pre-flight (branch freshness), the three merge gates (new 
 
 ## Step 4 — Final report
 
-```
-=== SHIP-IT REPORT ===
-1. review-and-pr:  <PR #N ready | stopped: review gate (N ask_user) | stopped: reason>
-2. merge-pr:       <MERGE: GO, deploy observed Ready | MERGE: BLOCK gate(s) X, Y | not reached>
+The report's #1 job is to answer one question at a glance: **is this deployed to production or not?** Never bury that under CI/preview detail. Preview deploys are *not* production — never let "app deploy pending" or a green preview read as "shipped."
 
-OUTCOME: <SHIPPED | STOPPED at step N — reason>
+Render the full pipeline as a stage checklist so the user can see exactly how far the run got and where it stopped. Every stage carries one status glyph:
+
+- `✅` done
+- `🔄` in progress (e.g. CI still running) — **only** for a live run you are actively watching
+- `⏸️` waiting on you (a decision or action only the user can take)
+- `⛔` blocked (a gate failed or the chain stopped here)
+- `⬜` not run (chain never reached this stage)
+
+Lead with a one-line verdict, then the stages, then the PR link and any blocker detail. Use the exact stage labels below.
+
 ```
+═══ INCUBATOR REPORT ═══
+Production: NOT DEPLOYED — stopped at merge (awaiting your call)
+
+  ✅ 1. Reviewed working changes   7 reviewers, no P0/P1, safe fixes applied
+  ✅ 2. PR opened                  #194, draft
+  ✅ 3. CI + AI reviewers          green (admin/www/shopify previews)
+  ✅ 4. Feedback resolved          3 threads resolved
+  ⏸️ 5. Merge gates                not run — I don't merge to main or trigger prod deploys; that's your call
+  ⬜ 6. Merged to main             not reached
+  ⬜ 7. Deployed to production      not reached
+
+PR: https://github.com/org/repo/pull/194
+Next: you own merge + prod deploy — run /inc:merge-pr-5 (or merge on GitHub) when ready.
+```
+
+Fill each stage's glyph and detail from what actually happened; set stages the run never reached to `⬜ not reached`. The `Production:` line is the single source of truth — it reads `✅ DEPLOYED to production` **only** when stages 6 and 7 are both `✅`; otherwise `NOT DEPLOYED — stopped at <stage>`, naming where the run stopped. A green CI or preview deploy never counts as production.
 
 ---
 
