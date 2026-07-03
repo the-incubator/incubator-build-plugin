@@ -27,6 +27,7 @@ Parse `$ARGUMENTS` for the following optional tokens. Strip each recognized toke
 | `mode:headless` | `mode:headless` | Select headless mode for programmatic callers (see Mode Detection below) |
 | `base:<sha-or-ref>` | `base:abc1234` or `base:origin/main` | Skip scope detection — use this as the diff base directly |
 | `plan:<path>` | `plan:docs/plans/2026-03-25-001-feat-foo-plan.md` | Load this plan for requirements verification |
+| `engine:<name>` | `engine:codex` | Run the reviewer sub-agents on this engine instead of the host platform's own (see Review Engine below). Valid names: `claude`, `codex` |
 
 All tokens are optional. Each one present means one less thing to infer. When absent, fall back to existing behavior for that stage.
 
@@ -74,6 +75,27 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 - **No blocking questions, ever.** Interactive mode never uses `AskUserQuestion` / `request_user_input` / `ask_user` or any other blocking prompt. It applies `auto_apply` fixes, presents the report (auto-applied fixes, then informational, with the `ask_user` findings for the user to act on placed just above the verdict), and stops. There is no routing question, no per-finding walk-through, and no ticket-filing. The report *is* the interaction.
 - **Infer, don't ask.** When intent, scope, or plan is ambiguous, infer conservatively from explicit tokens, git state, PR metadata, and conversation, and note the uncertainty in Coverage or the verdict — never stop to ask.
+
+## Review Engine
+
+The reviewer sub-agents can run on a different AI engine than the platform hosting this skill, so one model's code gets checked by another model's reviewers.
+
+**Resolution precedence** (first match wins):
+
+1. `engine:<name>` argument token
+2. `INC_REVIEW_ENGINE` environment variable
+3. Default: the host platform's own engine (running in Claude Code -> `claude`; running in Codex -> `codex`)
+
+**Dispatch rule:**
+
+- **Host == engine (the default):** native dispatch, exactly as Stage 4 describes. In Claude Code that is the Agent tool; in Codex, its native sub-agent mechanism. Nothing changes.
+- **Host != engine:** dispatch each selected reviewer (persona and CE) as a subprocess of the engine's CLI. Read `references/cross-engine-dispatch.md` for the runner recipes -- do not read it when host and engine match. The prompt content each reviewer receives is identical to native dispatch; only the transport and the artifact-write responsibility change (cross-engine reviewers run read-only and return full JSON; the orchestrator writes their artifact files).
+
+**What never moves engines:** the orchestrator itself (scope, intent, selection, merge, synthesis) always runs on the host platform, and so does the After Review fixer sub-agent -- it mutates the working tree, which cross-engine sandboxes forbid.
+
+**Invalid engine name:** if the resolved engine is not a recognized name, stop before dispatching agents. In `mode:headless`, emit `Review failed (headless mode). Reason: unknown review engine <name>. Valid engines: claude, codex.` Otherwise emit the generic form without the headless prefix.
+
+**Missing engine CLI:** if the resolved engine's CLI is not installed, fall back to native dispatch and note the fallback in Coverage. A working review on the host engine beats a broken dispatch.
 
 ## Severity Scale
 
@@ -384,6 +406,8 @@ Persona sub-agents do focused, scoped work and should use a fast mid-tier model 
 
 Use the platform's mid-tier model for all persona and CE sub-agents. In Claude Code, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
 
+In cross-engine dispatch, omit the model override entirely and let the engine's configured default apply, unless the user explicitly named a model. The same rule -- working review beats broken dispatch -- applies doubly when the model catalog belongs to another vendor's CLI.
+
 CE always-on agents (inc-agent-native-reviewer, inc-learnings-researcher) and CE conditional agents (inc-schema-drift-detector, inc-deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
@@ -402,6 +426,8 @@ Pass `{run_id}` to every persona sub-agent so they can write their full analysis
 **Report-only mode:** Skip run-id generation and directory creation. Do not pass `{run_id}` to agents. Agents return compact JSON only with no file write, consistent with report-only's no-write contract.
 
 #### Spawning
+
+**Engine check first.** If the resolved review engine differs from the host platform (see Review Engine), do not use the native sub-agent mechanism for this stage. Dispatch every selected reviewer -- personas and CE agents -- as engine-CLI subprocesses per `references/cross-engine-dispatch.md`, giving each the same prompt content described below. Cross-engine reviewers run read-only and return full JSON instead of writing their own artifact; the orchestrator writes `.context/incubator/inc-review/{run_id}/{reviewer_name}.json` from each return and derives the compact merge-tier view for Stage 5. Everything below this paragraph describes native dispatch (host == engine), which is the default.
 
 Omit the `mode` parameter when dispatching sub-agents so the user's configured permission settings apply. Do not pass `mode: "auto"`.
 
