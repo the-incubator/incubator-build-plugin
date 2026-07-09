@@ -16,7 +16,8 @@ Every question routes to one of three shapes.
 Pick the shape, answer from this guide, and stop.
 
 1. **Workflow orientation** ("how do I use incubator-build", "walk me through the pipeline") - give the core pipeline, the review-tier choice, and the two shortcuts.
-2. **Specific-skill question** ("how does ship-it work?", "what does merge-pr do?") - answer from the skill map below: what the skill does and where it sits in the pipeline. Only if the user wants implementation-level detail the map doesn't cover, read that skill's own `SKILL.md` (path in the map) and summarize - the guide is the entry point, the sources are the follow-up.
+2. **Specific-skill question** ("how does ship-it work?", "what does merge-pr do?") - answer from the skill map below: what the skill does and where it sits in the pipeline.
+   Only if the user wants implementation-level detail the map doesn't cover, read that skill's own `SKILL.md` (path in the map) and summarize - the guide is the entry point, the sources are the follow-up.
 3. **Situation** ("I just finished a small fix", "this touches auth", "my PR got review comments") - recommend the one skill that fits and stop.
 
 ## The core pipeline
@@ -29,20 +30,20 @@ Stage 2 is implementation itself - you and the user write the code; there is no 
  plan first      (stage 2)      review the diff        commit, push, open PR     gate, merge, watch deploy
 ```
 
-1. **`/inc:plan-1`** - Create a reviewable implementation plan before any edits.
-   Optional for small changes; start here for anything with real design surface.
-   Pair with `/inc:plan-review` to have the plan itself reviewed before implementation begins.
+- **`/inc:plan-1`** (stage 1) - Create a reviewable implementation plan before any edits.
+  Optional for small changes; start here for anything with real design surface.
+  Pair with `/inc:plan-review` to have the plan itself reviewed before implementation begins.
 
-2. **`/inc:review-deep-3b`** - Deep code review of the branch/working-tree diff.
-   Runs persona reviewers (correctness, security, maintainability, etc.), dedupes and confidence-gates the findings, auto-applies safe fixes, and surfaces what needs your call.
-   Run this **before** committing.
+- **`/inc:review-deep-3b`** (stage 3) - Deep code review of the branch/working-tree diff.
+  Runs persona reviewers (correctness, security, maintainability, etc.), dedupes and confidence-gates the findings, auto-applies safe fixes, and surfaces what needs your call.
+  Run this **before** committing.
 
-3. **`/inc:commit-push-pr-4`** - Commits, pushes, and opens a PR with a value-first description.
-   Then watches CI and the AI reviewers and auto-resolves feedback in a loop, pausing only for items that need a human decision.
-   Stops at a feedback-clean PR.
+- **`/inc:commit-push-pr-4`** (stage 4) - Commits, pushes, and opens a PR with a value-first description.
+  Then watches CI and the AI reviewers and auto-resolves feedback in a loop, pausing only for items that need a human decision.
+  Stops at a feedback-clean PR.
 
-4. **`/inc:merge-pr-5`** - Pre-flight branch-freshness check, then three blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads; deploy-window timing).
-   If all pass, squash-merges, deletes the branch, and actively observes the deploy.
+- **`/inc:merge-pr-5`** (stage 5) - Pre-flight branch-freshness check, then three blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads; deploy-window timing).
+  If all pass, squash-merges, deletes the branch, and actively observes the deploy.
 
 ## Picking the review tier
 
