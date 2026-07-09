@@ -387,6 +387,8 @@ Review team:
 - inc-schema-drift-detector -- migration files present
 ```
 
+If the Fable exception in Stage 4's Model tiering applies, append a model line to this announcement (e.g., `Sub-agent model: Opus 4.8 (session is on Fable)`) so the user can intervene before dispatch.
+
 This is progress reporting, not a blocking confirmation.
 
 ### Stage 3b: Discover project standards paths
@@ -406,9 +408,15 @@ Persona sub-agents do focused, scoped work and should use a fast mid-tier model 
 
 Use the platform's mid-tier model for all persona and CE sub-agents. In Claude Code, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
 
+**Fable exception:** If the orchestrator itself is running on Fable (Anthropic's Mythos-class tier), do not tier sub-agents down to the mid-tier.
+Pass `model: "opus"` (Opus 4.8) for all persona and CE sub-agents instead.
+Sub-agents dispatched from a Fable session otherwise inherit review work that the user implicitly priced at the top tier, and Opus 4.8 is the strongest model available for sub-agent overrides.
+Tell the user this is happening as part of the Stage 3a team announcement -- add a line such as `Sub-agent model: Opus 4.8 (session is on Fable)` -- so they can intervene before dispatch if they prefer the cheaper mid-tier.
+This remains progress reporting, not a blocking confirmation: announce and proceed unless the user objects.
+
 In cross-engine dispatch, omit the model override entirely and let the engine's configured default apply, unless the user explicitly named a model. The same rule -- working review beats broken dispatch -- applies doubly when the model catalog belongs to another vendor's CLI.
 
-CE always-on agents (inc-agent-native-reviewer, inc-learnings-researcher) and CE conditional agents (inc-schema-drift-detector, inc-deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
+CE always-on agents (inc-agent-native-reviewer, inc-learnings-researcher) and CE conditional agents (inc-schema-drift-detector, inc-deployment-verification-agent) also use the sub-agent model chosen above (mid-tier by default, Opus 4.8 under the Fable exception) since they perform scoped, focused work.
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
 
