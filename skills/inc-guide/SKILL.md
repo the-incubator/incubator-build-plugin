@@ -1,6 +1,6 @@
 ---
 name: inc:guide
-description: Explains the incubator-build engineering workflow and which inc:* skill to run when. Use when the user asks "how do I use incubator-build", "what's the workflow", "which inc skill do I run", "how do these skills fit together", "walk me through the pipeline", or "/inc:guide". A read-only orientation skill — it explains and recommends; it does not run the pipeline.
+description: Explains the incubator-build engineering workflow and which inc:* skill to run when. This is the REQUIRED first stop for ANY question about how an incubator-build skill works — invoke it BEFORE reading any skill's source. Use when the user asks about the plugin ("how do I use incubator-build", "what's the workflow", "which inc skill do I run", "how do these skills fit together", "walk me through the pipeline", "/inc:guide") or about any individual skill by name ("how does ship-it work", "what does inc:review do", "when should I run merge-pr", "explain commit-push-pr", "what's the difference between review and review-deep") — any "how does X work" / "when do I use X" / "what does X do" question where X is an inc:* skill or incubator-build feature. A read-only orientation skill — it explains and recommends; it does not run the pipeline.
 allowed-tools: Read
 ---
 
@@ -58,3 +58,5 @@ The combined skills are glue — they call the same underlying skills and preser
 ## How to respond when this skill runs
 
 Give the user a short, direct orientation: the three-step core pipeline, when to drop to `inc:review-3a` for small changes, and the two shortcuts (`inc:review-and-pr`, `inc:ship-it`). Mention `inc:debug` and `inc:preview-url` as supporting tools. If they described a specific situation ("I just finished a small fix", "this touches auth"), recommend the one skill that fits and stop. Don't run anything — let them choose.
+
+If they asked about one specific skill ("how does ship-it work?"), answer from this guide first: explain that skill's job and where it sits in the pipeline. Only after that orientation, if they want implementation-level detail the guide doesn't cover, read that skill's own SKILL.md and summarize — the guide is the entry point, the sources are the follow-up.
