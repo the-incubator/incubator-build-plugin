@@ -111,6 +111,7 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 | `/inc:resolve-pr-feedback` | `inc-resolve-pr-feedback` | Evaluate and fix PR review comments in parallel; also invoked automatically by commit-push-pr's watch loop |
 | `/inc:update-code` | `inc-update-code` | Pull latest main into the current branch; hands conflicts to git-merge-expert |
 | `/inc:setup-deploy` | `inc-setup-deploy` | Detect the deploy platform and write the config merge-pr/ship-it use to observe deploys |
+| `/inc:setup-feedback` | `inc-setup-feedback` | Wire the preview-feedback client into an app - mint a token, install the client, mount it at the app root so reviewers can annotate a deployed preview |
 | `/inc:preview-url` | `inc-preview-url` | Public `*.trycloudflare.com` tunnel to a locally-running app - share or test from another device |
 | `/inc:team-lead-review` | `team-lead-review` | Product-acceptance PR review - did the author build what was actually requested, per spec/Slack/board task |
 
