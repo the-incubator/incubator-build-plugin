@@ -8,7 +8,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { looksLikePrCreate, isPrCreateTool } from "./gh-pr-gate.mjs";
+import {
+  looksLikePrCreate,
+  looksLikeDraftPrCreate,
+  isPrCreateTool,
+  isDraftToolInput,
+} from "./gh-pr-gate.mjs";
 
 const BLOCK = [
   ["cli basic", "gh pr create --title x --body y"],
@@ -51,6 +56,47 @@ test("allows read-only calls and sub-resource writes", () => {
   for (const [name, cmd] of ALLOW) {
     assert.equal(looksLikePrCreate(cmd), false, `should ALLOW: ${name} :: ${cmd}`);
   }
+});
+
+// Draft detection — commands here have already matched looksLikePrCreate; the
+// question is only draft vs. ready.
+const DRAFT = [
+  ["cli --draft", "gh pr create --draft --title x --body y"],
+  ["cli --draft mid-flags", "gh pr create --title x --draft --body y"],
+  ["cli --draft=true", "gh pr create --draft=true --title x"],
+  ["cli short -d", "gh pr create -d --title x"],
+  ["rest field draft=true", "gh api repos/o/r/pulls -f title=x -F draft=true"],
+  ["rest json body", 'curl -X POST https://api.github.com/repos/o/r/pulls -d \'{"draft": true}\''],
+  ["graphql draft:true", "gh api graphql -f query=mutation{createPullRequest(input:{draft:true})}"],
+];
+
+const READY = [
+  ["cli plain", "gh pr create --title x --body y"],
+  ["cli --draft=false (explicit ready)", "gh pr create --draft=false --title x"],
+  ["cli title containing word draft", 'gh pr create --title "draft schema docs" --body y'],
+  ["rest draft=false", "gh api repos/o/r/pulls -f title=x -F draft=false"],
+  ["rest curl -d data flag is not the draft flag", "curl -X POST https://api.github.com/repos/o/r/pulls -d @body.json"],
+  ["empty", ""],
+];
+
+test("detects draft PR creation across channels", () => {
+  for (const [name, cmd] of DRAFT) {
+    assert.equal(looksLikeDraftPrCreate(cmd), true, `should be DRAFT: ${name} :: ${cmd}`);
+  }
+});
+
+test("leaves ready-for-review creation and lookalikes alone", () => {
+  for (const [name, cmd] of READY) {
+    assert.equal(looksLikeDraftPrCreate(cmd), false, `should be READY: ${name} :: ${cmd}`);
+  }
+});
+
+test("detects draft input on MCP create_pull_request tools", () => {
+  assert.equal(isDraftToolInput({ draft: true }), true);
+  assert.equal(isDraftToolInput({ draft: "true" }), true);
+  assert.equal(isDraftToolInput({ draft: false }), false);
+  assert.equal(isDraftToolInput({}), false);
+  assert.equal(isDraftToolInput(undefined), false);
 });
 
 test("matches MCP create_pull_request tool names by suffix", () => {

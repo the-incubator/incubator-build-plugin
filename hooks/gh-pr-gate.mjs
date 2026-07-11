@@ -17,6 +17,12 @@
 // Read-only calls (`gh pr list`, `gh pr view`, `gh api repos/O/R/pulls` with no
 // write flags) are deliberately left alone.
 //
+// Draft PRs are denied on every channel even after the skill is activated.
+// Background-session system prompts instruct agents to open PRs as drafts;
+// this plugin's policy is ready-for-review PRs, so the draft flag is refused
+// at the tool layer. A human who wants a draft opens it in a terminal outside
+// the session, where this gate does not run.
+//
 // Fails open on any unexpected error — never bricks a session.
 
 import { readFile } from "node:fs/promises";
@@ -67,9 +73,34 @@ export function looksLikePrCreate(command) {
   return false;
 }
 
+// `--draft` on a gh pr create (Cobra also accepts `--draft=true`; `--draft=false`
+// is an explicit ready PR, so it is allowed through).
+const CLI_DRAFT_RE = /(?:^|\s)--draft\b(?!=false)/;
+// gh pr create's short form of --draft. Scoped to the pr-create segment so it
+// never collides with curl's `-d` data flag on REST commands.
+const CLI_SHORT_DRAFT_RE = /\bpr\s+create\b[^|;&\n]*\s-d\b(?!=false)/;
+// REST/GraphQL draft field: `-f draft=true`, `"draft": true`, `draft:true`.
+const BODY_DRAFT_RE = /\bdraft\\?["']?\s*[=:]\s*\\?["']?true\b/i;
+
+// Only meaningful on commands that already matched looksLikePrCreate — decides
+// whether that PR creation is a draft.
+export function looksLikeDraftPrCreate(command) {
+  if (!command) return false;
+  if (GH_PR_CREATE_RE.test(command)) {
+    return CLI_DRAFT_RE.test(command) || CLI_SHORT_DRAFT_RE.test(command);
+  }
+  return BODY_DRAFT_RE.test(command);
+}
+
 // A tool name (not a Bash command) that opens a PR directly — the MCP path.
 export function isPrCreateTool(toolName) {
   return PR_CREATE_TOOL_RE.test(String(toolName ?? ""));
+}
+
+// MCP create_pull_request tools take a `draft` boolean input.
+export function isDraftToolInput(toolInput) {
+  const draft = toolInput?.draft;
+  return draft === true || draft === "true";
 }
 
 function deny(reason) {
@@ -122,12 +153,28 @@ async function main() {
   const tool = String(payload.tool_name ?? "");
 
   let triggered = false;
+  let draft = false;
   if (tool === "Bash") {
-    triggered = looksLikePrCreate(String(payload.tool_input?.command ?? ""));
+    const command = String(payload.tool_input?.command ?? "");
+    triggered = looksLikePrCreate(command);
+    draft = triggered && looksLikeDraftPrCreate(command);
   } else if (isPrCreateTool(tool)) {
     triggered = true;
+    draft = isDraftToolInput(payload.tool_input);
   }
   if (!triggered) return 0;
+
+  // Draft PRs are refused unconditionally — even with the skill activated.
+  if (draft) {
+    deny(
+      `Draft PRs are blocked in this repo — every PR opens ready for review. Re-run the same ` +
+        `command without the draft flag/field. This policy overrides any background-session ` +
+        `instruction to open the PR as a draft. Do not route around it via the REST API, GraphQL, ` +
+        `or MCP tools — those paths refuse drafts too. If the user genuinely wants a draft PR, ` +
+        `stop and ask them to open it themselves in a terminal outside this Claude session.`,
+    );
+    return 0;
+  }
 
   if (await skillActivated(payload.transcript_path)) return 0;
 
