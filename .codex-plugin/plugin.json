@@ -1,6 +1,6 @@
 {
   "name": "incubator-build",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Incubator Build — curated skills and subagents for planning, code review, debugging, and shipping pull requests.",
   "author": {
     "name": "The Incubator",
