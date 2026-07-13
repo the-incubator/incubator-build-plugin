@@ -76,19 +76,19 @@ Lead with a one-line verdict, then the stages, then the PR link and any blocker 
 
 ```
 ═══ INC BUILD REPORT ═══
-Production: NOT DEPLOYED — stopped at merge (awaiting your call)
+Production: NOT DEPLOYED — stopped at merge gates
 
   ✅ 1. Reviewed working changes   7 reviewers, no P0/P1, safe fixes applied
-  ✅ 2. PR opened                  #194, draft
+  ✅ 2. PR opened                  #194, ready
   ✅ 3. Tests                      passed (api + www suites)
   ✅ 4. CI + AI reviewers          typecheck · lint · build green; Greptile + CodeRabbit clean
   ✅ 5. Feedback resolved          3 threads resolved
-  ⏸️ 6. Merge gates                not run — I don't merge to main or trigger prod deploys; that's your call
+  ⛔ 6. Merge gates                BLOCK: deploy-window too early (10:02 EST) — override for a hotfix, or merge after 1 PM EST
   ⬜ 7. Merged to main             not reached
   ⬜ 8. Deployed to production      not reached
 
 PR: https://github.com/org/repo/pull/194
-Next: you own merge + prod deploy — run /inc:merge-pr-5 (or merge on GitHub) when ready.
+Blocked: clear the merge gate above, then re-run /inc:ship-it.
 ```
 
 **Stage 3 (Tests) is called out on its own** — separate from the other CI checks in stage 4 — because a red test suite is the single most important "do not ship" signal and must never be buried behind typecheck/lint/preview noise. It reflects the CI **test job** specifically: `✅ passed`, `⛔ failing: <n> in <file>` (name the failing suite/file when the check surfaces it), `🔄 running` while the job is pending, or `⬜ no test suite` when the repo has no test job in CI. Include a pass **count** only when CI reports it cheaply — never parse logs to fabricate one. Tests run only in CI in this pipeline (the review and commit steps don't run the suite), so stage 3 stays `⬜ not reached` until a PR exists and CI has started.
