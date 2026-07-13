@@ -75,7 +75,7 @@ Render the full pipeline as a stage checklist so the user can see exactly how fa
 Lead with a one-line verdict, then the stages, then the PR link and any blocker detail. Use the exact stage labels below.
 
 ```
-═══ INCUBATOR REPORT ═══
+═══ INC BUILD REPORT ═══
 Production: NOT DEPLOYED — stopped at merge (awaiting your call)
 
   ✅ 1. Reviewed working changes   7 reviewers, no P0/P1, safe fixes applied
