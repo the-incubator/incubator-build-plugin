@@ -1,7 +1,7 @@
 {
   "name": "incubator-build",
-  "version": "0.3.2",
-  "description": "Incubator Build — curated skills, subagents, and session telemetry for Claude Code",
+  "version": "0.3.3",
+  "description": "Incubator Build \u2014 curated skills, subagents, and session telemetry for Claude Code",
   "author": {
     "name": "The Incubator",
     "email": "austin@theincubator.xyz"
