@@ -35,7 +35,7 @@ Trivial edits (a comment, a whitespace change) don't need a run.
    ```bash
    gcloud config get-value project
    ```
-   If auth is stale, re-auth first (see the `gcloud-reauth` skill).
+   If auth is stale, re-authenticate with `gcloud auth login` (and `gcloud auth application-default login` if your build steps read application-default credentials).
 3. **Install the tool once** (it ships as a gcloud component):
    ```bash
    gcloud components install cloud-build-local
