@@ -1,7 +1,7 @@
 ---
 name: inc:setup-feedback
 description: Use when the user wants to wire the incubator preview-feedback client into an app so external reviewers can annotate a deployed preview and the feedback lands in the incubator app. Triggers on "setup feedback", "set up the feedback tool", "install the preview feedback client", "wire up preview feedback", "add the review annotation tool", "mint a feedback token", or "/inc:setup-feedback". Mints a scoped feedback token, runs the installer into the target app, mounts <PreviewFeedbackMount /> at the app root, keeps the enable flag off locally, and confirms the app still builds.
-allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *)
+allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(tail *), Bash(echo *)
 argument-hint: "[optional: project slug, e.g. 'my-app-preview']"
 ---
 
@@ -11,6 +11,10 @@ Install the incubator preview-feedback client into a **target app** so external 
 
 This skill runs **from the target app's root** (the app being previewed), not from the plugin repo.
 It mints a per-project token, runs the self-contained installer, mounts one component at the app root, and verifies the build.
+
+**Plugin scripts:** Commands that use `${CLAUDE_PLUGIN_ROOT}` need the installed `incubator-build` plugin directory.
+In Claude Code the variable is set automatically.
+In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
 **What it composes** (you don't need to know the internals, but for grounding):
 [Agentation](https://github.com/benjitaylor/agentation) for click-to-annotate + [Riffrec](https://github.com/kieranklaassen/riffrec) for screen/voice recording, both mounted under one `<PreviewFeedbackMount />` wrapper that auto-picks **local** mode in dev (no token, no collector — just you + Claude) and **remote** mode when the preview enable flag is set (branded submit panel → collector).
@@ -42,7 +46,7 @@ node --version
 Check whether it's already installed (idempotent — don't double-mount):
 
 ```bash
-ls src/preview-feedback/PreviewFeedbackMount.tsx app/preview-feedback/PreviewFeedbackMount.tsx 2>/dev/null && echo "ALREADY_INSTALLED"
+ls src/preview-feedback/PreviewFeedbackMount.tsx preview-feedback/PreviewFeedbackMount.tsx 2>/dev/null && echo "ALREADY_INSTALLED"
 grep -rl "PreviewFeedbackMount" src app 2>/dev/null | grep -v preview-feedback/ | head && echo "ALREADY_MOUNTED"
 ```
 
@@ -118,10 +122,11 @@ If `ok` is not `true` or the file is empty, the install failed — surface the s
 
 ## Step 5 — Mount `<PreviewFeedbackMount />` once at the app root
 
-Mount it exactly once, as a **sibling of the root app component**, importing from the `outDir` the installer reported.
-The import path from a root file is `./preview-feedback/PreviewFeedbackMount`.
+Mount it exactly once, as a **sibling of the root app component**.
+**Compute the import path as the relative path from the file you're editing to the `outDir` the installer reported** — don't copy a path blindly (the installer's own printed hint hardcodes `./preview-feedback/...`, which is wrong for Next layouts; trust `outDir`).
 
-**Vite** — in `src/main.tsx` (or wherever the root `<App />` renders), render it next to `<App />`:
+**Vite** — in `src/main.tsx` (or wherever the root `<App />` renders), render it next to `<App />`.
+`main.tsx` sits in `src/` next to `outDir` (`src/preview-feedback/`), so the import is `./`:
 
 ```tsx
 import { PreviewFeedbackMount } from "./preview-feedback/PreviewFeedbackMount";
@@ -132,10 +137,11 @@ import { PreviewFeedbackMount } from "./preview-feedback/PreviewFeedbackMount";
 </>
 ```
 
-**Next (App Router)** — in `app/layout.tsx`, render it inside `<body>` as a sibling of `{children}`:
+**Next (App Router)** — in `app/layout.tsx` (or `src/app/layout.tsx`), render it inside `<body>` as a sibling of `{children}`.
+The layout sits one level **below** `outDir` (`src/app/` vs `src/preview-feedback/`, or `app/` vs root `preview-feedback/`), so the import is `../`:
 
 ```tsx
-import { PreviewFeedbackMount } from "./preview-feedback/PreviewFeedbackMount";
+import { PreviewFeedbackMount } from "../preview-feedback/PreviewFeedbackMount";
 // ...
 <body>
   {children}
