@@ -1,7 +1,7 @@
 ---
 name: inc:cloudbuild-test-local
 description: "Test a Cloud Build config (cloudbuild.yaml) locally before pushing, using the cloud-build-local tool. Use whenever a cloudbuild.yaml / cloudbuild.yml is created or substantially changed (steps added/removed/reordered, images, args, substitutions, secrets, timeouts) so the config is validated on the machine instead of burning a real Cloud Build run to find a typo. Triggers on \"test cloudbuild locally\", \"cloud-build-local\", \"validate my cloudbuild.yaml\", \"/inc:cloudbuild-test-local\". Also covers running a Cloud Run service locally with gcloud."
-allowed-tools: Read, Bash(docker *), Bash(gcloud *), Bash(cloud-build-local *), Bash(cloud-build-local_*)
+allowed-tools: Read, Bash(docker *), Bash(gcloud *), Bash(cloud-build-local *)
 ---
 
 # Test Cloud Build configs locally
