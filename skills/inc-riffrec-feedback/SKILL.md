@@ -1,7 +1,7 @@
 ---
 name: inc:riffrec-feedback
-description: Riffrec product-feedback workflow, transcribed LOCALLY with whisper.cpp (no API key, no per-clip cost, audio never leaves the machine). ALWAYS load when the user posts a `riffrec-*.zip`, a bundle with `session.json` + `events.json` + `recording.webm` + `voice.webm`, a video/audio recording for product feedback, or asks how to capture and share Riffrec sessions. Routes between setup, quick bug report, and extensive analysis.
-argument-hint: "[path to a riffrec-*.zip, video, audio, or meeting-notes file]"
+description: Riffrec product-feedback workflow, transcribed LOCALLY with whisper.cpp (no API key, no per-clip cost, audio never leaves the machine). ALWAYS load when the user posts a `riffrec-*.zip`, a bundle with `session.json` + `events.json` + `recording.webm` + `voice.webm`, a video/audio recording for product feedback, an incubator feedback share link (`.../f/<sessionId>`), asks to analyze the latest preview feedback for the current branch/project, or asks how to capture and share Riffrec sessions. Routes between setup, quick bug report, and extensive analysis.
+argument-hint: "[a riffrec-*.zip / video / audio path, an incubator feedback link (.../f/<id>), or blank to pull the latest feedback for the current branch]"
 ---
 
 # Riffrec Feedback Analysis
@@ -11,6 +11,48 @@ Turn raw product feedback into structured evidence for downstream agents. This s
 Transcription runs **locally with whisper.cpp** by default — no `OPENAI_API_KEY`, no per-clip cost, and the audio never leaves the machine. (Adapted from the upstream `ce-riffrec-feedback-analysis` skill; the local backend and timestamped frame selection are the incubator additions. The OpenAI API path is still available via an env flag — see "Local transcription" below.)
 
 **Plugin scripts:** Commands below use `<plugin root>`, the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+
+## Resolve the input
+
+The input can arrive three ways. Resolve it to a **local file path** first, then continue to "Choose the path". Do this before anything heavy.
+
+**1. A local file** — a `.zip` / `.mp4` / `.mov` / `.webm` / `.m4a` / `.mp3` / `.wav` / `.md` path already on disk. Use it as-is.
+
+**2. An incubator feedback link** — `https://<collector-host>/f/<sessionId>` (the shareable link the preview client returns on submit). The last path segment after `/f/` is the `sessionId`. Fetch the submitted session with the CLI, then analyze its recording:
+
+```bash
+SID=$(printf '%s' "$INPUT" | sed -E 's#.*/f/([^/?#]+).*#\1#')
+DEST="$(mktemp -d)/feedback-$SID"
+node "<plugin root>/scripts/inc-build.mjs" feedback fetch "$SID" --out "$DEST"
+```
+
+`fetch` writes `session.json`, `annotations.json`, and — when the session has a recording — `recording.zip` into `$DEST`.
+- **Recording present** (`recording.zip` exists): analyze `"$DEST/recording.zip"` via the analyzer entrypoint below.
+- **No recording** (`fetch` prints `(no recording on this session)`): there is no walkthrough to transcribe. The feedback is the click-comments in `"$DEST/annotations.json"` (each has `comment`, `element`, `pageUrl`, and element context). Summarize those directly into the quick-bug or extensive artifact — skip transcription.
+
+**3. Current branch / "latest feedback" (no path given)** — the user wants the newest submitted feedback for what they're working on. Resolve the project, list submitted sessions, pick one, then fetch as in case 2:
+
+```bash
+# a) Resolve the project slug for this repo.
+PROJECT=$(grep -hoE 'NEXT_PUBLIC_FEEDBACK_PROJECT=.*' .env* 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' )
+# If empty, list the projects the credentials can see and choose:
+#   node "<plugin root>/scripts/inc-build.mjs" feedback projects
+# One project -> use it. Several -> ask the user which.
+
+# b) List submitted sessions, newest first. `REC` in the first column = has a recording.
+#    Narrow to this branch's preview host with --preview <host> when you can derive it
+#    (e.g. from the PR's deploy-bot preview URL); otherwise list the whole project.
+node "<plugin root>/scripts/inc-build.mjs" feedback list --project "$PROJECT" --status submitted
+```
+
+Pick the session:
+- Exactly one `REC` session → use its `feedbackSessionId`.
+- Several → show the reviewer / `pageUrl` / date rows and **ask the user which `sessionId`** (don't guess across distinct reviewers).
+- None with `REC` → tell the user there's no recorded walkthrough yet; if there are non-`REC` sessions, offer to summarize their click-comments via `feedback fetch` + `annotations.json` instead.
+
+Then `feedback fetch <sessionId> --out "$DEST"` and analyze `recording.zip` exactly as in case 2.
+
+> Auth: the CLI uses the plugin's install credentials (`credentials.json`). If a call returns `missing-auth` / `401`, the credentials aren't set up — surface `node "<plugin root>/scripts/inc-build.mjs" feedback projects` as the check and stop; don't retry blindly.
 
 ## Choose the path
 

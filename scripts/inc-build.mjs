@@ -6,7 +6,7 @@
 //
 // Usage:
 //   inc-build get <path> [--query k=v ...]          # generic GET, prints JSON
-//   inc-build feedback list [--project X] [--status submitted]
+//   inc-build feedback list [--project X] [--status submitted] [--preview <host>]
 //   inc-build feedback get <sessionId>              # session + annotations
 //   inc-build feedback fetch <sessionId> [--out <dir>]
 //                                                       # download bundle + recording zip
@@ -86,7 +86,7 @@ function parseFlags(argv) {
 const USAGE = `inc-build - Incubator Build API client (uses plugin install credentials)
 
   inc-build get <path> [--query k=v ...]
-  inc-build feedback list [--project X] [--status submitted]
+  inc-build feedback list [--project X] [--status submitted] [--preview <host>]
   inc-build feedback get <sessionId>
   inc-build feedback fetch <sessionId> [--out <dir>]
   inc-build feedback projects
@@ -112,7 +112,7 @@ async function main() {
   if (cmd === "feedback") {
     if (sub === "list") {
       const { sessions } = await api(creds, "GET", "/api/v1/feedback/sessions", {
-        query: { project: flags.project, status: flags.status },
+        query: { project: flags.project, status: flags.status, preview: flags.preview },
       });
       if (!sessions.length) {
         process.stdout.write("no sessions\n");
@@ -179,7 +179,7 @@ async function main() {
         const zipPath = join(outDir, "recording.zip");
         writeFileSync(zipPath, buf);
         process.stdout.write(`wrote recording (${buf.length} bytes) -> ${zipPath}\n`);
-        process.stdout.write(`\nAnalyze it: run /riffrec-local on ${zipPath}\n`);
+        process.stdout.write(`\nAnalyze it: run /inc:riffrec-feedback on ${zipPath}\n`);
       } else {
         process.stdout.write("(no recording on this session)\n");
       }
