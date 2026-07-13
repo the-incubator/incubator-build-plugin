@@ -1,7 +1,7 @@
 ---
 name: inc:setup-feedback
 description: Use when the user wants to wire the incubator preview-feedback client into an app so external reviewers can annotate a deployed preview and the feedback lands in the incubator app. Triggers on "setup feedback", "set up the feedback tool", "install the preview feedback client", "wire up preview feedback", "add the review annotation tool", "mint a feedback token", or "/inc:setup-feedback". Mints a scoped feedback token, runs the installer into the target app, mounts <PreviewFeedbackMount /> at the app root, keeps the enable flag off locally, and confirms the app still builds.
-allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(tail *), Bash(echo *)
+allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(head *), Bash(tail *), Bash(echo *), Bash(set *), Bash(git check-ignore *), Bash(git ls-files *)
 argument-hint: "[optional: project slug, e.g. 'my-app-preview']"
 ---
 
@@ -12,8 +12,8 @@ Install the incubator preview-feedback client into a **target app** so external 
 This skill runs **from the target app's root** (the app being previewed), not from the plugin repo.
 It mints a per-project token, runs the self-contained installer, mounts one component at the app root, and verifies the build.
 
-**Plugin scripts:** Commands that use `${CLAUDE_PLUGIN_ROOT}` need the installed `incubator-build` plugin directory.
-In Claude Code the variable is set automatically.
+**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory.
+In Claude Code, use `${CLAUDE_PLUGIN_ROOT}` (set automatically).
 In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
 **What it composes** (you don't need to know the internals, but for grounding):
@@ -46,8 +46,8 @@ node --version
 Check whether it's already installed (idempotent — don't double-mount):
 
 ```bash
-ls src/preview-feedback/PreviewFeedbackMount.tsx preview-feedback/PreviewFeedbackMount.tsx 2>/dev/null && echo "ALREADY_INSTALLED"
-grep -rl "PreviewFeedbackMount" src app 2>/dev/null | grep -v preview-feedback/ | head && echo "ALREADY_MOUNTED"
+{ test -f src/preview-feedback/PreviewFeedbackMount.tsx || test -f preview-feedback/PreviewFeedbackMount.tsx; } && echo "ALREADY_INSTALLED"
+grep -rl "PreviewFeedbackMount" src app 2>/dev/null | grep -v preview-feedback/ | grep -q . && echo "ALREADY_MOUNTED"
 ```
 
 If already installed **and** mounted, skip to Step 6 (env + build check) — the run is likely re-verification or a re-mint, not a fresh install.
@@ -69,6 +69,18 @@ Only change it if the user is pointing at a different incubator deployment.
 
 ## Step 3 — Mint token + run the installer (one shell step)
 
+Before minting, verify `.env.local` can't leak into git — the installer writes the token there:
+
+```bash
+# From the app root. If it's tracked or not ignored, fix .gitignore before minting.
+git ls-files --error-unmatch .env.local 2>/dev/null && echo "ENV_TRACKED_IN_GIT"
+git check-ignore -q .env.local && echo "ENV_IGNORED_OK" || echo "ENV_NOT_IGNORED"
+```
+
+- `ENV_TRACKED_IN_GIT` → stop: have the user run `git rm --cached .env.local` and add `.env.local` to `.gitignore`, then re-run.
+- `ENV_NOT_IGNORED` in a git repo → add `.env.local` to `.gitignore` before continuing.
+  (It also prints when the app isn't a git repo at all — then there's nothing to leak; continue.)
+
 Do the mint and the install in a **single** Bash invocation so the raw token is captured into a shell variable and never printed to the transcript.
 The installer writes it into `.env.local` itself — that's the only place it needs to live.
 
@@ -76,14 +88,16 @@ The installer writes it into `.env.local` itself — that's the only place it ne
 
 ```bash
 set -euo pipefail
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"   # see "Plugin scripts" note above
 PROJECT="my-app-preview"          # from Step 2
 LABEL="review"                    # from Step 2
 DAYS="90"                         # from Step 2
+BUNDLER=""                        # set to vite|next ONLY if Step 1 detected neither and you asked the user
 COLLECTOR_URL="https://incubator-build-app-web.vercel.app"
 RESULT="$(mktemp -t inc-feedback-result.XXXXXX.json)"
 
 # 1) Mint — token to stdout, metadata to stderr. Never echo $TOKEN.
-TOKEN="$(node "${CLAUDE_PLUGIN_ROOT}/scripts/inc-build.mjs" feedback mint-token \
+TOKEN="$(node "$PLUGIN_ROOT/scripts/inc-build.mjs" feedback mint-token \
   --project "$PROJECT" --label "$LABEL" --days "$DAYS")"
 
 # 2) Fetch the self-contained installer (component sources embedded — no repo checkout needed).
@@ -95,19 +109,22 @@ node "$INSTALLER" --dir . --json \
   --collector-url "$COLLECTOR_URL" \
   --token "$TOKEN" \
   --project "$PROJECT" \
+  ${BUNDLER:+--bundler "$BUNDLER"} \
   > "$RESULT"
 
 echo "RESULT_FILE=$RESULT"
 ```
 
 If the mint fails on auth (the plugin's org credentials at `~/.claude/incubator/credentials.json` are missing or expired), don't loop — print the exact manual command for the user to run and where creds come from, then stop:
-`node "${CLAUDE_PLUGIN_ROOT}/scripts/inc-build.mjs" feedback projects` (a read that also surfaces the auth error), and note the token can also be minted backend-side by someone with DB access.
+`node "$PLUGIN_ROOT/scripts/inc-build.mjs" feedback projects` (a read that also surfaces the auth error), and note the token can also be minted backend-side by someone with DB access.
 
 ## Step 4 — Read the installer result
 
-The `--json` result is a single JSON object. Read the temp file and pull the fields you need for the mount:
+The `--json` result is a single JSON object.
+Shell variables don't survive between Bash invocations, so substitute the `RESULT_FILE=<path>` that Step 3 printed, then pull the fields you need for the mount:
 
 ```bash
+RESULT=<paste the RESULT_FILE path printed by Step 3>
 jq '{ok, outDir, wrapperFile, mountExport, bundler, envFile, envPrefix, componentFiles}' "$RESULT"
 ```
 
@@ -165,7 +182,10 @@ grep -E "_FEEDBACK_ENABLED" .env.local
 ```
 
 Then tell the user, explicitly:
-- Set `<envPrefix>ENABLED=1` **only in the preview deployment's environment** (e.g. the preview Cloud Run / Vercel preview service) to turn on the remote submit panel for external reviewers.
+- `.env.local` never ships — the deployed preview build can't see it.
+  In the preview deployment's environment, set **all** the `<envPrefix>*` vars, copying names and values from `.env.local`: `…COLLECTOR_URL`, `…TOKEN`, `…PROJECT`, and `…ENABLED=1`.
+  Mark the token variable as a secret/sensitive value in the platform's env settings.
+- Setting `<envPrefix>ENABLED=1` **only in the preview deployment's environment** turns on the remote submit panel for external reviewers.
 - **Never** set it in production. In a prod build both the dev flag and ENABLED are statically `false`, so with Vite the panel and its deps are dropped from the bundle entirely; with Next the lazy chunk may be emitted but is never fetched.
 
 ## Step 7 — Confirm the app still builds
