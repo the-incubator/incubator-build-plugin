@@ -70,6 +70,12 @@ python3 "<plugin root>/skills/inc-review-feedback/scripts/analyze_riffrec_zip.py
 
 Accepted inputs: a Riffrec `.zip`, an `.mp4` / `.mov` / `.webm` video, an `.m4a` / `.mp3` / `.wav` audio file, or a meeting-notes `.md`. Use `--output-dir <dir>` to control where artifacts land. In repos with `docs/brainstorms/`, the default is `docs/brainstorms/review-feedback/`. The quick path overrides the output dir to a temp location so nothing pollutes the repo.
 
+Every non-setup run writes a self-contained **`report.html`** — the human-consumable surface for the session (reviewer name and written notes, the recording with per-moment seek, moment frames, timestamped transcript, and machine signals badged heuristic vs. observed). The analyzer prints its path as a `REPORT_HTML=<abs path>` line. After the path's synthesis is filled (see the reference), **open the report** in the harness's own in-app/preview browser when it has one, falling back to the OS default browser (`open` on macOS, `xdg-open` on Linux, `start` on Windows). Do not read `report.html` back into context — it links frames and the recording by relative path and is meant to be viewed, not parsed.
+
+When the analyzer runs on a collector submission, it auto-detects the sibling `annotations.json` (the reviewer's written click-comments) and `session.json` (reviewer name) next to the input and folds them into the report; pass `--annotations <path>` to point at them explicitly.
+
+**Machine signals are shallow on purpose.** The analyzer labels each candidate signal by kind — a *heuristic-signal* (keyword match) is a weak guess that is often a non-issue, a *observed-signal* is grounded in a recorded click/request. They are a starting glance, never the requirements. Design-direction feedback (like "test other background patterns" or "buttons should show play status") produces no signals at all yet is full of requirements — the synthesis pass in the reference is the source of truth. When a reviewer says they **couldn't evaluate** something because a state wasn't reachable, resolve it (reachability check against the product repo) rather than filing it blindly as a requirement — see `references/extensive-analysis.md`.
+
 The feedback artifact format used by the extensive path is documented in `references/compound-engineering-feedback-format.md`.
 
 ## Local transcription (whisper.cpp)
