@@ -179,7 +179,7 @@ async function main() {
         const zipPath = join(outDir, "recording.zip");
         writeFileSync(zipPath, buf);
         process.stdout.write(`wrote recording (${buf.length} bytes) -> ${zipPath}\n`);
-        process.stdout.write(`\nAnalyze it: run /inc:riffrec-feedback on ${zipPath}\n`);
+        process.stdout.write(`\nAnalyze it: run /inc:review-feedback on ${zipPath}\n`);
       } else {
         process.stdout.write("(no recording on this session)\n");
       }

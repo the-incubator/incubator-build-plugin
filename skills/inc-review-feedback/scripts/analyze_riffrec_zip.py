@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="Directory for extracted artifacts. Defaults to docs/brainstorms/riffrec-feedback/<source-stem> when available.",
+        help="Directory for extracted artifacts. Defaults to docs/brainstorms/review-feedback/<source-stem> when available.",
     )
     parser.add_argument("--topic", help="Kebab-case topic for requirements-kickoff frontmatter")
     parser.add_argument(
@@ -77,7 +77,7 @@ def parse_args() -> argparse.Namespace:
 
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
-    return re.sub(r"-{2,}", "-", slug) or "riffrec-feedback"
+    return re.sub(r"-{2,}", "-", slug) or "review-feedback"
 
 
 def read_json(path: Path, default: Any) -> Any:
@@ -109,8 +109,8 @@ def default_output_dir(zip_path: Path) -> Path:
     cwd = Path.cwd()
     stem = slugify(zip_path.stem)
     if (cwd / "docs" / "brainstorms").is_dir():
-        return cwd / "docs" / "brainstorms" / "riffrec-feedback" / stem
-    return cwd / "riffrec-feedback" / stem
+        return cwd / "docs" / "brainstorms" / "review-feedback" / stem
+    return cwd / "review-feedback" / stem
 
 
 def classify_source(source_path: Path) -> str:

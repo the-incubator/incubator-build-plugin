@@ -10,7 +10,7 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    python scripts/analyze_riffrec_zip.py /path/to/input
    ```
 
-   Use `--output-dir <dir>` when the artifact should live somewhere specific. In a repo with `docs/brainstorms/`, the default output goes under `docs/brainstorms/riffrec-feedback/`.
+   Use `--output-dir <dir>` when the artifact should live somewhere specific. In a repo with `docs/brainstorms/`, the default output goes under `docs/brainstorms/review-feedback/`.
 
 2. Read the generated `analysis.md`, `problem-analysis.md`, `review-prompt.md`, and `requirements-kickoff.md`.
 
