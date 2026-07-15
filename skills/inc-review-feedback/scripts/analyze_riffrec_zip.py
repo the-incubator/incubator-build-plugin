@@ -785,6 +785,7 @@ def write_analysis_md(
     transcript: dict[str, Any],
     moments: list[dict[str, Any]],
     findings: list[dict[str, Any]],
+    annotations: list[dict[str, Any]],
     repo_root: Path,
 ) -> None:
     lines: list[str] = []
@@ -807,6 +808,18 @@ def write_analysis_md(
     else:
         lines.append(f"_Transcript unavailable: {transcript.get('reason') or transcript.get('status', 'unknown')}._")
     lines.append("")
+    if annotations:
+        lines.append("## Reviewer Notes")
+        lines.append("")
+        lines.append("Written click-comments the reviewer left on the preview. Treat these as first-class requirements alongside the spoken transcript.")
+        lines.append("")
+        for note in annotations:
+            comment = (note.get("comment") or "").strip() or "(no comment)"
+            element = note.get("element") or ""
+            page = note.get("pageUrl") or ""
+            suffix = " - ".join(part for part in [f"on `{element}`" if element else "", page] if part)
+            lines.append(f"- {comment}" + (f" ({suffix})" if suffix else ""))
+        lines.append("")
     lines.append("## Selected Moments")
     lines.append("")
     if moments:
@@ -897,7 +910,7 @@ def write_requirements_kickoff(
         "  - **Actors:** A1, A2, A3",
         "  - **Steps:** Extract or copy the source, transcribe media or read notes, select high-signal moments when video exists, inspect screenshots when available, confirm problems, and write requirements with supporting evidence.",
         "  - **Outcome:** Confirmed product problems are represented as requirements with transcript support and screenshot support when visual evidence exists.",
-        "  - **Covered by:** R1, R2, R3",
+        "  - **Covered by:** R1, R2",
         "",
         "---",
         "",
@@ -909,18 +922,26 @@ def write_requirements_kickoff(
         "",
         "**Product requirements from this session**",
         "",
-        "> The agent fills these from the transcript and frames. The items below are"
-        " machine-detected _signals to verify_, not requirements — a heuristic-signal"
-        " may be a non-issue, and real requirements (including ones with no keyword or"
-        " DOM signal at all) must be added by reading the transcript directly.",
+        "> The agent fills these by reading the transcript and the reviewer notes. Real"
+        " requirements (including ones with no keyword or DOM signal at all) go here as"
+        " `R#` items during synthesis. The machine signals below are deliberately NOT"
+        " numbered as requirements.",
+        "",
+        "_None extracted yet — synthesize from the transcript, reviewer notes, and frames._",
+        "",
+        "**Machine signals — verify, do not treat as requirements**",
+        "",
+        "> Heuristic keyword hits and observed events. A heuristic-signal is frequently a"
+        " non-issue (design-direction feedback trips the keyword scan). These are a"
+        " starting glance only; never carry them into `inc:plan` as R-items.",
         "",
     ]
 
-    for index, finding in enumerate(findings, start=3):
+    for finding in findings:
         kind = finding.get("kind", "signal")
         lines.append(
-            f"- R{index}. _(verify — {kind}, {finding.get('confidence', 'unrated')})_"
-            f" {finding['id']}: {finding['title']}."
+            f"- [{kind}] {finding['id']}: {finding['title']} "
+            f"(confidence: {finding.get('confidence', 'unrated')})"
         )
 
     lines.extend(
@@ -1077,6 +1098,7 @@ def write_problem_analysis(
     transcript: dict[str, Any],
     moments: list[dict[str, Any]],
     findings: list[dict[str, Any]],
+    annotations: list[dict[str, Any]],
     repo_root: Path,
 ) -> None:
     complaint_text = transcript.get("text") or ""
@@ -1105,17 +1127,24 @@ def write_problem_analysis(
     if not findings:
         lines.append("1. No functional problems were detected automatically; inspect transcript and frames manually.")
 
-    lines.extend(
-        [
-            "",
-            "## 3. Requirements",
-            "",
-            "1. Convert confirmed problems into requirements after evidence review. State what capability or behavior is needed and why, without prescribing implementation.",
-            "",
-            "## 4. Usability/UX Problems",
-            "",
-        ]
+    lines.extend(["", "## 3. Requirements", ""])
+    req_index = 1
+    for note in annotations:
+        comment = (note.get("comment") or "").strip()
+        if not comment:
+            continue
+        element = note.get("element") or ""
+        lines.append(
+            f"{req_index}. Reviewer written request: {comment}"
+            + (f" (on `{element}`)" if element else "")
+            + " — treat as a first-class requirement; capture rationale and specifics during synthesis."
+        )
+        req_index += 1
+    lines.append(
+        f"{req_index}. Convert confirmed problems into requirements after evidence review. State what capability or behavior is needed and why, without prescribing implementation."
     )
+
+    lines.extend(["", "## 4. Usability/UX Problems", ""])
 
     for index, moment in enumerate(moments, start=1):
         screenshot = markdown_link(moment.get("screenshot"), output_path.parent, repo_root)
@@ -1124,6 +1153,15 @@ def write_problem_analysis(
         )
     if not moments:
         lines.append("1. Review the transcript or notes for workflow friction, confusion, and unmet expectations.")
+
+    lines.extend(
+        [
+            "",
+            "## 5. Caveats & Open Questions",
+            "",
+            "1. Anything the reviewer could not evaluate (a state that was not reachable, e.g. \"nothing live on the backend to see the played state\"), was unsure about, or explicitly raised as a question. Do not fold these into Functional Problems. Resolve each per the reachability step in `extensive-analysis.md`: check whether the state is reachable in the product repo and record the instructions, or mark it a grounded requirement if it genuinely does not exist yet. If nothing applies, state \"None identified.\"",
+        ]
+    )
 
     lines.append("</analysis>")
     output_path.write_text("\n".join(lines) + "\n")
@@ -1186,6 +1224,7 @@ def write_review_prompt(
         "2. **Functional Problems**: Issues related to behavior, workflow, or functionality mentioned in discussion",
         "3. **Requirements**: New features or capabilities requested",
         "4. **Usability/UX Problems**: Issues related to user experience, confusion, or workflow friction",
+        "5. **Caveats & Open Questions**: Anything the reviewer could not evaluate (a state that was not reachable), was unsure about, or raised as a question. Keep these separate from Functional Problems; state \"None identified\" if there are none.",
         "",
         "Format each problem as a clear, numbered item within its category.",
         "",
@@ -1194,14 +1233,22 @@ def write_review_prompt(
     output_path.write_text("\n".join(lines) + "\n")
 
 
-def load_sidecar(source_path: Path, annotations_arg: Path | None) -> dict[str, Any]:
+def load_sidecar(source_path: Path, annotations_arg: Path | None, source_kind: str) -> dict[str, Any]:
     """Fold in the collector's reviewer context that lives *next to* the zip, not
     inside it: the reviewer's written click-comments (annotations.json) and their
     name (the collector session.json). These carry direct reviewer intent that the
-    recording alone does not."""
+    recording alone does not.
+
+    Sibling auto-detection is limited to collector bundles (``riffrec_zip``). A
+    standalone video/audio/notes file can sit in an arbitrary directory (e.g.
+    ``~/Downloads``) that happens to hold an unrelated collector ``session.json`` —
+    auto-loading it there would mislabel this feedback with another submission's
+    reviewer and project. An explicit ``--annotations`` path is always honored."""
     parent = source_path.parent
+    is_collector_bundle = source_kind == "riffrec_zip"
+
     annotations: list[dict[str, Any]] = []
-    ann_path = annotations_arg or (parent / "annotations.json")
+    ann_path = annotations_arg or ((parent / "annotations.json") if is_collector_bundle else None)
     if ann_path and ann_path.exists():
         payload = read_json(ann_path, [])
         if isinstance(payload, dict):
@@ -1211,10 +1258,11 @@ def load_sidecar(source_path: Path, annotations_arg: Path | None) -> dict[str, A
 
     reviewer = None
     project = None
-    collector_session = read_json(parent / "session.json", {})
-    if isinstance(collector_session, dict):
-        reviewer = collector_session.get("reviewerName")
-        project = collector_session.get("project")
+    if is_collector_bundle:
+        collector_session = read_json(parent / "session.json", {})
+        if isinstance(collector_session, dict):
+            reviewer = collector_session.get("reviewerName")
+            project = collector_session.get("project")
 
     return {"annotations": annotations, "reviewer": reviewer, "project": project}
 
@@ -1240,6 +1288,20 @@ def _esc(value: Any) -> str:
     return html_lib.escape(str(value if value is not None else ""))
 
 
+def _safe_href(value: Any) -> str | None:
+    """Return an escaped href only for http(s) or root-relative URLs. The session
+    URL comes from the (untrusted) feedback artifact, so a crafted `javascript:` or
+    `data:` value must never become a live link the documented workflow tells the
+    user to click. Anything else returns None so the caller renders it as plain text."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    lowered = raw.lower()
+    if lowered.startswith(("http://", "https://")) or raw.startswith("/"):
+        return _esc(raw)
+    return None
+
+
 def write_html_report(
     output_path: Path,
     source_path: Path,
@@ -1249,7 +1311,8 @@ def write_html_report(
     moments: list[dict[str, Any]],
     findings: list[dict[str, Any]],
     sidecar: dict[str, Any],
-    recording_path: Path | None,
+    media_path: Path | None,
+    media_is_video: bool,
 ) -> None:
     """A single self-contained HTML report — the consumable surface for a feedback
     session. Frames and the recording are referenced by relative path (not inlined),
@@ -1260,20 +1323,24 @@ def write_html_report(
     project = sidecar.get("project") or session.get("url") or "unknown"
     annotations = sidecar.get("annotations") or []
     url = session.get("url", "unknown")
+    url_href = _safe_href(url)
+    page_html = f'<a href="{url_href}">{_esc(url)}</a>' if url_href else f'<code>{_esc(url)}</code>'
     try:
         duration = float(session.get("duration_seconds") or 0)
     except (TypeError, ValueError):
         duration = 0.0
     started = session.get("started_at", "unknown")
 
-    # Relative link to the recording so <video> plays when the report is opened
-    # from its output dir. Recordings stay local-only per the skill's privacy rule.
-    video_rel = None
-    if recording_path and recording_path.exists():
+    # Relative link to the recording so the player works when the report is opened
+    # from its output dir. Media stays local-only per the skill's privacy rule. For
+    # audio-only sources this is the voice track, played via <audio> so the transcript
+    # seek buttons still have media to drive.
+    media_rel = None
+    if media_path and media_path.exists():
         try:
-            video_rel = os.path.relpath(recording_path, output_path.parent)
+            media_rel = os.path.relpath(media_path, output_path.parent)
         except ValueError:
-            video_rel = None
+            media_rel = None
 
     seg_rows = []
     for seg in transcript.get("segments") or []:
@@ -1315,7 +1382,7 @@ def write_html_report(
         )
         seek = (
             f'<button class="seek" data-t="{t:.2f}">▶ {_esc(format_time(t))}</button>'
-            if video_rel
+            if media_rel
             else f'<span class="ts">{_esc(format_time(t))}</span>'
         )
         moment_cards.append(
@@ -1347,13 +1414,16 @@ def write_html_report(
 
     full_transcript = _esc((transcript.get("text") or "").strip()) or '<span class="muted">Transcript unavailable.</span>'
 
-    video_block = (
-        f'<video id="rec" controls preload="metadata" src="{_esc(video_rel)}"></video>'
-        f'<p class="muted">Recording is local-only ({_esc(source_path.name)}); it is not embedded, '
-        "so this player works when the report is opened from its own folder.</p>"
-        if video_rel
-        else '<p class="muted">No video recording available for this source.</p>'
-    )
+    if media_rel:
+        player_tag = "video" if media_is_video else "audio"
+        media_kind = "Recording" if media_is_video else "Audio"
+        video_block = (
+            f'<{player_tag} id="rec" controls preload="metadata" src="{_esc(media_rel)}"></{player_tag}>'
+            f'<p class="muted">{media_kind} is local-only ({_esc(source_path.name)}); it is not embedded, '
+            "so this player works when the report is opened from its own folder.</p>"
+        )
+    else:
+        video_block = '<p class="muted">No recording available for this source.</p>'
 
     html = f"""<!doctype html>
 <html lang="en">
@@ -1398,7 +1468,8 @@ def write_html_report(
   .seg-text {{ flex: 1 1 auto; }}
   details.full {{ margin-top: 12px; }}
   details.full pre {{ white-space: pre-wrap; background: #131a22; border: 1px solid #1e2732; border-radius: 10px; padding: 14px 16px; }}
-  video {{ width: 100%; border-radius: 10px; border: 1px solid #1e2732; background: #000; }}
+  video, audio {{ width: 100%; border-radius: 10px; border: 1px solid #1e2732; background: #000; }}
+  audio {{ background: #131a22; }}
   .badge {{ font-size: 11px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; font-weight: 700; }}
   .badge.warn {{ background: #3a2d12; color: #ffca6b; }}
   .badge.ok {{ background: #12321f; color: #7ee0a3; }}
@@ -1416,7 +1487,7 @@ def write_html_report(
     <h1>Product feedback · {_esc(reviewer)}</h1>
     <div class="kv">
       <span>Project: <code>{_esc(project)}</code></span>
-      <span>Page: <a href="{_esc(url)}">{_esc(url)}</a></span>
+      <span>Page: {page_html}</span>
       <span>Duration: {_esc(format_time(duration))}</span>
       <span>Recorded: {_esc(started)}</span>
       <span>Source: {_esc(source_kind)}</span>
@@ -1528,6 +1599,12 @@ def main() -> int:
     extract_frames(source["recording_path"], frames_dir, moments)
     findings = summarize_candidate_findings(moments, transcript.get("text", ""))
 
+    # Load the reviewer sidecar (written click-comments + reviewer name) BEFORE the
+    # markdown artifacts, so those synthesis inputs — which the extensive workflow
+    # tells agents to read — actually contain the first-class written feedback.
+    sidecar = load_sidecar(source_path, args.annotations, source_kind)
+    annotations = sidecar.get("annotations") or []
+
     topic = slugify(args.topic or source_path.stem)
     repo_root = Path.cwd()
     analysis_md = output_dir / "analysis.md"
@@ -1535,17 +1612,20 @@ def main() -> int:
     review_prompt_md = output_dir / "review-prompt.md"
     source_materials_md = output_dir / "source-materials.md"
     kickoff_md = output_dir / "requirements-kickoff.md"
-    write_analysis_md(analysis_md, source_path, source_kind, session, events, transcript, moments, findings, repo_root)
-    write_problem_analysis(problem_analysis_md, transcript, moments, findings, repo_root)
+    write_analysis_md(analysis_md, source_path, source_kind, session, events, transcript, moments, findings, annotations, repo_root)
+    write_problem_analysis(problem_analysis_md, transcript, moments, findings, annotations, repo_root)
     write_review_prompt(review_prompt_md, transcript, moments, repo_root)
     write_source_materials(source_materials_md, source_path, source_kind, session, transcript, moments, raw_dir, frames_dir, repo_root)
     write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root)
 
-    sidecar = load_sidecar(source_path, args.annotations)
+    # Audio-only sources have no recording_path; fall back to the voice track so the
+    # report still gets a player (rendered as <audio>) and the transcript seek works.
+    media_path = source["recording_path"] or source["transcription_path"]
+    media_is_video = source["recording_path"] is not None
     report_html = output_dir / "report.html"
     write_html_report(
         report_html, source_path, source_kind, session, transcript,
-        moments, findings, sidecar, source["recording_path"],
+        moments, findings, sidecar, media_path, media_is_video,
     )
 
     structured = {
