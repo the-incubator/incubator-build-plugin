@@ -42,7 +42,7 @@ Stage 2 is implementation itself - you and the user write the code; there is no 
   Then watches CI and the AI reviewers and auto-resolves feedback in a loop, pausing only for items that need a human decision.
   Stops at a feedback-clean PR.
 
-- **`/inc:merge-pr-5`** (stage 5) - Pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads) plus a deploy-window check that respects the team's window rules from `/inc:setup-deploy` (default when none are set: risk-adaptive — low-risk changes just ship, riskier ones prompt a quick confirm).
+- **`/inc:merge-pr-5`** (stage 5) - Pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads) plus a deploy-window check that respects the team's window rules from `/inc:setup-deploy` (default when none are set: risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm).
   If all pass, squash-merges, deletes the branch, and actively observes the deploy.
 
 ## Picking the review tier

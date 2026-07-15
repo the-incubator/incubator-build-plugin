@@ -89,6 +89,18 @@ check() {
   PASS=$((PASS+1))
 }
 
+# assert full stdout contains $2 on some line (not just the VERDICT line).
+check_out() {
+  local name="$1" want="$2" out
+  out=$(run)
+  if printf '%s\n' "$out" | grep -qF "$want"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"
+    echo "    got GATE3 lines: $(printf '%s\n' "$out" | grep -E 'GATE3_WINDOW|RULE=|RISK=' | tr '\n' ' ')"
+  fi
+}
+
 # --- cases ---------------------------------------------------------------
 
 reset_case
@@ -151,6 +163,21 @@ check "explicit none window -> GO" "VERDICT: GO"
 reset_case; printf '## Deploy Configuration\n- Deploy window: none  <!-- deploy anytime -->\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
 check "none with trailing comment -> GO" "VERDICT: GO"
 
+# Non-standard casing: the detect grep is case-insensitive, so the prefix strip
+# must be too - an uppercased "NONE" field must still normalize to no-rule.
+reset_case; printf '## Deploy Configuration\n- DEPLOY WINDOW: none\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "uppercase field + none -> GO" "VERDICT: GO"
+
+# The emitted RULE= must have the label prefix stripped cleanly (no leading
+# space, no "- Deploy window:" residue) so the orchestrator reads a clean rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET; freeze Fri-Sun\n' > "$REPO/deploy.md"
+check_out "RULE prefix stripped clean" "RULE=Mon-Thu after 1pm ET; freeze Fri-Sun"
+
+# Fallback chain: with no deploy.md, a rule in CLAUDE.md is still honored.
+reset_case; rm -f "$REPO/deploy.md"; printf '# repo\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/CLAUDE.md"
+check "window rule via CLAUDE.md fallback -> NEEDS_DECISION" "gate3-window-decision"
+rm -f "$REPO/CLAUDE.md"
+
 # A real window rule -> NEEDS_DECISION so the orchestrator evaluates now-vs-rule.
 reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET; freeze Fri-Sun\n' > "$REPO/deploy.md"; DOW=2; HOUR=14
 check "window rule present -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
@@ -184,6 +211,18 @@ reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm 
 MERGE_GATES_SIGNALS_OVERRIDE="largediff"
 check "window rule wins over risk-confirm" "gate3-window-decision" "gate3-risk-confirm"
 rm -f "$REPO/deploy.md"
+
+# Real risk-signal computation (no override): a .sql file in the diff vs
+# origin/main fires the `schema` signal -> elevated -> gate3-risk-confirm. This
+# exercises the actual classifier, not the MERGE_GATES_SIGNALS_OVERRIDE hook.
+# Placed last because it mutates the test repo's git state (adds a commit + an
+# origin/main ref); nothing runs after it except the summary.
+reset_case
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
+printf 'CREATE TABLE t (id int);\n' > "$REPO/migration.sql"
+git -C "$REPO" add migration.sql 2>/dev/null; git -C "$REPO" commit -q -m "add schema migration"
+check "real .sql diff -> schema signal -> risk-confirm" "gate3-risk-confirm"
+check_out "real schema signal emitted" "SIGNALS=schema"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"

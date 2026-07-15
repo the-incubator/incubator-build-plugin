@@ -316,7 +316,7 @@ WINDOW_RULE=$(
     || grep -iE '^[-*[:space:]]*deploy window:' DEPLOY.md 2>/dev/null \
     || grep -iE '^[-*[:space:]]*deploy window:' CLAUDE.md 2>/dev/null; } \
   | head -n1 \
-  | sed -E 's/^[-*[:space:]]*[Dd]eploy [Ww]indow:[[:space:]]*//; s/<!--.*-->//' \
+  | sed -E 's/^[^:]*:[[:space:]]*//; s/<!--.*-->//; s/[[:space:]]+$//' \
   | tr -d '\r'
 )
 # Normalize: an explicit "none"/"any"/"anytime" (or an empty/absent field) means
@@ -366,7 +366,7 @@ echo "  SIGNALS=$SIGNALS"
 echo "  DIFFSTAT=${DIFFSTAT:-none}"
 
 # ---------------------------------------------------------------------------
-# Verdict - computed purely from the per-gate blocked flags + GATE3_CLASS.
+# Verdict - computed purely from the per-gate blocked flags + GATE3_HAS_RULE / GATE3_RISK.
 # ---------------------------------------------------------------------------
 # Hard blocks (pre-flight, Gate 1, Gate 2) fail outright -> EXIT=1 / BLOCK.
 # Gate 3 is the user's call -> EXIT=2 / NEEDS_DECISION, only when no hard gate

@@ -198,16 +198,16 @@ Nothing detected. Use AskUserQuestion to gather: how deploys trigger (auto-on-pu
 deploy script / manual / does-not-deploy), the production URL, and how to check success (HTTP health
 check / CLI command / GH Actions status / just-load-the-URL). Persist whatever the user gives.
 
-## Step 3.5 — Deploy window rules (when may deploys go out?)
+## Step 3.5 - Deploy window rules (when may deploys go out?)
 
-Some teams restrict *when* a merge that triggers a production deploy is allowed — e.g. only during
+Some teams restrict *when* a merge that triggers a production deploy is allowed - e.g. only during
 staffed hours so someone can respond if it breaks, or a freeze over a holiday. `inc:merge-pr-5`
 reads the rule you persist here and evaluates it against the current time before merging.
 
-Ask the user (AskUserQuestion) — **the default is no fixed window**:
+Ask the user (AskUserQuestion) - **the default is no fixed window**:
 
 - A) **No deploy-window rules** *(default, recommended)* → persist `Deploy window: none`. This does **not**
-  mean "never check" — with no window rule, `inc:merge-pr-5` still does a lightweight risk assessment and
+  mean "never check" - with no window rule, `inc:merge-pr-5` still does a lightweight risk assessment and
   prompts a quick confirm on a riskier change (schema/migration, backfill, large diff); low-risk changes
   just ship.
 - B) **Yes, there's a time window** → capture the rule in the user's own words as a single concise line,
@@ -215,7 +215,7 @@ Ask the user (AskUserQuestion) — **the default is no fixed window**:
 
 Keep whatever the user gives you to **one line** (the merge skill and the gates script read a single
 `Deploy window:` field). If the user describes something multi-part, summarize it into one line that
-still captures the days/hours/freezes — the merge skill interprets this text against the clock, so it
+still captures the days/hours/freezes - the merge skill interprets this text against the clock, so it
 must be legible, not a code. If the user isn't sure, default to `none`.
 
 Persist the answer as the `Deploy window:` line in the Deploy Configuration block (Step 4a).
@@ -239,7 +239,7 @@ merge/ship skills execute them verbatim. Use a fenced block per command so nothi
 - Reauth: `<login command the user runs themselves if auth lapses, e.g. vercel login | railway login | gcloud auth login>`
 - Deploy window: <none | one-line rule, e.g. Mon–Thu after 1pm ET, freeze Fri–Sun>
 
-> The `Deploy window:` line is policy, not a command. `none` (or an absent line) means no restriction —
+> The `Deploy window:` line is policy, not a command. `none` (or an absent line) means no restriction -
 > the merge skill just deploys. Any other text is the team's rule, which the merge skill evaluates
 > against the current time before merging. Keep it to one legible line.
 

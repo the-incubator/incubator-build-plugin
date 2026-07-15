@@ -6,7 +6,7 @@ allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), B
 
 # Merge PR: Production Deploy Readiness Check
 
-Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third — the deploy window — respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
+Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third - the deploy window - respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
 **Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
@@ -168,7 +168,7 @@ The AI detection covers the common cases (Greptile, CodeRabbit, Copilot, Claude,
 
 ## Gate 3: Deployment Window
 
-The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window — the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
+The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window - the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
 
 The gates script does **not** interpret a window rule (matching a natural-language policy like "Mon–Thu after 1pm ET; freeze during the Dec holiday" against the clock is your job). It detects whether a rule exists, emits the current Eastern time as ground truth, classifies the change's risk (`RISK=low|elevated`), and lists the risk signals. Read the `GATE3_WINDOW:` line, the `RISK=` sub-line, and the `SIGNALS=` / `DIFFSTAT=` sub-lines from the block:
 
@@ -191,7 +191,7 @@ When no window rule is configured and the change carries risk signals, the scrip
 
 **Present a short assessment and ask** (AskUserQuestion):
 
-> **Gate 3 (risk check):** No deploy-window rule is configured, so this can ship anytime — but the change carries risk signals worth a look before it goes to production:
+> **Gate 3 (risk check):** No deploy-window rule is configured, so this can ship anytime - but the change carries risk signals worth a look before it goes to production:
 >
 > - Signals: `<list signals>` (`<DIFFSTAT>`).
 >
@@ -203,11 +203,11 @@ Resolve:
 - **"Ship it"** → **Gate 3 OK (elevated risk, user confirmed: `<signals>`).**
 - **"Hold"** → **Gate 3 BLOCK - user held on elevated risk (`<signals>`).** Stop; do not merge.
 
-Record the signals and the user's choice in the final report. A low-risk change (`RISK=low`, `VERDICT: GO`) never reaches this prompt — it just ships.
+Record the signals and the user's choice in the final report. A low-risk change (`RISK=low`, `VERDICT: GO`) never reaches this prompt - it just ships.
 
 ### Evaluating a configured window rule
 
-The script reports `VERDICT: NEEDS_DECISION` whenever a rule is present (when no hard gate already blocked) — that just means **you** must judge now-vs-rule; it does *not* mean you must always ask the user.
+The script reports `VERDICT: NEEDS_DECISION` whenever a rule is present (when no hard gate already blocked) - that just means **you** must judge now-vs-rule; it does *not* mean you must always ask the user.
 
 **Step 3a - Read the rule and the current time.** From the block:
 - `RULE=` - the team's window policy, verbatim (e.g. `Mon-Thu after 1pm ET; freeze Fri-Sun`).
@@ -217,7 +217,7 @@ The script reports `VERDICT: NEEDS_DECISION` whenever a rule is present (when no
 
 - **Window open** (the current time clearly satisfies the rule) → **Gate 3 OK** - proceed to merge without asking. Note "within deploy window (`<rule>`)" in the report.
 - **Window closed** (the current time violates the rule, or a freeze applies) → this is the user's call. Surface the risk signals and a **clear, direct recommendation**, then ask (do not silently block or silently pass).
-- **Ambiguous** (you genuinely can't tell whether the rule is satisfied — e.g. an underspecified or unusual policy) → treat as closed and ask, showing the rule so the user can decide.
+- **Ambiguous** (you genuinely can't tell whether the rule is satisfied - e.g. an underspecified or unusual policy) → treat as closed and ask, showing the rule so the user can decide.
 
 **Step 3c - When the window is closed, read the risk signals.** The `SIGNALS=` line lists which fired (space-separated, or `none`):
 
