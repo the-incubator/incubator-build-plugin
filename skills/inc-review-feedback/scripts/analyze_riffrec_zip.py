@@ -91,8 +91,8 @@ def read_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text())
-    except json.JSONDecodeError:
+        return json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError):
         return default
 
 
@@ -1245,7 +1245,6 @@ def write_html_report(
     source_path: Path,
     source_kind: str,
     session: dict[str, Any],
-    events: list[dict[str, Any]],
     transcript: dict[str, Any],
     moments: list[dict[str, Any]],
     findings: list[dict[str, Any]],
@@ -1253,14 +1252,18 @@ def write_html_report(
     recording_path: Path | None,
 ) -> None:
     """A single self-contained HTML report — the consumable surface for a feedback
-    session. Frames are inlined as data URIs so the file is portable; the recording
-    is referenced by relative path so moments can seek the video in place. The
-    ``#synthesis`` section is a placeholder the reviewing agent fills from the rubric."""
+    session. Frames and the recording are referenced by relative path (not inlined),
+    so the file stays small and agent-editable and moments can seek the video in
+    place; it renders when opened from its own output dir. The ``#synthesis`` section
+    is a placeholder the reviewing agent fills from the rubric."""
     reviewer = sidecar.get("reviewer") or "Unknown reviewer"
     project = sidecar.get("project") or session.get("url") or "unknown"
     annotations = sidecar.get("annotations") or []
     url = session.get("url", "unknown")
-    duration = session.get("duration_seconds") or 0
+    try:
+        duration = float(session.get("duration_seconds") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
     started = session.get("started_at", "unknown")
 
     # Relative link to the recording so <video> plays when the report is opened
@@ -1541,7 +1544,7 @@ def main() -> int:
     sidecar = load_sidecar(source_path, args.annotations)
     report_html = output_dir / "report.html"
     write_html_report(
-        report_html, source_path, source_kind, session, events, transcript,
+        report_html, source_path, source_kind, session, transcript,
         moments, findings, sidecar, source["recording_path"],
     )
 
