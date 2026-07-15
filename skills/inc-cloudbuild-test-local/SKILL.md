@@ -68,16 +68,17 @@ Once the dry run is clean, execute the steps for real in local Docker:
 cloud-build-local --config=cloudbuild.yaml --dryrun=false .
 ```
 
-- By default images are built but **not pushed** to any registry — safe.
-- Add substitutions your build expects (Cloud Build does not inject `$PROJECT_ID`, `$SHORT_SHA`, etc. locally, so supply the ones your steps read):
+- **This executes every build step for real.** `--dryrun=false` runs each step in Docker. `--push` only controls whether the final `images:` block is pushed to a registry — it does **not** neutralize a step that itself deploys or publishes (`gcloud run deploy`, `kubectl apply`, a `docker push` inside a step, `gsutil cp`, etc.). Those hit real infrastructure when run locally. If the config contains deploy/publish steps, keep it at `--dryrun=true`, or repoint those steps at a throwaway/sandbox target before a real run.
+- The final `images:` push is skipped by default (no `--push`) — that part is safe.
+- Supply the `_`-prefixed **user** substitutions your steps read. Built-in substitutions like `$PROJECT_ID` are filled from your active gcloud config locally — do **not** pass `PROJECT_ID` in `--substitutions`; the local builder rejects built-ins there. VCS-derived built-ins (`$COMMIT_SHA`, `$SHORT_SHA`, `$TAG_NAME`, `$BUILD_ID`) aren't populated locally and can't be injected as built-ins either, so a step that needs them must read a `_`-prefixed variable you can override:
   ```bash
   cloud-build-local \
     --config=cloudbuild.yaml \
     --dryrun=false \
-    --substitutions=_ENV=staging,SHORT_SHA=local,COMMIT_SHA=local \
+    --substitutions=_ENV=staging,_TAG=local \
     .
   ```
-- Only add `--push` if you actually intend to push resulting images to the registry (usually you don't for a local test):
+- Add `--push` only if you actually intend to push the `images:` artifacts to the registry (usually you don't for a local test):
   ```bash
   cloud-build-local --config=cloudbuild.yaml --dryrun=false --push .
   ```
@@ -91,7 +92,7 @@ A successful real run means every step exited 0 locally — a strong signal the 
 | `--config=<path>` | `cloudbuild.yaml` | Path to the Cloud Build config to test. |
 | `--dryrun` | `true` | `true` = only parse + print the commands; `false` = actually run the steps. |
 | `--push` | `false` | Push resulting images to the registry after the build. Leave off for local validation. |
-| `--substitutions=K=V,K2=V2` | none | Provide substitution variables the steps reference (`$PROJECT_ID`, `$_FOO`, etc. are **not** auto-populated locally). |
+| `--substitutions=K=V,K2=V2` | none | Provide the `_`-prefixed user substitutions steps reference. Built-ins can't be passed here — `$PROJECT_ID` is auto-filled from gcloud config; VCS-derived ones (`$COMMIT_SHA`, `$SHORT_SHA`, `$TAG_NAME`) aren't populated locally. |
 | `--no-source` | `false` | Run the config without a source directory (for builds that don't need a workspace). |
 | `--write-workspace=<dir>` | none | Copy the resulting `/workspace` out to a host directory to inspect artifacts a build produced. |
 | `--bind-mount-source` | `false` | Bind-mount the source into the workspace instead of copying it in. |
@@ -105,7 +106,7 @@ Run `cloud-build-local --help` for the full, version-current list.
 
 - **Only one build runs at a time** per host.
 - **Linux and macOS only.**
-- Some hosted-only features don't behave identically locally — automatic substitutions (`$PROJECT_ID`, `$BUILD_ID`, `$COMMIT_SHA`, `$SHORT_SHA`, `$TAG_NAME`), Cloud Build **secrets / Secret Manager / KMS** integration, IAM as the Cloud Build service account, `availableSecrets`, and network/worker-pool options. Supply substitutions manually and don't treat secret-dependent steps as fully verified.
+- Some hosted-only features don't behave identically locally — VCS-derived substitutions (`$BUILD_ID`, `$COMMIT_SHA`, `$SHORT_SHA`, `$TAG_NAME`) aren't populated (only `$PROJECT_ID` is, from gcloud config), and Cloud Build **secrets / Secret Manager / KMS** integration, IAM as the Cloud Build service account, `availableSecrets`, and network/worker-pool options differ. Refactor steps that need those built-ins to read overridable `_`-prefixed vars, and don't treat secret-dependent steps as fully verified.
 - A clean local run validates **config shape and step logic**; it does not guarantee identical behavior for steps that depend on the hosted environment. Still push and watch the real run for those.
 
 If a step fails only locally because of one of these gaps (e.g. a missing auto-substitution), note it rather than "fixing" the config to satisfy the local tool.
@@ -118,7 +119,7 @@ Different need: this runs your **service/container** locally the way Cloud Run w
 gcloud beta code dev
 ```
 
-- Serves at `http://localhost:8080/`. Use `--local-port=PORT` for a different port.
+- It prints the local URL it's serving on (commonly `http://localhost:8080/`); pass `--local-port=8080` to pin the port rather than relying on the default.
 - To let the local service reach GCP APIs with your credentials:
   ```bash
   gcloud auth application-default login
