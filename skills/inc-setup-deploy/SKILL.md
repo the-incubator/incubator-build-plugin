@@ -204,10 +204,13 @@ Some teams restrict *when* a merge that triggers a production deploy is allowed 
 staffed hours so someone can respond if it breaks, or a freeze over a holiday. `inc:merge-pr-5`
 reads the rule you persist here and evaluates it against the current time before merging.
 
-Ask the user (AskUserQuestion) — **the default is no restriction (deploy anytime)**:
+Ask the user (AskUserQuestion) — **the default is no fixed window**:
 
-- A) **No deploy-window rules — deploy anytime** *(default, recommended)* → persist `Deploy window: none`.
-- B) **Yes, there's a window** → capture the rule in the user's own words as a single concise line,
+- A) **No deploy-window rules** *(default, recommended)* → persist `Deploy window: none`. This does **not**
+  mean "never check" — with no window rule, `inc:merge-pr-5` still does a lightweight risk assessment and
+  prompts a quick confirm on a riskier change (schema/migration, backfill, large diff); low-risk changes
+  just ship.
+- B) **Yes, there's a time window** → capture the rule in the user's own words as a single concise line,
   e.g. `Mon–Thu after 1pm ET, freeze Fri–Sun` or `business hours 9am–6pm PT weekdays; no deploys during the Dec 20–Jan 2 freeze`.
 
 Keep whatever the user gives you to **one line** (the merge skill and the gates script read a single

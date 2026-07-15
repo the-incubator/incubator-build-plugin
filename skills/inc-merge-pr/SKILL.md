@@ -1,12 +1,12 @@
 ---
 name: inc:merge-pr-5
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set: just deploy). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set: risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification
 ---
 
 # Merge PR: Production Deploy Readiness Check
 
-Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third — the deploy window — only applies when the team has configured deploy-window rules via `/inc:setup-deploy`. **With no window rules configured, the default is to just deploy** — the window gate passes silently.
+Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third — the deploy window — respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
 **Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
@@ -25,11 +25,11 @@ bash "$PLUGIN_ROOT/skills/inc-merge-pr/scripts/merge-gates.sh"
 
 The block's final line is `VERDICT: <GO | BLOCK | NEEDS_DECISION> [reasons=...]`:
 
-- **GO** - every hard gate passed and no deploy-window rule is configured (or none applies). Proceed to deploy-observation readiness, then merge.
+- **GO** - every hard gate passed and Gate 3 is clear: no window rule and a low-risk change (or a rule/risk case you already resolved to OK). Proceed to deploy-observation readiness, then merge.
 - **BLOCK** - at least one hard gate failed: freshness overlap, new env vars, or PR health. A gate that **could not be verified** (helper crashed, `gh` errored, quota exhausted, unparseable remote) is fail-safe and also blocks here - the script never lets an unverifiable gate pass. Report the failing gate(s) per the sections below and **stop** - do not run deploy-observation readiness, do not merge.
-- **NEEDS_DECISION** - no hard failure, but the team has a configured deploy-window rule that needs evaluating against the current time. Work the Gate 3 decision branch; merge only if it resolves to OK. (A closed window is the user's call, not a hard block.)
+- **NEEDS_DECISION** - no hard failure, but Gate 3 needs your call: either a configured deploy-window rule to evaluate against the current time (`gate3-window-decision`), or - with no window rule - an elevated-risk change to confirm before shipping (`gate3-risk-confirm`). Work the Gate 3 decision branch; merge only if it resolves to OK. (Neither is a hard block.)
 
-The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate3-window-decision`).
+The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate3-window-decision`, `gate3-risk-confirm`).
 
 ### Read freshness first (`PREFLIGHT_FRESHNESS:` line)
 
@@ -168,14 +168,42 @@ The AI detection covers the common cases (Greptile, CodeRabbit, Copilot, Claude,
 
 ## Gate 3: Deployment Window
 
-The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no window restriction — the default is to just deploy**, and the gates script emits `GATE3_WINDOW: none` so this gate passes silently.
+The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window — the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
 
-The gates script does **not** interpret the rule (matching a natural-language policy like "Mon–Thu after 1pm ET; freeze during the Dec holiday" against the clock is your job). It only detects whether a rule exists, emits the current Eastern time as ground truth, and collects the risk signals you use when a window is closed. Read the `GATE3_WINDOW:` line and its sub-lines from the block:
+The gates script does **not** interpret a window rule (matching a natural-language policy like "Mon–Thu after 1pm ET; freeze during the Dec holiday" against the clock is your job). It detects whether a rule exists, emits the current Eastern time as ground truth, classifies the change's risk (`RISK=low|elevated`), and lists the risk signals. Read the `GATE3_WINDOW:` line, the `RISK=` sub-line, and the `SIGNALS=` / `DIFFSTAT=` sub-lines from the block:
 
-| `GATE3_WINDOW:` value | Meaning | Action |
+| `GATE3_WINDOW:` | `RISK=` | Action |
 |-----------------------|---------|--------|
-| `none` | No `Deploy window:` rule configured (or it's `none`/`any`/`anytime`) | **Gate 3 OK** - no window restriction; proceed. |
-| `rules` | A rule is configured; the `RULE=` sub-line carries its verbatim text | Evaluate the rule against the current time (below). |
+| `none` | `low` | **Gate 3 OK** - no window rule, low-risk change; just ship. |
+| `none` | `elevated` | Run the **default risk confirmation** (below) - a quick confirm before shipping. |
+| `rules` | (any) | Evaluate the configured **window rule** against the current time (below). A rule takes precedence; it weighs the same risk signals when the window is closed. |
+
+### Default risk confirmation (no window rule)
+
+When no window rule is configured and the change carries risk signals, the script reports `VERDICT: NEEDS_DECISION` with reason `gate3-risk-confirm`. This is a **lightweight confirm**, not the full window ceremony - the merge isn't blocked, you're just giving the user a chance to hold a riskier change.
+
+**Read the signals.** The `SIGNALS=` line lists which fired (space-separated):
+
+- `env` - new env vars (note: this also hard-blocks Gate 1, so you'd normally see it there first).
+- `schema` - the diff touches DB schema or migration files (`schema`/`migrations`/`drizzle`/`prisma` paths or `*.sql`).
+- `backfill` - the diff references a backfill, seed, or one-time data job.
+- `largediff` - files changed ≥ 10 **or** insertions+deletions ≥ 300 (the `DIFFSTAT=` line shows the raw stat).
+
+**Present a short assessment and ask** (AskUserQuestion):
+
+> **Gate 3 (risk check):** No deploy-window rule is configured, so this can ship anytime — but the change carries risk signals worth a look before it goes to production:
+>
+> - Signals: `<list signals>` (`<DIFFSTAT>`).
+>
+> Ship it now, or hold?
+> 1. **Ship it** - merge and deploy now.
+> 2. **Hold** - I'll stop here; you deploy later or split the risky part out.
+
+Resolve:
+- **"Ship it"** → **Gate 3 OK (elevated risk, user confirmed: `<signals>`).**
+- **"Hold"** → **Gate 3 BLOCK - user held on elevated risk (`<signals>`).** Stop; do not merge.
+
+Record the signals and the user's choice in the final report. A low-risk change (`RISK=low`, `VERDICT: GO`) never reaches this prompt — it just ships.
 
 ### Evaluating a configured window rule
 
@@ -236,7 +264,7 @@ Pre-flight (freshness):  <OK | OK: N behind, no overlap | BLOCK: path overlap on
 Pre-flight (observation): <ready: <platform> as <account> | skip: <reason> | granted: rule added, re-probe ok>
 Gate 1 (env vars):       <OK | BLOCK: ...>
 Gate 2 (PR health):      <OK | BLOCK: draft | BLOCK: CI <failing|pending> - <checks> | BLOCK: <N> unresolved review thread(s) | BLOCK: merge state <status>>
-Gate 3 (deploy window):  <OK - no window rule | OK - within window (<rule>) | OK (hotfix: <reason>) | OK (minor [, user override despite <signals>]) | BLOCK - outside deploy window (<rule>), wait until <next slot>>
+Gate 3 (deploy window):  <OK - no window rule, low risk | OK - elevated risk (<signals>), user confirmed | OK - within window (<rule>) | OK (hotfix: <reason>) | OK (minor [, user override despite <signals>]) | BLOCK - user held on elevated risk (<signals>) | BLOCK - outside deploy window (<rule>), wait until <next slot>>
 
 MERGE: <GO | BLOCK - gate(s) N, M>
 ```

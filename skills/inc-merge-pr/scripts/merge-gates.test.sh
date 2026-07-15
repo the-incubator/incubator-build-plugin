@@ -61,7 +61,7 @@ reset_case() {
   mkenv    'echo "STATUS: pass"'                                          # no new env vars
   git -C "$REPO" remote set-url origin git@github.com:acme/widgets.git 2>/dev/null
   rm -f "$REPO/deploy.md"   # no window rule by default -> just deploy
-  unset GH_FAIL
+  unset GH_FAIL MERGE_GATES_SIGNALS_OVERRIDE
   DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
@@ -72,6 +72,7 @@ run() {
     MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
     GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
     MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
+    MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
     bash "$TARGET" 2>/dev/null )
 }
 
@@ -159,6 +160,29 @@ check "window rule reason" "gate3-window-decision"
 reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/deploy.md"
 mkenv 'echo "STATUS: warn"; echo "NEW_VARS:"; echo "  - FOO"; echo "PASTE_BLOCK:"; echo "FOO="'
 check "hard gate outranks window rule -> BLOCK" "BLOCK" "NEEDS_DECISION"
+rm -f "$REPO/deploy.md"
+
+# Default posture (no window rule) is risk-adaptive: a low-risk change (no
+# signals) just ships; an elevated-risk change prompts a confirm.
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check "no rule + low risk -> GO" "VERDICT: GO"
+
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="largediff"
+check "no rule + elevated risk -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
+check "no rule + elevated risk reason" "gate3-risk-confirm"
+
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="schema backfill"
+check "no rule + schema/backfill -> risk-confirm" "gate3-risk-confirm"
+
+# A hard gate still outranks an elevated-risk confirm.
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="largediff"; mkfresh 'exit 1'
+check "hard gate outranks risk-confirm -> BLOCK" "BLOCK" "NEEDS_DECISION"
+
+# A configured window rule takes precedence over the risk-confirm path (the rule
+# branch already weighs risk signals when the window is closed).
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/deploy.md"
+MERGE_GATES_SIGNALS_OVERRIDE="largediff"
+check "window rule wins over risk-confirm" "gate3-window-decision" "gate3-risk-confirm"
 rm -f "$REPO/deploy.md"
 
 # --- summary -------------------------------------------------------------

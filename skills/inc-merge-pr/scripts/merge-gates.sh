@@ -29,6 +29,8 @@
 #
 # Test hooks (all optional; default to the real dependency):
 #   MERGE_GATES_DOW_OVERRIDE / MERGE_GATES_HOUR_OVERRIDE  - inject day/hour
+#   MERGE_GATES_SIGNALS_OVERRIDE  - inject the Gate 3 risk signals ("none" or a
+#     space-separated list) instead of computing them from the diff
 #   MERGE_GATES_FRESHNESS_BIN / MERGE_GATES_THREADCACHE_BIN / MERGE_GATES_ENVCHECK_BIN
 #   plus stubbing `gh` / `git` on PATH - drive the gate logic from fixtures.
 
@@ -340,6 +342,16 @@ if [ "${FILES_CHANGED:-0}" -ge 10 ] 2>/dev/null || [ "${LINES_CHANGED:-0}" -ge 3
 fi
 SIGNALS=$(echo "$SIGNALS" | xargs)   # trim
 [ -z "$SIGNALS" ] && SIGNALS="none"
+SIGNALS="${MERGE_GATES_SIGNALS_OVERRIDE:-$SIGNALS}"   # test hook
+
+# Risk assessment for the *default* posture (no window rule configured). A change
+# with no risk signals just ships (GO); one carrying schema/backfill/largediff
+# risk gets a quick confirm from the user before it merges.
+if [ "$SIGNALS" = "none" ]; then
+  GATE3_RISK=low
+else
+  GATE3_RISK=elevated
+fi
 
 if [ "$GATE3_HAS_RULE" = "1" ]; then
   echo "GATE3_WINDOW: rules"
@@ -347,6 +359,7 @@ if [ "$GATE3_HAS_RULE" = "1" ]; then
 else
   echo "GATE3_WINDOW: none"
 fi
+echo "  RISK=$GATE3_RISK"
 echo "  TIME=$TIME_HUMAN"
 echo "  DOW=$DOW HOUR=$HOUR"
 echo "  SIGNALS=$SIGNALS"
@@ -356,9 +369,10 @@ echo "  DIFFSTAT=${DIFFSTAT:-none}"
 # Verdict - computed purely from the per-gate blocked flags + GATE3_CLASS.
 # ---------------------------------------------------------------------------
 # Hard blocks (pre-flight, Gate 1, Gate 2) fail outright -> EXIT=1 / BLOCK.
-# A configured deploy window is the user's call -> EXIT=2 / NEEDS_DECISION, but
-# only when no hard gate already blocked. With no window rule, Gate 3 does not
-# contribute at all - the default is to just deploy.
+# Gate 3 is the user's call -> EXIT=2 / NEEDS_DECISION, only when no hard gate
+# already blocked, in two cases: a configured deploy window (evaluate now-vs-rule)
+# or, with no window rule, an elevated-risk change (confirm before shipping). A
+# no-rule, low-risk change contributes nothing - the default is to just deploy.
 REASONS=""
 EXIT=0
 
@@ -366,7 +380,11 @@ EXIT=0
 [ "$GATE1_BLOCKED" = "1" ] && { REASONS="$REASONS gate1-env"; EXIT=1; }
 [ "$GATE2_BLOCKED" = "1" ] && { REASONS="$REASONS gate2-health"; EXIT=1; }
 
-[ "$GATE3_HAS_RULE" = "1" ] && { REASONS="$REASONS gate3-window-decision"; [ "$EXIT" = "0" ] && EXIT=2; }
+if [ "$GATE3_HAS_RULE" = "1" ]; then
+  REASONS="$REASONS gate3-window-decision"; [ "$EXIT" = "0" ] && EXIT=2
+elif [ "$GATE3_RISK" = "elevated" ]; then
+  REASONS="$REASONS gate3-risk-confirm"; [ "$EXIT" = "0" ] && EXIT=2
+fi
 
 REASONS=$(echo "$REASONS" | xargs)
 if [ -z "$REASONS" ]; then
