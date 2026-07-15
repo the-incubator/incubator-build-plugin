@@ -1,6 +1,6 @@
 ---
 name: inc:setup-deploy
-description: Use when the user wants to configure deployment so inc:merge-pr-5 / inc:ship-it can observe deploys automatically. Triggers on "setup deploy", "configure deployment", "set up deploy config", "how does merge-pr watch my deploy", "fix the deploy monitor", or "/inc:setup-deploy". Detects the deploy platform (Vercel, Netlify, Fly.io, Railway, Render, Google Cloud Run, GitHub Actions, custom), resolves the production URL and a parse-safe deploy-status command, and writes a Deploy Configuration block to deploy.md (with a one-line pointer in CLAUDE.md) that the merge/ship skills read.
+description: Use when the user wants to configure deployment so inc:merge-pr-5 / inc:ship-it can observe deploys automatically. Triggers on "setup deploy", "configure deployment", "set up deploy config", "how does merge-pr watch my deploy", "fix the deploy monitor", "set deploy window", "deployment window rules", or "/inc:setup-deploy". Detects the deploy platform (Vercel, Netlify, Fly.io, Railway, Render, Google Cloud Run, GitHub Actions, custom), resolves the production URL and a parse-safe deploy-status command, captures any deploy-window rules (when to allow merges/deploys; default is none = deploy anytime), and writes a Deploy Configuration block to deploy.md (with a one-line pointer in CLAUDE.md) that the merge/ship skills read.
 allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(gh *), Bash(jq *), Bash(curl *), Bash(grep *), Bash(cat *), Bash(which *), Bash(test *)
 argument-hint: "[optional: platform name to skip detection, e.g. 'vercel']"
 ---
@@ -198,6 +198,25 @@ Nothing detected. Use AskUserQuestion to gather: how deploys trigger (auto-on-pu
 deploy script / manual / does-not-deploy), the production URL, and how to check success (HTTP health
 check / CLI command / GH Actions status / just-load-the-URL). Persist whatever the user gives.
 
+## Step 3.5 — Deploy window rules (when may deploys go out?)
+
+Some teams restrict *when* a merge that triggers a production deploy is allowed — e.g. only during
+staffed hours so someone can respond if it breaks, or a freeze over a holiday. `inc:merge-pr-5`
+reads the rule you persist here and evaluates it against the current time before merging.
+
+Ask the user (AskUserQuestion) — **the default is no restriction (deploy anytime)**:
+
+- A) **No deploy-window rules — deploy anytime** *(default, recommended)* → persist `Deploy window: none`.
+- B) **Yes, there's a window** → capture the rule in the user's own words as a single concise line,
+  e.g. `Mon–Thu after 1pm ET, freeze Fri–Sun` or `business hours 9am–6pm PT weekdays; no deploys during the Dec 20–Jan 2 freeze`.
+
+Keep whatever the user gives you to **one line** (the merge skill and the gates script read a single
+`Deploy window:` field). If the user describes something multi-part, summarize it into one line that
+still captures the days/hours/freezes — the merge skill interprets this text against the clock, so it
+must be legible, not a code. If the user isn't sure, default to `none`.
+
+Persist the answer as the `Deploy window:` line in the Deploy Configuration block (Step 4a).
+
 ## Step 4 — Write deploy.md and the CLAUDE.md pointer
 
 Two writes:
@@ -215,6 +234,11 @@ merge/ship skills execute them verbatim. Use a fenced block per command so nothi
 - Deploy trigger: <auto on push to production branch | GH Actions <workflow> | <command>>
 - CLI auth check: `<vercel whoami | netlify status | fly auth whoami | ...>`
 - Reauth: `<login command the user runs themselves if auth lapses, e.g. vercel login | railway login | gcloud auth login>`
+- Deploy window: <none | one-line rule, e.g. Mon–Thu after 1pm ET, freeze Fri–Sun>
+
+> The `Deploy window:` line is policy, not a command. `none` (or an absent line) means no restriction —
+> the merge skill just deploys. Any other text is the team's rule, which the merge skill evaluates
+> against the current time before merging. Keep it to one legible line.
 
 **Deploy status (newest production deploy):**
 \`<status command — machine-readable, e.g. vercel list --environment production --format json | jq -r '...[0].state'>\`
@@ -268,12 +292,14 @@ yet), note it but keep the config — it's still correct for the next deploy.
 ```
 DEPLOY CONFIGURATION — SAVED to deploy.md (pointer in CLAUDE.md)
 ───────────────────────────────────────────────────────────────
-Platform:     <platform>
-Prod URL:     <url>
-Status cmd:   <one-line status command>   [verified: ran, returned <state>]
-Health check: <url>  [<200 | unreachable>]
+Platform:      <platform>
+Prod URL:      <url>
+Status cmd:    <one-line status command>   [verified: ran, returned <state>]
+Health check:  <url>  [<200 | unreachable>]
+Deploy window: <none (deploy anytime) | the one-line rule>
 
-inc:merge-pr-5 and inc:ship-it will now observe deploys with these commands.
+inc:merge-pr-5 and inc:ship-it will now observe deploys with these commands
+and respect the deploy window above.
 Re-run /inc:setup-deploy to reconfigure.
 ```
 

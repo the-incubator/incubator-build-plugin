@@ -60,8 +60,9 @@ reset_case() {
   mkthread 'echo "[]"; exit 0'                                            # empty thread map
   mkenv    'echo "STATUS: pass"'                                          # no new env vars
   git -C "$REPO" remote set-url origin git@github.com:acme/widgets.git 2>/dev/null
+  rm -f "$REPO/deploy.md"   # no window rule by default -> just deploy
   unset GH_FAIL
-  DOW=2; HOUR=14   # Tuesday 2pm ET -> window open
+  DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
 run() {
@@ -132,19 +133,33 @@ reset_case; mkthread 'echo "[]"; exit 1'
 printf '%s' '[{"node_id":"N2","id":2,"in_reply_to_id":null,"path":"b.ts","created_at":"2026-01-01T00:00:00Z","user":{"login":"reviewer"},"body":"please fix"}]' > "$FIX/comments.json"
 check "unresolved degraded thread -> BLOCK" "gate2-health"
 
-reset_case; DOW=2; HOUR=10   # Tue 10am -> too early
-check "too-early -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
-check "too-early reason" "gate3-too-early"
+# Gate 3 is now team-configured via a `Deploy window:` line in deploy.md.
+# With no deploy.md (the reset_case default) there is no window rule, so the
+# default is to just deploy - GO on any day/hour.
+reset_case; rm -f "$REPO/deploy.md"; DOW=6; HOUR=3   # Saturday 3am
+check "no window rule -> GO regardless of time" "VERDICT: GO"
 
-reset_case; DOW=6; HOUR=15   # Saturday -> off-hours
-check "off-hours -> NEEDS_DECISION" "NEEDS_DECISION"
-check "off-hours reason" "gate3-offhours-decision"
+reset_case; rm -f "$REPO/deploy.md"; DOW=2; HOUR=14  # Tuesday 2pm
+check "no window rule (weekday) -> GO" "VERDICT: GO"
 
-reset_case; DOW=2; HOUR=13   # exactly 1pm -> window open
-check "1pm boundary -> GO" "VERDICT: GO"
+# An explicit "none" rule is treated the same as no rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: none\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "explicit none window -> GO" "VERDICT: GO"
 
-reset_case; DOW=2; HOUR=12   # 12pm -> too early
-check "12pm boundary -> NEEDS_DECISION" "gate3-too-early"
+# A trailing HTML comment on the field must not defeat the "none" normalization.
+reset_case; printf '## Deploy Configuration\n- Deploy window: none  <!-- deploy anytime -->\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "none with trailing comment -> GO" "VERDICT: GO"
+
+# A real window rule -> NEEDS_DECISION so the orchestrator evaluates now-vs-rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET; freeze Fri-Sun\n' > "$REPO/deploy.md"; DOW=2; HOUR=14
+check "window rule present -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
+check "window rule reason" "gate3-window-decision"
+
+# A window rule does not override a hard gate: env-var block still BLOCKs.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/deploy.md"
+mkenv 'echo "STATUS: warn"; echo "NEW_VARS:"; echo "  - FOO"; echo "PASTE_BLOCK:"; echo "FOO="'
+check "hard gate outranks window rule -> BLOCK" "BLOCK" "NEEDS_DECISION"
+rm -f "$REPO/deploy.md"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"

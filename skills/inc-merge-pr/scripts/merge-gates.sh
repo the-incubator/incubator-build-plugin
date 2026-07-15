@@ -6,8 +6,8 @@
 # Gate 2 sub-checks, Gate 3 signals) with one call the orchestrator reads once.
 # The script does the deterministic work; the SKILL.md keeps only the branches
 # that need judgment (env-var paste confirmation, unresolved-thread handling,
-# off-hours risk classification). Deploy-observation readiness (auth probe,
-# AskUserQuestion) is interactive and stays in the skill, not here.
+# evaluating a configured deploy-window rule against the clock). Deploy-observation
+# readiness (auth probe, AskUserQuestion) is interactive and stays in the skill.
 #
 # Usage:
 #   merge-gates.sh
@@ -289,20 +289,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Gate 3: deployment window - classify the window once, collect risk signals.
-# The off-hours risk *decision* stays with the orchestrator.
+# Gate 3: deployment window - the policy is team-configured, not hardcoded.
+# /inc:setup-deploy persists a one-line `Deploy window:` rule into deploy.md
+# (falling back to DEPLOY.md / CLAUDE.md). This script does NOT interpret the
+# rule - matching a natural-language policy ("Mon-Thu after 1pm ET; freeze
+# during the Dec holiday") against the clock is the orchestrator's job. The
+# script only (a) detects whether a rule exists, (b) emits the current Eastern
+# time as ground truth, and (c) collects the risk signals the orchestrator uses
+# when a window is closed.
+#
+#   - No rule configured  -> GATE3_WINDOW: none  -> Gate 3 does not gate the
+#     merge. The default is to just deploy.
+#   - Rule configured      -> GATE3_WINDOW: rules -> the raw rule + current time
+#     are emitted and the verdict is NEEDS_DECISION (unless a hard gate already
+#     blocked), so the orchestrator evaluates now-vs-rule.
 # ---------------------------------------------------------------------------
 TIME_HUMAN=$(TZ='America/New_York' date +"%A %Y-%m-%d %H:%M %Z" 2>/dev/null || echo "unknown")
 DOW="${MERGE_GATES_DOW_OVERRIDE:-$(TZ='America/New_York' date +"%u" 2>/dev/null || echo "")}"   # 1=Mon..7=Sun
 HOUR="${MERGE_GATES_HOUR_OVERRIDE:-$(TZ='America/New_York' date +"%H" 2>/dev/null || echo "")}"
-# If date failed, fail-safe to a value that forces a human decision (off-hours),
-# never one that silently escapes the verdict's Gate 3 branches.
-case "$DOW" in ''|*[!0-9]*) DOW=6 ;; esac     # 6 = Saturday -> off-hours
-case "$HOUR" in ''|*[!0-9]*) HOUR=0 ;; esac
-DOW=$((10#$DOW))
-HOUR=$((10#$HOUR))
 
-# Risk signals (always collected; only consumed on the off-hours branch).
+# Read the persisted window rule (first hit wins: deploy.md, DEPLOY.md, CLAUDE.md).
+WINDOW_RULE=$(
+  { grep -iE '^[-*[:space:]]*deploy window:' deploy.md 2>/dev/null \
+    || grep -iE '^[-*[:space:]]*deploy window:' DEPLOY.md 2>/dev/null \
+    || grep -iE '^[-*[:space:]]*deploy window:' CLAUDE.md 2>/dev/null; } \
+  | head -n1 \
+  | sed -E 's/^[-*[:space:]]*[Dd]eploy [Ww]indow:[[:space:]]*//; s/<!--.*-->//' \
+  | tr -d '\r'
+)
+# Normalize: an explicit "none"/"any"/"anytime" (or an empty/absent field) means
+# no window restriction - the default just-deploy posture.
+RULE_NORM=$(printf '%s' "$WINDOW_RULE" | tr '[:upper:]' '[:lower:]' | xargs)
+case "$RULE_NORM" in
+  ''|none|any|anytime|'any time'|'no restrictions'|'no restriction'|'no rules'|'no rule'|n/a|deploy|'deploy anytime') GATE3_HAS_RULE=0 ;;
+  *) GATE3_HAS_RULE=1 ;;
+esac
+
+# Risk signals (always collected; consumed by the orchestrator on a closed window).
 SIGNALS=""
 [ "$ENV_STATUS" = "warn" ] && SIGNALS="$SIGNALS env"
 git diff --name-only "origin/$DEFAULT_BRANCH" 2>/dev/null \
@@ -318,16 +341,12 @@ fi
 SIGNALS=$(echo "$SIGNALS" | xargs)   # trim
 [ -z "$SIGNALS" ] && SIGNALS="none"
 
-# Single source of truth for the window classification; the label and the
-# verdict both derive from GATE3_CLASS so they cannot drift.
-if [ "$DOW" -ge 1 ] && [ "$DOW" -le 4 ] && [ "$HOUR" -ge 13 ]; then
-  GATE3_CLASS=ok
-elif [ "$DOW" -ge 1 ] && [ "$DOW" -le 4 ]; then
-  GATE3_CLASS=block_early
+if [ "$GATE3_HAS_RULE" = "1" ]; then
+  echo "GATE3_WINDOW: rules"
+  echo "  RULE=$WINDOW_RULE"
 else
-  GATE3_CLASS=offhours
+  echo "GATE3_WINDOW: none"
 fi
-echo "GATE3_WINDOW: $GATE3_CLASS"
 echo "  TIME=$TIME_HUMAN"
 echo "  DOW=$DOW HOUR=$HOUR"
 echo "  SIGNALS=$SIGNALS"
@@ -337,8 +356,9 @@ echo "  DIFFSTAT=${DIFFSTAT:-none}"
 # Verdict - computed purely from the per-gate blocked flags + GATE3_CLASS.
 # ---------------------------------------------------------------------------
 # Hard blocks (pre-flight, Gate 1, Gate 2) fail outright -> EXIT=1 / BLOCK.
-# The Gate 3 windows (too-early, off-hours) are the user's call -> EXIT=2 /
-# NEEDS_DECISION, but only when no hard gate already blocked.
+# A configured deploy window is the user's call -> EXIT=2 / NEEDS_DECISION, but
+# only when no hard gate already blocked. With no window rule, Gate 3 does not
+# contribute at all - the default is to just deploy.
 REASONS=""
 EXIT=0
 
@@ -346,10 +366,7 @@ EXIT=0
 [ "$GATE1_BLOCKED" = "1" ] && { REASONS="$REASONS gate1-env"; EXIT=1; }
 [ "$GATE2_BLOCKED" = "1" ] && { REASONS="$REASONS gate2-health"; EXIT=1; }
 
-case "$GATE3_CLASS" in
-  block_early) REASONS="$REASONS gate3-too-early"; [ "$EXIT" = "0" ] && EXIT=2 ;;
-  offhours)    REASONS="$REASONS gate3-offhours-decision"; [ "$EXIT" = "0" ] && EXIT=2 ;;
-esac
+[ "$GATE3_HAS_RULE" = "1" ] && { REASONS="$REASONS gate3-window-decision"; [ "$EXIT" = "0" ] && EXIT=2; }
 
 REASONS=$(echo "$REASONS" | xargs)
 if [ -z "$REASONS" ]; then

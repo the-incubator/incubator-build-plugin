@@ -55,7 +55,7 @@ This runs the whole front of the pipeline: tier-selected review gate → commit-
 Skill: inc:merge-pr-5
 ```
 
-merge-pr runs its own pre-flight (branch freshness), the three merge gates (new env vars; PR health; deploy-window timing), the squash-merge, and active deploy observation. Wait for it to return.
+merge-pr runs its own pre-flight (branch freshness), the merge gates (new env vars; PR health; plus a deploy-window check when the team has configured window rules — default is deploy anytime), the squash-merge, and active deploy observation. Wait for it to return.
 
 - **`MERGE: GO`** and a successful deploy observation → the chain is complete.
 - **`MERGE: BLOCK`** → surface the blocking gate(s) verbatim. If a gate is a user-judgment call (not a hard fail), ask (blocking question) whether to retry-after-fix or stop. The user resolves the gate and either re-runs `/inc:merge-pr-5` directly or `/inc:ship-it` from the top.
