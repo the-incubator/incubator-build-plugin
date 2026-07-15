@@ -60,8 +60,9 @@ reset_case() {
   mkthread 'echo "[]"; exit 0'                                            # empty thread map
   mkenv    'echo "STATUS: pass"'                                          # no new env vars
   git -C "$REPO" remote set-url origin git@github.com:acme/widgets.git 2>/dev/null
-  unset GH_FAIL
-  DOW=2; HOUR=14   # Tuesday 2pm ET -> window open
+  rm -f "$REPO/deploy.md"   # no window rule by default -> just deploy
+  unset GH_FAIL MERGE_GATES_SIGNALS_OVERRIDE
+  DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
 run() {
@@ -71,6 +72,7 @@ run() {
     MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
     GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
     MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
+    MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
     bash "$TARGET" 2>/dev/null )
 }
 
@@ -85,6 +87,18 @@ check() {
     FAIL=$((FAIL+1)); echo "FAIL - $name (must-not matched '$mustnot')"; echo "    got: $got"; return
   fi
   PASS=$((PASS+1))
+}
+
+# assert full stdout contains $2 on some line (not just the VERDICT line).
+check_out() {
+  local name="$1" want="$2" out
+  out=$(run)
+  if printf '%s\n' "$out" | grep -qF "$want"; then
+    PASS=$((PASS+1))
+  else
+    FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"
+    echo "    got GATE3 lines: $(printf '%s\n' "$out" | grep -E 'GATE3_WINDOW|RULE=|RISK=' | tr '\n' ' ')"
+  fi
 }
 
 # --- cases ---------------------------------------------------------------
@@ -132,19 +146,83 @@ reset_case; mkthread 'echo "[]"; exit 1'
 printf '%s' '[{"node_id":"N2","id":2,"in_reply_to_id":null,"path":"b.ts","created_at":"2026-01-01T00:00:00Z","user":{"login":"reviewer"},"body":"please fix"}]' > "$FIX/comments.json"
 check "unresolved degraded thread -> BLOCK" "gate2-health"
 
-reset_case; DOW=2; HOUR=10   # Tue 10am -> too early
-check "too-early -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
-check "too-early reason" "gate3-too-early"
+# Gate 3 is now team-configured via a `Deploy window:` line in deploy.md.
+# With no deploy.md (the reset_case default) there is no window rule, so the
+# default is to just deploy - GO on any day/hour.
+reset_case; rm -f "$REPO/deploy.md"; DOW=6; HOUR=3   # Saturday 3am
+check "no window rule -> GO regardless of time" "VERDICT: GO"
 
-reset_case; DOW=6; HOUR=15   # Saturday -> off-hours
-check "off-hours -> NEEDS_DECISION" "NEEDS_DECISION"
-check "off-hours reason" "gate3-offhours-decision"
+reset_case; rm -f "$REPO/deploy.md"; DOW=2; HOUR=14  # Tuesday 2pm
+check "no window rule (weekday) -> GO" "VERDICT: GO"
 
-reset_case; DOW=2; HOUR=13   # exactly 1pm -> window open
-check "1pm boundary -> GO" "VERDICT: GO"
+# An explicit "none" rule is treated the same as no rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: none\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "explicit none window -> GO" "VERDICT: GO"
 
-reset_case; DOW=2; HOUR=12   # 12pm -> too early
-check "12pm boundary -> NEEDS_DECISION" "gate3-too-early"
+# A trailing HTML comment on the field must not defeat the "none" normalization.
+reset_case; printf '## Deploy Configuration\n- Deploy window: none  <!-- deploy anytime -->\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "none with trailing comment -> GO" "VERDICT: GO"
+
+# Non-standard casing: the detect grep is case-insensitive, so the prefix strip
+# must be too - an uppercased "NONE" field must still normalize to no-rule.
+reset_case; printf '## Deploy Configuration\n- DEPLOY WINDOW: none\n' > "$REPO/deploy.md"; DOW=6; HOUR=3
+check "uppercase field + none -> GO" "VERDICT: GO"
+
+# The emitted RULE= must have the label prefix stripped cleanly (no leading
+# space, no "- Deploy window:" residue) so the orchestrator reads a clean rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET; freeze Fri-Sun\n' > "$REPO/deploy.md"
+check_out "RULE prefix stripped clean" "RULE=Mon-Thu after 1pm ET; freeze Fri-Sun"
+
+# Fallback chain: with no deploy.md, a rule in CLAUDE.md is still honored.
+reset_case; rm -f "$REPO/deploy.md"; printf '# repo\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/CLAUDE.md"
+check "window rule via CLAUDE.md fallback -> NEEDS_DECISION" "gate3-window-decision"
+rm -f "$REPO/CLAUDE.md"
+
+# A real window rule -> NEEDS_DECISION so the orchestrator evaluates now-vs-rule.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET; freeze Fri-Sun\n' > "$REPO/deploy.md"; DOW=2; HOUR=14
+check "window rule present -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
+check "window rule reason" "gate3-window-decision"
+
+# A window rule does not override a hard gate: env-var block still BLOCKs.
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/deploy.md"
+mkenv 'echo "STATUS: warn"; echo "NEW_VARS:"; echo "  - FOO"; echo "PASTE_BLOCK:"; echo "FOO="'
+check "hard gate outranks window rule -> BLOCK" "BLOCK" "NEEDS_DECISION"
+rm -f "$REPO/deploy.md"
+
+# Default posture (no window rule) is risk-adaptive: a low-risk change (no
+# signals) just ships; an elevated-risk change prompts a confirm.
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check "no rule + low risk -> GO" "VERDICT: GO"
+
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="largediff"
+check "no rule + elevated risk -> NEEDS_DECISION" "NEEDS_DECISION" "BLOCK"
+check "no rule + elevated risk reason" "gate3-risk-confirm"
+
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="schema backfill"
+check "no rule + schema/backfill -> risk-confirm" "gate3-risk-confirm"
+
+# A hard gate still outranks an elevated-risk confirm.
+reset_case; MERGE_GATES_SIGNALS_OVERRIDE="largediff"; mkfresh 'exit 1'
+check "hard gate outranks risk-confirm -> BLOCK" "BLOCK" "NEEDS_DECISION"
+
+# A configured window rule takes precedence over the risk-confirm path (the rule
+# branch already weighs risk signals when the window is closed).
+reset_case; printf '## Deploy Configuration\n- Deploy window: Mon-Thu after 1pm ET\n' > "$REPO/deploy.md"
+MERGE_GATES_SIGNALS_OVERRIDE="largediff"
+check "window rule wins over risk-confirm" "gate3-window-decision" "gate3-risk-confirm"
+rm -f "$REPO/deploy.md"
+
+# Real risk-signal computation (no override): a .sql file in the diff vs
+# origin/main fires the `schema` signal -> elevated -> gate3-risk-confirm. This
+# exercises the actual classifier, not the MERGE_GATES_SIGNALS_OVERRIDE hook.
+# Placed last because it mutates the test repo's git state (adds a commit + an
+# origin/main ref); nothing runs after it except the summary.
+reset_case
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
+printf 'CREATE TABLE t (id int);\n' > "$REPO/migration.sql"
+git -C "$REPO" add migration.sql 2>/dev/null; git -C "$REPO" commit -q -m "add schema migration"
+check "real .sql diff -> schema signal -> risk-confirm" "gate3-risk-confirm"
+check_out "real schema signal emitted" "SIGNALS=schema"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"
