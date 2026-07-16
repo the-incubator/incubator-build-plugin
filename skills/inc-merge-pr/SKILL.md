@@ -416,7 +416,7 @@ Outcomes:
 
   The skill does not auto-rollback. Surface the signal and stop; the user decides.
 
-### Step 4d - Record the observation in the ship report
+### Step 4d - Record the observation in the merge-pr report
 
 **Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
 

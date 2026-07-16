@@ -62,13 +62,48 @@ merge-pr runs its own pre-flight (branch freshness), the merge gates (new env va
 
 ## Step 4 — Final report
 
-```
-=== SHIP-IT REPORT ===
-1. review-and-pr:  <PR #N ready | stopped: review gate (N ask_user) | stopped: reason>
-2. merge-pr:       <MERGE: GO, deploy observed Ready | MERGE: BLOCK gate(s) X, Y | not reached>
+The report's #1 job is to answer one question at a glance: **is this deployed to production or not?** Never bury that under CI/preview detail. Preview deploys are *not* production — never let "app deploy pending" or a green preview read as "shipped."
 
-OUTCOME: <SHIPPED | STOPPED at step N — reason>
+Render the full pipeline as a stage checklist so the user can see exactly how far the run got and where it stopped. Every stage carries one status glyph:
+
+- `✅` done
+- `🔄` in progress (e.g. CI still running) — **only** for a live run you are actively watching
+- `⏸️` waiting on you (a decision or action only the user can take)
+- `⛔` blocked (a gate failed or the chain stopped here)
+- `⏳` unconfirmed (the stage ran but its outcome couldn't be confirmed — e.g. deploy observation skipped or timed out)
+- `⬜` not run (chain never reached this stage)
+
+Lead with a one-line verdict, then the stages, then the PR link and any blocker detail. Use the exact stage labels below.
+
 ```
+═══ INC BUILD REPORT ═══
+Production: NOT DEPLOYED — stopped at merge gates
+
+  ✅ 1. Reviewed working changes   7 reviewers, no P0/P1, safe fixes applied
+  ✅ 2. PR opened                  #194, ready
+  ✅ 3. Tests                      passed (api + www suites)
+  ✅ 4. CI + AI reviewers          typecheck · lint · build green; Greptile + CodeRabbit clean
+  ✅ 5. Feedback resolved          3 threads resolved
+  ⛔ 6. Merge gates                BLOCK: deploy-window too early (10:02 EST) — override for a hotfix, or merge after 1 PM EST
+  ⬜ 7. Merged to main             not reached
+  ⬜ 8. Deployed to production      not reached
+
+PR: https://github.com/org/repo/pull/194
+Blocked: clear the merge gate above, then re-run /inc:ship-it.
+```
+
+**Stage 3 (Tests) is called out on its own** — separate from the other CI checks in stage 4 — because a red test suite is the single most important "do not ship" signal and must never be buried behind typecheck/lint/preview noise. It reflects the CI **test job** specifically: `✅ passed`, `⛔ failing: <n> in <file>` (name the failing suite/file when the check surfaces it), `🔄 running` while the job is pending, or `⬜ no test suite` when the repo has no test job in CI. Include a pass **count** only when CI reports it cheaply — never parse logs to fabricate one. Tests run only in CI in this pipeline (the review and commit steps don't run the suite), so stage 3 stays `⬜ not reached` until a PR exists and CI has started.
+
+Fill each stage's glyph and detail from what actually happened; set stages the run never reached to `⬜ not reached`.
+
+The `Production:` line is the single source of truth. It takes exactly one of these forms — pick by what stages 7 (Merged) and 8 (Deployed) actually show, and never collapse "merged but unobserved" into "not deployed":
+
+- `✅ DEPLOYED to production` — **only** when stages 7 and 8 are both `✅` (the merge landed **and** `inc:merge-pr-5` observed the deploy reach `Ready`).
+- `⏳ MERGED — deploy unconfirmed (<skipped | timed out | no deploy step>)` — stage 7 is `✅` but stage 8 never reached a confirmed `Ready`: the deploy observation was skipped or timed out, or the repo has no deploy step. The merge may already have triggered a rollout, so this is **not** `NOT DEPLOYED` — report the state as unconfirmed and name why.
+- `⛔ NOT DEPLOYED — deploy failed` — stage 7 is `✅` but the observed deploy (stage 8) failed. The new code did not go live; treat as rollback territory.
+- `NOT DEPLOYED — stopped at <stage>` — the run never merged (stage 7 is not `✅`). `<stage>` MUST be one of these canonical labels, matching the stage the run stopped at: `review`, `PR`, `tests`, `CI`, `feedback`, or `merge gates`.
+
+A green CI or a ready preview deploy never counts as production.
 
 ---
 
