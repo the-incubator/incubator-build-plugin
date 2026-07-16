@@ -59,9 +59,11 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    - **Verbatim evidence** — the exact quote(s) with timestamp, plus screenshot ref when video
      exists. Quote the reviewer literally; do not paraphrase away their words.
 
-   Fold the reviewer's **written click-comments** (the `annotations` — shown in the report's
-   "Reviewer notes" section) in as first-class requirements alongside the spoken transcript.
-   They are direct, deliberate reviewer intent and must not be treated as secondary to the audio.
+   Fold the reviewer's **written click-comments** (the `annotations` - rendered as
+   "Written pins (raw material)" inside the report's synthesis block) in as first-class
+   requirements alongside the spoken transcript. They are direct, deliberate reviewer
+   intent and must not be treated as secondary to the audio. In the report, badge every
+   requirement by source: written, spoken, or both (see step 8b).
 
 6b. **Resolve "couldn't evaluate" caveats — don't just record them.** When the reviewer reports
    they could not assess something because a state wasn't reachable ("nothing live on the backend
@@ -90,25 +92,50 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
 
 8. Add source mapping to the brainstorm material as suspected implementation surfaces, not as proven root cause unless the code clearly proves it. Include confidence levels and short evidence notes explaining why each file or component is relevant.
 
-8b. **Fill the report and open it.** The analyzer writes a self-contained `report.html` — the
-   human-consumable surface for this session (reviewer notes, recording, moment frames, timestamped
-   transcript, and clearly-caveated machine signals). Replace the block between the
-   `AGENT-SYNTHESIS-START` / `AGENT-SYNTHESIS-END` comments in `report.html` with your synthesized
-   requirements from step 6, rendered as readable HTML using the same seven-field rubric (a card
-   per requirement with the verbatim quote). The file references frames and the recording by
-   relative path and stays small, so it is cheap to Edit — do not inline images.
+8b. **Fill the report and open it.** The analyzer writes `report.html` - the human-consumable
+   surface for this session (synthesized requirement cards, the recording with a
+   requirement-tracking bar, timestamped transcript). Filling it has two parts, and the file
+   carries the exact markup contract inline so you never need to invent structure:
+
+   - **Requirement cards.** Replace everything between the `AGENT-SYNTHESIS-START` /
+     `AGENT-SYNTHESIS-END` comments (the placeholder, the example-card comment, and the
+     "Written pins (raw material)" cards) with one `<details class="req">` card per
+     requirement from step 6, following the example card in the comment. Conventions:
+     - The `<summary>` holds the title row, a badge row, and a one-line statement so the
+       collapsed card is already informative; the seven-field rubric detail goes in the
+       `req-body` `<dl>` with the verbatim quote last.
+     - Badge every card by **source**: `src-written` (✎ written), `src-spoken` (🎙 spoken), or
+       `src-both` (✎+🎙 written + spoken) when a written pin and the audio cover the same ask.
+     - Badge **weight**: `badge ok` for concrete asks, `badge muted-badge` for exploratory ones.
+       Match the card's `border-left-color` (green for concrete, default blue for exploratory,
+       gray for caveats).
+     - Give every timestamp a `button.tstamp` with `data-t` in seconds - these seek the player.
+     - Caveats from step 6b get their own card, labeled resolved or unresolved.
+   - **Player timeline.** Fill the `SEGMENTS` array in the footer script (marked
+     `AGENT-SEGMENTS`) with one entry per stretch of the recording, in playback order, each
+     pointing at a requirement card id. This drives the bar under the player that shows which
+     requirement the reviewer is talking about as the video plays.
+
+   The file references media by relative path and stays small, so it is cheap to Edit - do not
+   inline images or media into `report.html` itself.
 
    Then **open the report** for the user. Prefer the harness's own in-app/preview browser when it
    has one; otherwise fall back to the OS default browser (`open <path>` on macOS,
    `xdg-open <path>` on Linux, `start <path>` on Windows). The analyzer prints the path as a
    `REPORT_HTML=<abs path>` line for exactly this. Do not read `report.html` back into context to
-   verify it — open it in a browser instead.
+   verify it - open it in a browser instead.
 
-   **Offer deeper dives from the findings.** The report makes evidence explorable: each moment has a
-   ▶ seek button and each transcript segment is clickable to jump the recording to that point. When
-   presenting findings, offer to walk the user to the exact moment — e.g. "want me to open the
-   recording at 0:42 where he describes the color states?" — and to expand the full transcript. Keep
-   raw recordings and frames local-only per the skill's common rules.
+8c. **Build the shareable standalone when sharing.** `report.html` only plays from its own
+   folder. When the user wants to send the report anywhere, run the `STANDALONE_BUILD=` command
+   the analyzer printed (`build_standalone.py <output-dir>`) - it writes `report-standalone.html`
+   with the media embedded, a single file that plays anywhere. It is a snapshot: rebuild it after
+   any edit to `report.html`.
+
+   **Offer deeper dives from the findings.** The report makes evidence explorable: requirement
+   cards carry ▶ timestamp chips and each transcript segment is clickable to jump the recording
+   to that point. When presenting findings, offer to walk the user to the exact moment - e.g.
+   "want me to open the recording at 0:42 where he describes the color states?" - and to expand
+   the full transcript. Keep raw recordings and frames local-only per the skill's common rules.
 
 9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, and `requirements-kickoff.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md`, unless the user explicitly asked only to extract or analyze artifacts.
 
@@ -165,7 +192,8 @@ Prefer saying "I did not find a current inbox implementation for this surface" o
 
 The analyzer writes:
 
-- `report.html`: the self-contained, human-consumable report — reviewer name and written notes, the recording (relative-linked, with per-moment seek), moment frames, timestamped transcript, and machine signals clearly badged as heuristic vs. observed. Has an `AGENT-SYNTHESIS` block you fill with the synthesized requirements (step 8b), then open in a browser.
+- `report.html`: the human-consumable report - synthesized requirement cards (the `AGENT-SYNTHESIS` block you fill in step 8b, with source badges and seek chips), the repaired recording with a requirement-tracking bar (the `AGENT-SEGMENTS` array you fill), and the timestamped transcript. Media is relative-linked; it plays from its own folder.
+- `report-standalone.html`: the shareable single file with media embedded, written by `build_standalone.py` (step 8c). Not created by the analyzer itself.
 - `analysis.md`: session summary, transcript, selected moments, screenshot links, candidate findings, and review checklist.
 - `problem-analysis.md`: a categorized problem statement scaffold for visual, functional, requirement, and UX findings.
 - `review-prompt.md`: a filled prompt containing screenshot paths and transcript for a deeper visual analysis pass.
