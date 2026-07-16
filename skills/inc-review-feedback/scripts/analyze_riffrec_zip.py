@@ -248,6 +248,55 @@ def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
     }
 
 
+def _ffmpeg(args: list[str], timeout: int = 300) -> bool:
+    result = subprocess.run(["ffmpeg", "-y", "-v", "error", *args], capture_output=True, text=True, timeout=timeout)
+    return result.returncode == 0
+
+
+def repair_media(recording_path: Path | None, voice_path: Path | None, raw_dir: Path) -> tuple[Path | None, Path | None]:
+    """Repair riffrec's MediaRecorder-produced webm tracks for reliable playback.
+
+    Browser MediaRecorder streams webm without a duration header or seek cues, so
+    players show an unknown duration and seeking is unreliable; the voice track can
+    also carry corrupt Opus packets that abort playback partway. The screen track
+    only needs a container remux (no transcode); the voice track is rebuilt through
+    a WAV intermediate, which drops corrupt packets instead of copying them through.
+    Falls back to the original files when ffmpeg is unavailable or a step fails."""
+    if not shutil.which("ffmpeg"):
+        return recording_path, voice_path
+
+    fixed_recording = recording_path
+    if recording_path and recording_path.exists():
+        candidate = raw_dir / "recording-fixed.webm"
+        try:
+            if _ffmpeg(["-i", str(recording_path), "-c", "copy", str(candidate)]) and candidate.stat().st_size > 0:
+                fixed_recording = candidate
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        if fixed_recording is recording_path:
+            print(f"warning: could not remux {recording_path.name}; the report uses the original (seeking may be unreliable)", file=sys.stderr)
+
+    fixed_voice = voice_path
+    if voice_path and voice_path.exists():
+        wav = raw_dir / "voice-clean.wav"
+        candidate = raw_dir / "voice-fixed.webm"
+        try:
+            if (
+                _ffmpeg(["-i", str(voice_path), str(wav)])
+                and _ffmpeg(["-i", str(wav), "-c:a", "libopus", "-b:a", "96k", str(candidate)])
+                and candidate.stat().st_size > 0
+            ):
+                fixed_voice = candidate
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        finally:
+            wav.unlink(missing_ok=True)
+        if fixed_voice is voice_path:
+            print(f"warning: could not rebuild {voice_path.name}; the report uses the original (audio may cut out)", file=sys.stderr)
+
+    return fixed_recording, fixed_voice
+
+
 def repo_relative(path: Path, base: Path) -> str:
     try:
         return str(path.resolve().relative_to(base.resolve()))
@@ -1267,23 +1316,6 @@ def load_sidecar(source_path: Path, annotations_arg: Path | None, source_kind: s
     return {"annotations": annotations, "reviewer": reviewer, "project": project}
 
 
-def _frame_src(path: str | None, report_dir: Path) -> str | None:
-    """Relative link to the frame PNG (not inlined). Keeps report.html small and
-    cheap for a downstream agent to Read/Edit — inlining base64 would balloon the
-    file to megabytes and make the ``#synthesis`` edit step read the whole blob into
-    context. Frames render when the report is opened from its own folder, same as
-    the recording."""
-    if not path:
-        return None
-    p = Path(path)
-    if not p.exists():
-        return None
-    try:
-        return os.path.relpath(p, report_dir)
-    except ValueError:
-        return str(p)
-
-
 def _esc(value: Any) -> str:
     return html_lib.escape(str(value if value is not None else ""))
 
@@ -1308,17 +1340,20 @@ def write_html_report(
     source_kind: str,
     session: dict[str, Any],
     transcript: dict[str, Any],
-    moments: list[dict[str, Any]],
-    findings: list[dict[str, Any]],
     sidecar: dict[str, Any],
     media_path: Path | None,
     media_is_video: bool,
+    voice_path: Path | None = None,
 ) -> None:
-    """A single self-contained HTML report — the consumable surface for a feedback
-    session. Frames and the recording are referenced by relative path (not inlined),
-    so the file stays small and agent-editable and moments can seek the video in
-    place; it renders when opened from its own output dir. The ``#synthesis`` section
-    is a placeholder the reviewing agent fills from the rubric."""
+    """The consumable HTML surface for a feedback session: synthesized requirement
+    cards (filled by the reviewing agent), the recording with a requirement-tracking
+    bar, and the timestamped transcript. Media is referenced by relative path (not
+    inlined), so the file stays small and agent-editable; it renders when opened from
+    its own output dir. ``build_standalone.py`` embeds the media for sharing.
+
+    ``voice_path`` is the separate microphone track riffrec records alongside the
+    screen capture; when present the player emits a hidden <audio> element kept in
+    sync with the video by script, since the two tracks are never muxed."""
     reviewer = sidecar.get("reviewer") or "Unknown reviewer"
     project = sidecar.get("project") or session.get("url") or "unknown"
     annotations = sidecar.get("annotations") or []
@@ -1354,6 +1389,9 @@ def write_html_report(
         )
     segments_html = "\n".join(seg_rows) or '<p class="muted">No timestamped segments.</p>'
 
+    # Written click-comments render as raw material INSIDE the synthesis block: the
+    # agent merges them into requirement cards (badged as written) and the whole
+    # block, pins included, is replaced by the synthesis. No standalone section.
     ann_cards = []
     for a in annotations:
         comment = a.get("comment") or "(no comment)"
@@ -1367,61 +1405,61 @@ def write_html_report(
             + (f'<br><span class="muted">{_esc(page)}</span>' if page else "")
             + "</p></div>"
         )
-    annotations_html = "\n".join(ann_cards) or '<p class="muted">No written click-comments were left.</p>'
-
-    moment_cards = []
-    for m in moments:
-        src = _frame_src(m.get("screenshot"), output_path.parent)
-        t = float(m.get("t", 0.0))
-        reason = m.get("reason", "")
-        evidence = " · ".join(compact_text(event_label(ev), 80) for ev in m.get("events", []))
-        img = (
-            f'<img src="{_esc(src)}" alt="frame at {_esc(format_time(t))}" loading="lazy">'
-            if src
-            else f'<div class="noframe">no frame<br><span class="muted">{_esc(m.get("screenshot_status", ""))}</span></div>'
+    pins_block = ""
+    if ann_cards:
+        pins_block = (
+            '\n    <p class="muted" style="margin:14px 0 8px"><strong>Written pins (raw material):</strong> '
+            "merge each into a requirement card above, badged "
+            '<span class="src src-written">✎ written</span> '
+            '(or <span class="src src-both">✎+🎙 written + spoken</span> when the reviewer also said it).</p>\n    '
+            + "\n".join(ann_cards)
         )
-        seek = (
-            f'<button class="seek" data-t="{t:.2f}">▶ {_esc(format_time(t))}</button>'
-            if media_rel
-            else f'<span class="ts">{_esc(format_time(t))}</span>'
-        )
-        moment_cards.append(
-            f'<figure class="moment">{img}'
-            f'<figcaption><div class="moment-head">{seek}<span class="mid">{_esc(m.get("id"))}</span></div>'
-            f'<div class="reason">{_esc(reason)}</div>'
-            + (f'<div class="ev muted">{_esc(evidence)}</div>' if evidence else "")
-            + "</figcaption></figure>"
-        )
-    moments_html = "\n".join(moment_cards) or '<p class="muted">No frames were extracted (audio-only or notes source).</p>'
-
-    finding_cards = []
-    for f in findings:
-        kind = f.get("kind", "signal")
-        badge = {
-            "heuristic-signal": ("heuristic", "warn"),
-            "observed-signal": ("observed", "ok"),
-            "none": ("no signal", "muted-badge"),
-        }.get(kind, (kind, "muted-badge"))
-        finding_cards.append(
-            f'<div class="card finding"><div class="finding-head">'
-            f'<span class="badge {badge[1]}">{_esc(badge[0])}</span>'
-            f'<strong>{_esc(f.get("id"))}. {_esc(f.get("title"))}</strong></div>'
-            f'<p>{_esc(f.get("observed"))}</p>'
-            f'<p class="meta">Confidence: {_esc(f.get("confidence"))} · Evidence: {_esc(", ".join(f.get("evidence", [])))}</p>'
-            "</div>"
-        )
-    findings_html = "\n".join(finding_cards)
 
     full_transcript = _esc((transcript.get("text") or "").strip()) or '<span class="muted">Transcript unavailable.</span>'
 
+    voice_rel = None
+    if media_is_video and voice_path and voice_path.exists():
+        try:
+            voice_rel = os.path.relpath(voice_path, output_path.parent)
+        except ValueError:
+            voice_rel = None
+
     if media_rel:
         player_tag = "video" if media_is_video else "audio"
-        media_kind = "Recording" if media_is_video else "Audio"
-        video_block = (
-            f'<{player_tag} id="rec" controls preload="metadata" src="{_esc(media_rel)}"></{player_tag}>'
-            f'<p class="muted">{media_kind} is local-only ({_esc(source_path.name)}); it is not embedded, '
-            "so this player works when the report is opened from its own folder.</p>"
-        )
+        video_block = f'<{player_tag} id="rec" controls preload="auto" src="{_esc(media_rel)}"></{player_tag}>'
+        if voice_rel:
+            video_block += f'\n    <audio id="voice" preload="auto" src="{_esc(voice_rel)}" style="display:none"></audio>'
+        video_block += """
+    <div class="nowmoment idle" id="nowmoment">
+      <button class="navm" id="prevM" title="Previous requirement">‹</button>
+      <div class="nm-body">
+        <div class="nm-top"><span class="ct" id="nmTime"></span><span class="nm-title" id="nmTitle"></span><span class="nm-hint" id="nmHint">click to view requirement ↓</span></div>
+        <span class="nm-detail" id="nmDetail"></span>
+      </div>
+      <button class="navm" id="nextM" title="Next requirement">›</button>
+    </div>"""
+        if voice_rel:
+            # Screen and microphone are separate tracks (riffrec never muxes them);
+            # keep the hidden audio aligned with the video element.
+            video_block += """
+    <script>
+    (function(){
+      var v=document.getElementById('rec'), a=document.getElementById('voice');
+      if(!v||!a) return;
+      a.volume=1; a.muted=false;
+      var align=function(){ try{ a.currentTime=v.currentTime; }catch(e){} };
+      v.addEventListener('play',   function(){ align(); a.play().catch(function(){}); });
+      v.addEventListener('pause',  function(){ a.pause(); });
+      v.addEventListener('seeked', align);
+      v.addEventListener('ratechange',function(){ a.playbackRate=v.playbackRate; });
+      // gentle drift correction: only while playing, only if badly out, never mid-seek
+      v.addEventListener('timeupdate', function(){
+        if(v.paused||v.seeking||a.seeking) return;
+        if(Math.abs(a.currentTime-v.currentTime)>1.0) align();
+      });
+      v.addEventListener('ended',  function(){ a.pause(); });
+    })();
+    </script>"""
     else:
         video_block = '<p class="muted">No recording available for this source.</p>'
 
@@ -1450,18 +1488,8 @@ def write_html_report(
   .card {{ background: #131a22; border: 1px solid #1e2732; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }}
   .ann-comment {{ margin: 0 0 6px; font-size: 16px; font-weight: 600; }}
   .meta {{ font-size: 12.5px; color: #8a97a6; margin: 4px 0 0; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px,100%),1fr)); gap: 14px; }}
-  figure.moment {{ margin: 0; background: #131a22; border: 1px solid #1e2732; border-radius: 10px; overflow: hidden; }}
-  figure.moment img {{ display: block; width: 100%; height: auto; background: #000; cursor: zoom-in; }}
-  .noframe {{ aspect-ratio: 16/9; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #8a97a6; text-align: center; }}
-  figcaption {{ padding: 10px 12px; }}
-  .moment-head {{ display: flex; align-items: center; gap: 10px; }}
-  .mid {{ font-weight: 700; color: #9fb0c0; font-size: 12px; }}
-  .reason {{ font-size: 13px; margin-top: 4px; }}
-  .ev {{ font-size: 12px; margin-top: 4px; }}
-  button.seek, button.seg {{ font: inherit; cursor: pointer; border: 1px solid #2a3644; background: #1a2431; color: #cfe0f0; border-radius: 6px; }}
-  button.seek {{ padding: 3px 9px; font-size: 12.5px; font-weight: 600; }}
-  button.seek:hover, button.seg:hover {{ border-color: #6fb3ff; }}
+  button.seg {{ font: inherit; cursor: pointer; border: 1px solid #2a3644; background: #1a2431; color: #cfe0f0; border-radius: 6px; }}
+  button.seg:hover {{ border-color: #6fb3ff; }}
   .transcript-segs {{ display: flex; flex-direction: column; gap: 4px; }}
   button.seg {{ display: flex; gap: 12px; text-align: left; padding: 8px 10px; align-items: baseline; }}
   button.seg .ts {{ color: #6fb3ff; font-variant-numeric: tabular-nums; flex: 0 0 auto; font-size: 12.5px; }}
@@ -1474,11 +1502,50 @@ def write_html_report(
   .badge.warn {{ background: #3a2d12; color: #ffca6b; }}
   .badge.ok {{ background: #12321f; color: #7ee0a3; }}
   .badge.muted-badge {{ background: #222b35; color: #8a97a6; }}
-  .finding-head {{ display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }}
   .synthesis-placeholder {{ border: 1px dashed #33465a; border-radius: 10px; padding: 18px; color: #9fb0c0; background: #101822; }}
-  .lightbox {{ position: fixed; inset: 0; background: rgba(0,0,0,.9); display: none; align-items: center; justify-content: center; padding: 24px; z-index: 50; cursor: zoom-out; }}
-  .lightbox img {{ max-width: 100%; max-height: 100%; border-radius: 6px; }}
-  .lightbox.on {{ display: flex; }}
+  .req {{ background: #131a22; border: 1px solid #1e2732; border-left: 3px solid #6fb3ff; border-radius: 10px; margin-bottom: 10px; overflow: hidden; }}
+  .req > summary {{ list-style: none; cursor: pointer; padding: 13px 48px 13px 16px; position: relative; }}
+  .req > summary::-webkit-details-marker {{ display: none; }}
+  .req > summary:hover {{ background: #161f29; }}
+  .req-head {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+  .req-head h3 {{ margin: 0; font-size: 15px; }}
+  .chev {{ position: absolute; right: 18px; top: 50%; transform: translateY(-50%); color: #8a97a6; font-size: 28px; line-height: 1; transition: transform .15s ease; }}
+  .req > summary:hover .chev {{ color: #cfe0f0; }}
+  .req[open] .chev {{ transform: translateY(-50%) rotate(90deg); }}
+  .req-badges {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }}
+  .req-statement {{ margin: 8px 0 0; font-size: 13px; color: #c3d0dc; }}
+  .req-body {{ padding: 2px 16px 15px; border-top: 1px solid #1a222c; margin-top: 11px; }}
+  .req-body dl {{ display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 11px 0 0; font-size: 12.5px; }}
+  .req-body dt {{ color: #7f8ea0; text-transform: uppercase; letter-spacing: .04em; font-size: 10px; font-weight: 700; padding-top: 2px; }}
+  .req-body dd {{ margin: 0; }}
+  .req-body .quote {{ margin: 12px 0 0; padding: 8px 12px; border-left: 2px solid #2a3644; color: #b7c4d2; font-style: italic; font-size: 12.5px; }}
+  .src {{ font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }}
+  .src-written {{ background: #12283a; color: #7db6ff; }}
+  .src-spoken  {{ background: #2e2440; color: #c39bff; }}
+  .src-both    {{ background: #12321f; color: #7ee0a3; }}
+  .tstamp {{ font: inherit; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; border: 1px solid #2a3644; background: #14263a; color: #6fb3ff; border-radius: 999px; padding: 2px 9px; white-space: nowrap; }}
+  .tstamp:hover {{ border-color: #6fb3ff; color: #cfe0f0; }}
+  .nowmoment {{ display: flex; align-items: center; gap: 10px; margin-top: 10px; background: #131a22; border: 1px solid #1e2732; border-radius: 10px; padding: 18px 14px; min-height: 88px; }}
+  .nowmoment.idle .nm-body {{ cursor: default; }}
+  .nowmoment.idle .nm-body:hover {{ background: transparent; }}
+  .nowmoment.idle .nm-title {{ color: #55636f; font-weight: 400; font-size: 13.5px; }}
+  .nowmoment.idle .nm-top {{ justify-content: center; }}
+  .nowmoment.idle .ct, .nowmoment.idle .nm-detail {{ display: none; }}
+  .nowmoment .navm {{ flex: 0 0 auto; align-self: stretch; font: inherit; font-size: 17px; line-height: 1; cursor: pointer; border: none; background: transparent; color: #6f7f90; padding: 0 18px; margin: -18px 0; }}
+  .nowmoment .navm:first-child {{ margin-left: -14px; border-radius: 9px 0 0 9px; }}
+  .nowmoment .navm:last-child {{ margin-right: -14px; border-radius: 0 9px 9px 0; }}
+  .nowmoment .navm:hover:not(:disabled) {{ color: #e8edf2; background: #1a2431; }}
+  .nowmoment .navm:disabled {{ opacity: .25; cursor: default; }}
+  .nm-body {{ flex: 1 1 auto; min-width: 0; cursor: pointer; border-radius: 8px; padding: 2px 6px; margin: -2px -6px; }}
+  .nm-body:hover {{ background: #1a2431; }}
+  .nm-hint {{ flex: 0 0 auto; color: #55636f; font-size: 11px; }}
+  .nm-top {{ display: flex; align-items: baseline; gap: 10px; }}
+  .nm-top .ct {{ color: #6fb3ff; font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 700; flex: 0 0 auto; }}
+  .nm-title {{ font-weight: 700; font-size: 15px; }}
+  .nm-detail {{ display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 13px; line-height: 1.5; color: #8a97a6; margin-top: 4px; overflow: hidden; }}
+  .backto {{ position: fixed; right: 22px; bottom: 22px; z-index: 40; display: none; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; border: 1px solid #2a3644; background: #1a2431; color: #cfe0f0; border-radius: 999px; padding: 9px 16px; box-shadow: 0 4px 18px rgba(0,0,0,.5); }}
+  .backto.on {{ display: block; }}
+  .backto:hover {{ border-color: #6fb3ff; }}
 </style>
 </head>
 <body>
@@ -1496,32 +1563,46 @@ def write_html_report(
 
   <section id="synthesis">
     <h2>Synthesized requirements</h2>
-    <!-- AGENT-SYNTHESIS-START: the reviewing agent replaces this block with the
-         per-requirement synthesis (statement / rationale / parameters / parity /
-         confidence / surfaces / verbatim quote + timestamp) per extensive-analysis.md. -->
+    <!-- AGENT-SYNTHESIS-START: the reviewing agent replaces everything between these
+         markers (placeholder, example card, and any written pins below) with one
+         <details class="req"> card per requirement, following the example card and
+         extensive-analysis.md. Also fill the SEGMENTS array in the footer script so
+         the bar under the player tracks the requirements during playback. -->
     <div class="synthesis-placeholder">
-      <strong>Pending agent synthesis.</strong> The analyzer produced the evidence below.
-      The reviewing agent fills this section from the transcript and frames using the
-      nuance-preserving rubric — do not treat the machine signals as the requirements.
+      <strong>Pending agent synthesis.</strong> The reviewing agent replaces this block
+      with one collapsible card per requirement, synthesized from the transcript, the
+      written pins, and the extracted frames using the nuance-preserving rubric.
     </div>
+    <!-- Example requirement card (copy per requirement; delete this comment):
+    <details class="req" id="req-r1" style="border-left-color:#7ee0a3">
+      <summary>
+        <div class="req-head"><h3>R1 · Short requirement title</h3><span class="chev">▸</span></div>
+        <div class="req-badges"><span class="src src-spoken">🎙 spoken</span><button class="tstamp" data-t="30">▶ 00:30</button><span class="badge ok">concrete</span></div>
+        <p class="req-statement">One-line statement of the product behavior needed, with the key parameters inline.</p>
+      </summary>
+      <div class="req-body">
+        <dl>
+          <dt>Rationale</dt><dd>Why, in the reviewer's own framing.</dd>
+          <dt>Parameters</dt><dd>Concrete specifics the reviewer named: colors, states, thresholds, copy.</dd>
+          <dt>Parity</dt><dd>Prior art the reviewer cited; net-new vs port/verify, with a reachability check when the source is in the workspace.</dd>
+          <dt>Confidence</dt><dd>The reviewer's own certainty, hedges included.</dd>
+          <dt>Surfaces</dt><dd>Screens/pages/states it touches.</dd>
+        </dl>
+        <p class="quote">"Verbatim quote." · <button class="tstamp" data-t="30">▶ 0:30</button></p>
+      </div>
+    </details>
+    Conventions: source badges are span.src src-written (✎ written), src-spoken (🎙 spoken),
+    src-both (✎+🎙 written + spoken). Weight badges are span.badge ok (concrete) or
+    muted-badge (exploratory). button.tstamp with data-t seconds seeks the recording.
+    Border-left color: #7ee0a3 concrete, default blue exploratory, #8a97a6 caveats.
+    Caveats the reviewer flagged get their own card (id req-caveat, resolved or
+    unresolved per the reachability check). -->{pins_block}
     <!-- AGENT-SYNTHESIS-END -->
-  </section>
-
-  <section>
-    <h2>Reviewer notes ({len(annotations)})</h2>
-    {annotations_html}
   </section>
 
   <section>
     <h2>Recording</h2>
     {video_block}
-  </section>
-
-  <section>
-    <h2>Moments ({len(moments)})</h2>
-    <div class="grid">
-      {moments_html}
-    </div>
   </section>
 
   <section>
@@ -1531,26 +1612,87 @@ def write_html_report(
     </div>
     <details class="full"><summary>Full transcript (plain)</summary><pre>{full_transcript}</pre></details>
   </section>
-
-  <section>
-    <h2>Machine signals (verify — not requirements)</h2>
-    {findings_html}
-  </section>
 </div>
 
-<div class="lightbox" id="lb"><img alt=""></div>
+<button class="backto" id="backto">↩ Back</button>
 <script>
   var rec = document.getElementById('rec');
-  function seek(t) {{ if (!rec) return; rec.currentTime = t; rec.play().catch(function(){{}});
-    rec.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }}
+  var backBtn = document.getElementById('backto');
+  var returnY = null;
+
+  function seek(t, remember) {{
+    if (!rec) return;
+    if (remember) {{ returnY = window.scrollY; backBtn.classList.add('on'); }}
+    rec.currentTime = t; rec.play().catch(function(){{}});
+    rec.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+  }}
+
+  // transcript segs + in-card ▶ buttons all seek; jumps remember where you were
   document.querySelectorAll('[data-t]').forEach(function(el) {{
-    el.addEventListener('click', function() {{ seek(parseFloat(el.getAttribute('data-t'))); }});
+    el.addEventListener('click', function(e) {{
+      e.stopPropagation(); e.preventDefault();
+      seek(parseFloat(el.getAttribute('data-t')), true);
+    }});
   }});
-  var lb = document.getElementById('lb'), lbImg = lb.querySelector('img');
-  document.querySelectorAll('figure.moment img').forEach(function(img) {{
-    img.addEventListener('click', function(e) {{ e.stopPropagation(); lbImg.src = img.src; lb.classList.add('on'); }});
+
+  backBtn.addEventListener('click', function() {{
+    if (returnY !== null) window.scrollTo({{top: returnY, behavior: 'smooth'}});
+    backBtn.classList.remove('on'); returnY = null;
   }});
-  lb.addEventListener('click', function() {{ lb.classList.remove('on'); lbImg.src=''; }});
+
+  // "Current requirement" bar under the player: shows which synthesized requirement
+  // the reviewer is talking about at the current timestamp; click it to jump to the
+  // card. AGENT-SEGMENTS: during synthesis, fill this array with one entry per
+  // timeline segment, in playback order. t is where the segment starts (seconds);
+  // target is the id of the requirement card it links to. Example entry:
+  //   {{ id:'R1', t:30.00, time:'00:30', title:'Short requirement title',
+  //     detail:'One-line detail or verbatim quote.', target:'req-r1' }}
+  var SEGMENTS = [];
+  var nmBar = document.getElementById('nowmoment');
+  if (nmBar && (!rec || SEGMENTS.length === 0)) {{ nmBar.style.display = 'none'; }}
+  if (nmBar && rec && SEGMENTS.length > 0) {{
+    var nmTime = document.getElementById('nmTime'), nmTitle = document.getElementById('nmTitle'),
+        nmDetail = document.getElementById('nmDetail'), nmHint = document.getElementById('nmHint'),
+        prevBtn = document.getElementById('prevM'), nextBtn = document.getElementById('nextM'),
+        nmBody = nmBar.querySelector('.nm-body');
+    var curIdx = -1;
+    var renderMoment = function(i) {{
+      curIdx = i;
+      if (i < 0) {{
+        nmBar.classList.add('idle');
+        nmTitle.textContent = 'No captured feedback in this segment';
+        nmHint.style.display = 'none';
+        prevBtn.disabled = true;
+        nextBtn.disabled = false;
+        return;
+      }}
+      nmBar.classList.remove('idle');
+      nmHint.style.display = '';
+      var m = SEGMENTS[i];
+      nmTime.textContent = m.time + ' · ' + m.id;
+      nmTitle.textContent = m.title;
+      nmDetail.textContent = m.detail;
+      prevBtn.disabled = (i === 0);
+      nextBtn.disabled = (i === SEGMENTS.length - 1);
+    }};
+    var momentIndexAt = function(t) {{
+      var idx = -1;
+      for (var i = 0; i < SEGMENTS.length; i++) if (SEGMENTS[i].t <= t + 0.05) idx = i;
+      return idx;
+    }};
+    rec.addEventListener('timeupdate', function() {{
+      var i = momentIndexAt(rec.currentTime);
+      if (i !== curIdx) renderMoment(i);
+    }});
+    prevBtn.addEventListener('click', function() {{ if (curIdx > 0) {{ seek(SEGMENTS[curIdx - 1].t, false); renderMoment(curIdx - 1); }} }});
+    nextBtn.addEventListener('click', function() {{ if (curIdx < SEGMENTS.length - 1) {{ seek(SEGMENTS[curIdx + 1].t, false); renderMoment(curIdx + 1); }} }});
+    nmBody.addEventListener('click', function() {{
+      if (curIdx < 0) return;
+      var card = document.getElementById(SEGMENTS[curIdx].target);
+      if (card) {{ card.open = true; card.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }}
+    }});
+    renderMoment(momentIndexAt(rec.currentTime));
+  }}
 </script>
 </body>
 </html>
@@ -1618,14 +1760,22 @@ def main() -> int:
     write_source_materials(source_materials_md, source_path, source_kind, session, transcript, moments, raw_dir, frames_dir, repo_root)
     write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root)
 
+    # Riffrec records screen and microphone as two separate cue-less webm streams;
+    # repair both so the report's player gets reliable duration/seeking and audio.
+    recording_path = source["recording_path"]
+    voice_path = source["transcription_path"]
+    if source_kind == "riffrec_zip":
+        recording_path, voice_path = repair_media(recording_path, voice_path, raw_dir)
+
     # Audio-only sources have no recording_path; fall back to the voice track so the
     # report still gets a player (rendered as <audio>) and the transcript seek works.
-    media_path = source["recording_path"] or source["transcription_path"]
-    media_is_video = source["recording_path"] is not None
+    media_path = recording_path or voice_path
+    media_is_video = recording_path is not None
     report_html = output_dir / "report.html"
     write_html_report(
         report_html, source_path, source_kind, session, transcript,
-        moments, findings, sidecar, media_path, media_is_video,
+        sidecar, media_path, media_is_video,
+        voice_path=voice_path if (media_is_video and source_kind == "riffrec_zip") else None,
     )
 
     structured = {
@@ -1663,6 +1813,8 @@ def main() -> int:
     print("Analysis complete. Ready to plan the findings.")
     # Machine-readable line: the skill opens this in the harness browser (OS default as fallback).
     print(f"REPORT_HTML={report_html}")
+    # After the synthesis block is filled, build the shareable single file (media embedded):
+    print(f"STANDALONE_BUILD=python3 {Path(__file__).resolve().parent / 'build_standalone.py'} {output_dir}")
     print(f"Source materials: {display_path(source_materials_md, repo_root)}")
     print(f"Problem statements: {display_path(problem_analysis_md, repo_root)}")
     print(f"Planning handoff: load inc:plan with {display_path(kickoff_md, repo_root)}")

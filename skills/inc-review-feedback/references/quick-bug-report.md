@@ -12,7 +12,7 @@ Use this path when the input is a short recording (under ~60 seconds), the user 
 
    Capture the printed output directory; later steps read from it.
 
-2. Read only `analysis.md` from the temp output. Skip `problem-analysis.md`, `review-prompt.md`, `requirements-kickoff.md`, and `source-materials.md` — they are designed for the extensive path. The analyzer also writes `report.html`; you may open it (harness browser, else OS default via `open`/`xdg-open`/`start`) so the user can see the recording, frames, and transcript, but the quick path's deliverable is still the short bug report below — do not read `report.html` into context.
+2. Read only `analysis.md` from the temp output. Skip `problem-analysis.md`, `review-prompt.md`, `requirements-kickoff.md`, and `source-materials.md` — they are designed for the extensive path. The analyzer also writes `report.html`; you may open it (harness browser, else OS default via `open`/`xdg-open`/`start`) so the user can see the recording and transcript, but the quick path's deliverable is still the short bug report below — do not read `report.html` into context, and do not fill its synthesis block on this path.
 
 3. Pick at most one or two screenshots from `frames/` that directly show the reported issue. Prefer frames near a verbal complaint, a failed click, a console error, or a failed network request.
 
