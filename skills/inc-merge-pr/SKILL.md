@@ -1,12 +1,12 @@
 ---
 name: inc:merge-pr-5
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then three blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments; deploy-window timing - risk-based decision outside Mon–Thu 1 PM EST). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification
 ---
 
 # Merge PR: Production Deploy Readiness Check
 
-Three gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning.
+Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third - the deploy window - respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
 **Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
@@ -25,11 +25,11 @@ bash "$PLUGIN_ROOT/skills/inc-merge-pr/scripts/merge-gates.sh"
 
 The block's final line is `VERDICT: <GO | BLOCK | NEEDS_DECISION> [reasons=...]`:
 
-- **GO** - every gate passed and the deploy window is open. Proceed to deploy-observation readiness, then merge.
+- **GO** - every hard gate passed and Gate 3 is clear: no window rule and a low-risk change (or a rule/risk case you already resolved to OK). Proceed to deploy-observation readiness, then merge.
 - **BLOCK** - at least one hard gate failed: freshness overlap, new env vars, or PR health. A gate that **could not be verified** (helper crashed, `gh` errored, quota exhausted, unparseable remote) is fail-safe and also blocks here - the script never lets an unverifiable gate pass. Report the failing gate(s) per the sections below and **stop** - do not run deploy-observation readiness, do not merge.
-- **NEEDS_DECISION** - no hard failure, but the deploy window needs your call: a too-early Mon–Thu window (override-eligible) or an off-hours (Fri–Sun) risk classification. Work the Gate 3 decision branch; merge only if it resolves to OK.
+- **NEEDS_DECISION** - no hard failure, but Gate 3 needs your call: either a configured deploy-window rule to evaluate against the current time (`gate3-window-decision`), or - with no window rule - an elevated-risk change to confirm before shipping (`gate3-risk-confirm`). Work the Gate 3 decision branch; merge only if it resolves to OK. (Neither is a hard block.)
 
-The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate3-too-early`, `gate3-offhours-decision`).
+The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate3-window-decision`, `gate3-risk-confirm`).
 
 ### Read freshness first (`PREFLIGHT_FRESHNESS:` line)
 
@@ -168,52 +168,89 @@ The AI detection covers the common cases (Greptile, CodeRabbit, Copilot, Claude,
 
 ## Gate 3: Deployment Window
 
-The **full deploy window** is Mon–Thu after 1:00 PM Eastern - the team is around to respond if something breaks. Outside that window (Fri / Sat / Sun), Gate 3 is a **risk-based decision** rather than a hard block: critical hotfixes and clearly-minor low-risk changes may ship; major or risky releases wait for the next full window. Mon–Thu before 1 PM is override-eligible, not a silent pass.
+The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window - the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
 
-Unlike Gates 1–2, Gate 3 never emits a hard BLOCK on its own - both the too-early and off-hours windows are the user's call, so the script reports them as `VERDICT: NEEDS_DECISION` (when no hard gate already blocked). The gates script already classified the window and collected the risk signals. Read the `GATE3_WINDOW:` line and its `TIME` / `SIGNALS` / `DIFFSTAT` sub-lines from the block:
+The gates script does **not** interpret a window rule (matching a natural-language policy like "Mon–Thu after 1pm ET; freeze during the Dec holiday" against the clock is your job). It detects whether a rule exists, emits the current Eastern time as ground truth, classifies the change's risk (`RISK=low|elevated`), and lists the risk signals. Read the `GATE3_WINDOW:` line, the `RISK=` sub-line, and the `SIGNALS=` / `DIFFSTAT=` sub-lines from the block:
 
-| `GATE3_WINDOW:` value | Meaning | Action |
+| `GATE3_WINDOW:` | `RISK=` | Action |
 |-----------------------|---------|--------|
-| `ok` | DOW 1–4 and HOUR ≥ 13 | **Gate 3 OK** - proceed. |
-| `block_early` | DOW 1–4 and HOUR < 13 | **Gate 3 NEEDS_DECISION** - too early. Ask the user (blocking question) for an explicit override: a stated reason it must ship now ("deploy anyway, this is a hotfix") passes it; anything else holds until 1 PM. Record the override verbatim in the merge-pr report. |
-| `offhours` | DOW 5, 6, or 7 | Run the off-hours decision branch below. |
+| `none` | `low` | **Gate 3 OK** - no window rule, low-risk change; just ship. |
+| `none` | `elevated` | Run the **default risk confirmation** (below) - a quick confirm before shipping. |
+| `rules` | (any) | Evaluate the configured **window rule** against the current time (below). A rule takes precedence; it weighs the same risk signals when the window is closed. |
 
-### Off-hours decision branch (Fri / Sat / Sun)
+### Default risk confirmation (no window rule)
 
-Off-hours is a judgment call. The user makes the final decision; this skill's job is to surface the risk signals and give a **clear, direct recommendation** so the user isn't deciding blind.
+When no window rule is configured and the change carries risk signals, the script reports `VERDICT: NEEDS_DECISION` with reason `gate3-risk-confirm`. This is a **lightweight confirm**, not the full window ceremony - the merge isn't blocked, you're just giving the user a chance to hold a riskier change.
 
-**Step 3a - Read the risk signals.** The `SIGNALS=` line lists which fired (space-separated, or `none`):
+**Read the signals.** The `SIGNALS=` line lists which fired (space-separated):
+
+- `env` - new env vars (note: this also hard-blocks Gate 1, so you'd normally see it there first).
+- `schema` - the diff touches DB schema or migration files (`schema`/`migrations`/`drizzle`/`prisma` paths or `*.sql`).
+- `backfill` - the diff references a backfill, seed, or one-time data job.
+- `largediff` - files changed ≥ 10 **or** insertions+deletions ≥ 300 (the `DIFFSTAT=` line shows the raw stat).
+
+**Present a short assessment and ask** (AskUserQuestion):
+
+> **Gate 3 (risk check):** No deploy-window rule is configured, so this can ship anytime - but the change carries risk signals worth a look before it goes to production:
+>
+> - Signals: `<list signals>` (`<DIFFSTAT>`).
+>
+> Ship it now, or hold?
+> 1. **Ship it** - merge and deploy now.
+> 2. **Hold** - I'll stop here; you deploy later or split the risky part out.
+
+Resolve:
+- **"Ship it"** → **Gate 3 OK (elevated risk, user confirmed: `<signals>`).**
+- **"Hold"** → **Gate 3 BLOCK - user held on elevated risk (`<signals>`).** Stop; do not merge.
+
+Record the signals and the user's choice in the final report. A low-risk change (`RISK=low`, `VERDICT: GO`) never reaches this prompt - it just ships.
+
+### Evaluating a configured window rule
+
+The script reports `VERDICT: NEEDS_DECISION` whenever a rule is present (when no hard gate already blocked) - that just means **you** must judge now-vs-rule; it does *not* mean you must always ask the user.
+
+**Step 3a - Read the rule and the current time.** From the block:
+- `RULE=` - the team's window policy, verbatim (e.g. `Mon-Thu after 1pm ET; freeze Fri-Sun`).
+- `TIME=` - the current Eastern time (e.g. `Saturday 2026-04-25 11:14 EDT`), plus `DOW=` (1=Mon…7=Sun) and `HOUR=` (0–23) for precise comparison.
+
+**Step 3b - Decide whether the current time satisfies the rule:**
+
+- **Window open** (the current time clearly satisfies the rule) → **Gate 3 OK** - proceed to merge without asking. Note "within deploy window (`<rule>`)" in the report.
+- **Window closed** (the current time violates the rule, or a freeze applies) → this is the user's call. Surface the risk signals and a **clear, direct recommendation**, then ask (do not silently block or silently pass).
+- **Ambiguous** (you genuinely can't tell whether the rule is satisfied - e.g. an underspecified or unusual policy) → treat as closed and ask, showing the rule so the user can decide.
+
+**Step 3c - When the window is closed, read the risk signals.** The `SIGNALS=` line lists which fired (space-separated, or `none`):
 
 - `env` - Gate 1 reported new env vars.
 - `schema` - the diff touches DB schema or migration files (`schema`/`migrations`/`drizzle`/`prisma` paths or `*.sql`).
 - `backfill` - the diff references a backfill, seed, or one-time data job.
 - `largediff` - files changed ≥ 10 **or** insertions+deletions ≥ 300 (the `DIFFSTAT=` line shows the raw stat).
 
-**Step 3b - Form a recommendation** based on signals:
+**Step 3d - Form a recommendation** based on signals:
 
 - **No signals fired** → recommend **OK** if the change is a low-risk minor fix or a critical hotfix.
-- **One or more signals fired** → recommend **BLOCK unless this is a critical hotfix** - the signals indicate the change carries real risk that the off-hours team would have to absorb.
+- **One or more signals fired** → recommend **hold unless this is a critical hotfix** - the signals indicate the change carries real risk that an off-window team would have to absorb.
 
-**Step 3c - Present the decision to the user:**
+**Step 3e - Present the closed-window decision to the user:**
 
-> **Gate 3 (off-hours decision):** Current time: `<Sat 2026-04-25 11:14 EDT>`. We're outside the Mon–Thu 1 PM window.
+> **Gate 3 (deploy window closed):** Current time: `<Sat 2026-04-25 11:14 EDT>`. The team's deploy-window rule is `<rule>`, which the current time does not satisfy.
 >
 > Signals observed: `<list signals, or "none">`.
 >
-> **Recommendation:** `<OK if change is minor/hotfix | BLOCK unless this is a critical hotfix - <which signals> indicate non-trivial risk>`.
+> **Recommendation:** `<OK if change is minor/hotfix | hold unless this is a critical hotfix - <which signals> indicate non-trivial risk>`.
 >
 > How should I classify this change?
 > 1. **Critical hotfix** - production is broken / user-facing regression / security issue. State what is broken.
-> 2. **Minor low-risk** - small scoped change that the team is comfortable shipping off-hours.
-> 3. **Major or risky / unsure** - wait for the next full window.
+> 2. **Minor low-risk** - small scoped change that the team is comfortable shipping outside the window.
+> 3. **Wait for the window** - hold until the next in-window slot.
 
 Resolve based on the user's answer - **the user's call stands**, even if it overrides the recommendation:
 
 - **"Critical hotfix"** with a stated reason → **Gate 3 OK (hotfix: `<reason>`).**
 - **"Minor low-risk"** → **Gate 3 OK (minor).** If signals fired and the user picked this anyway, record "minor, user override despite `<signals>`" in the report.
-- **"Major or risky / unsure"** → **Gate 3 BLOCK - off-hours, major/risky.** Compute the next Mon–Thu ≥ 1 PM slot from the current EST time and report it: "Wait until `<next valid window>`."
+- **"Wait for the window"** → **Gate 3 BLOCK - outside deploy window.** Compute the next in-window slot from the current EST time and the rule, and report it: "Wait until `<next valid window>`."
 
-Record the chosen classification (and any override) verbatim in the final report so the call is auditable. Do not silently pass an off-hours deploy - always surface the recommendation and the user's classification.
+Record the rule, the chosen classification, and any override verbatim in the final report so the call is auditable. Do not silently pass a closed-window deploy - always surface the recommendation and the user's classification.
 
 ---
 
@@ -227,7 +264,7 @@ Pre-flight (freshness):  <OK | OK: N behind, no overlap | BLOCK: path overlap on
 Pre-flight (observation): <ready: <platform> as <account> | skip: <reason> | granted: rule added, re-probe ok>
 Gate 1 (env vars):       <OK | BLOCK: ...>
 Gate 2 (PR health):      <OK | BLOCK: draft | BLOCK: CI <failing|pending> - <checks> | BLOCK: <N> unresolved review thread(s) | BLOCK: merge state <status>>
-Gate 3 (deploy window):  <OK | OK (hotfix: <reason>) | OK (minor [, user override despite <signals>]) | BLOCK - too early | BLOCK - off-hours, major/risky>
+Gate 3 (deploy window):  <OK - no window rule, low risk | OK - elevated risk (<signals>), user confirmed | OK - within window (<rule>) | OK (hotfix: <reason>) | OK (minor [, user override despite <signals>]) | BLOCK - user held on elevated risk (<signals>) | BLOCK - outside deploy window (<rule>), wait until <next slot>>
 
 MERGE: <GO | BLOCK - gate(s) N, M>
 ```

@@ -1,6 +1,6 @@
 ---
 name: inc:debug
-description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes
+description: Root-cause any bug, failure, or unexpected behavior before proposing fixes. Fire the moment a symptom appears - don't wait for the user to say "debug". Triggers include (1) the user pastes or relays an error, stack trace, failure log, CI output, or a "what happened / here's the blocker" report describing a failure (not a routine approval or access request), from themselves or another agent; (2) something returns a 5xx or unexpected 4xx (not an expected auth prompt), throws, crashes, hangs, times out, returns wrong output, or "stopped working"; (3) a test fails or is flaky, a build breaks, or an integration/API/deploy misbehaves; (4) the user asks "why is X happening", "what's causing this", "figure out why", "diagnose", "root cause", or "/inc:debug"; (5) a handed-off task is blocked by a confirmed server-side, auth, data, or infra failure. When a symptom is described but no fix is requested yet, still invoke this first - investigation precedes fixes.
 ---
 
 # Debugging

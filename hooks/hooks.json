@@ -3,45 +3,45 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/gate.mjs" },
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/plugin-update.mjs" },
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs SessionStart" }
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/gate.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/plugin-update.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs SessionStart" }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/flush.mjs" },
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/transcript-sync.mjs" },
-          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/plugin-update.mjs" }
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/flush.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/transcript-sync.mjs" },
+          { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/plugin-update.mjs" }
         ]
       }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs UserPromptSubmit" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs UserPromptSubmit" }] }
     ],
     "PreToolUse": [
       {
         "matcher": "Bash|create_pull_request",
-        "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/gh-pr-gate.mjs" }]
+        "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/gh-pr-gate.mjs" }]
       },
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PreToolUse" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs PreToolUse" }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PostToolUse" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs PostToolUse" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs Notification" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs Notification" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs Stop" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs Stop" }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs SubagentStop" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs SubagentStop" }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/emit.mjs PreCompact" }] }
+      { "hooks": [{ "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT:-.}/hooks/emit.mjs PreCompact" }] }
     ]
   }
 }
