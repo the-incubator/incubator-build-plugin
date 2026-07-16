@@ -1,0 +1,54 @@
+name: Routing evals
+
+# Behavioral gate for the beta→main release promotion (see RELEASING.md).
+# Runs the routing eval suite (evals/run-routing.mjs) headless: each fixture
+# prompt must invoke the expected skill. These cost real API tokens and are
+# non-deterministic, so they run on promotion PRs into main (plus manual
+# dispatch and a weekly drift check) — not on every feature PR into beta.
+#
+# Requires the ANTHROPIC_API_KEY repo secret. With the key set the runner
+# uses --bare, so only this plugin is loaded — the authoritative routing
+# environment.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly drift check — model or CLI updates can shift routing without
+    # any commit to this repo.
+    - cron: "0 13 * * 1"
+
+jobs:
+  routing-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Require ANTHROPIC_API_KEY
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set — routing evals cannot run. Add it in repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+      - run: npm install --no-audit --no-fund
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Run routing evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node evals/run-routing.mjs --keep-logs --attempts 3
+      - name: Upload eval streams
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routing-eval-streams
+          path: evals/.artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

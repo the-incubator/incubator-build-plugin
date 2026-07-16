@@ -1,0 +1,76 @@
+# Routing eval fixtures: user prompt → skill the model must invoke.
+#
+# Run with: npm run test:evals   (see evals/run-routing.mjs)
+#
+# Each case:
+#   name:    stable identifier (used by --filter)
+#   prompt:  the user prompt, verbatim, as an end user would type it
+#   expect:  skill(s) that count as a pass — folder-style names, matched after
+#            normalization (lowercased, ":" → "-", plugin prefix and trailing
+#            "-N" version suffixes stripped, so "inc:merge-pr-5" == "inc-merge-pr").
+#            A list means any listed skill passes (genuinely ambiguous prompts).
+#
+# Keep prompts realistic and unambiguous — these guard the skill descriptions
+# (trigger phrases) against routing regressions, not the model's creativity.
+
+cases:
+  - name: debug-pasted-error
+    prompt: "why is my build failing with this? TypeError: Cannot read properties of undefined (reading 'map') at BuildStep.run (build.ts:42)"
+    expect: inc-debug
+
+  - name: debug-root-cause
+    prompt: "figure out the root cause of why the webhook handler stopped working yesterday"
+    expect: inc-debug
+
+  - name: merge-pr-ship-it
+    prompt: "ship this PR"
+    expect:
+      - inc-merge-pr
+      - inc-ship-it
+
+  - name: ship-it-end-to-end
+    prompt: "ship it end to end - take my working changes all the way through review, PR, and merge"
+    expect: inc-ship-it
+
+  - name: commit-push-pr
+    prompt: "commit these changes and open a pull request"
+    expect: inc-commit-push-pr
+
+  - name: review-working-tree
+    prompt: "review my uncommitted changes before I put up a PR"
+    expect:
+      - inc-review
+      - inc-review-deep
+      - inc-review-and-pr
+
+  - name: review-and-pr
+    prompt: "review and PR"
+    expect: inc-review-and-pr
+
+  - name: guide-which-skill
+    prompt: "how do I use incubator-build? which skill should I run to get my changes merged?"
+    expect: inc-guide
+
+  - name: guide-how-does-skill-work
+    prompt: "how does inc:merge-pr work?"
+    expect: inc-guide
+
+  - name: update-code-from-main
+    prompt: "update my branch with the latest from main"
+    expect: inc-update-code
+
+  - name: resolve-pr-feedback
+    prompt: "resolve the review feedback on my PR"
+    expect: inc-resolve-pr-feedback
+
+  - name: pr-description
+    prompt: "write a PR description for this branch"
+    expect: pr-description
+
+  - name: setup-deploy
+    prompt: "set up deploy config so merges can watch the deployment automatically"
+    expect: inc-setup-deploy
+
+  - name: plan-before-code
+    prompt: "plan this feature before we write any code: add CSV export to the reports page"
+    expect: inc-plan

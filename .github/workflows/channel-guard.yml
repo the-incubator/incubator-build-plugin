@@ -1,0 +1,24 @@
+name: Channel guard
+
+# Enforces the per-branch channel invariants (see scripts/check-channel.mjs and
+# RELEASING.md): main must stay the pinned stable channel ("incubator", semver
+# version), beta must stay the auto-shipping beta channel ("incubator-beta",
+# no version). Runs on every PR into either channel branch — most importantly
+# the beta→main promotion PR, where a plain merge would otherwise leak the
+# beta channel files onto stable.
+
+on:
+  pull_request:
+    branches: [main, beta]
+  push:
+    branches: [main, beta]
+
+jobs:
+  check-channel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: node scripts/check-channel.mjs
