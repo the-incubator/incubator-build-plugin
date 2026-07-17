@@ -188,6 +188,10 @@ def read_notes(path: Path) -> dict[str, Any]:
 # Click (2), DblClick (4), TouchStart (7).
 RRWEB_CLICK_TYPES = {2, 4, 7}
 
+# Voice filenames the mobile client can produce (container depends on the
+# engine: webm/opus on Chromium/Firefox, AAC in mp4 on iOS Safari).
+MOBILE_VOICE_FILES = ("voice.webm", "voice.m4a", "voice.ogg", "voice.mp4")
+
 
 def rrweb_interaction_events(raw_events: Any) -> list[dict[str, Any]]:
     """Map rrweb incremental mouse/touch interactions onto the analyzer's event
@@ -248,7 +252,15 @@ def prepare_mobile_rrweb_source(raw_dir: Path, manifest: dict[str, Any]) -> dict
             print(f"RENDER_SKIPPED reason={compact_text(str(err), 300)}")
             print("  Re-run manually: " + " ".join(render_command))
 
-    voice_file = manifest.get("voiceFile") or "voice.webm"
+    # Basename only - voiceFile is bundle-controlled, and a traversal value
+    # like "../../private.wav" must never point transcription (which may
+    # upload the file to a remote backend) outside the extracted bundle. When
+    # the manifest omits or misnames it, probe the client's known voice names
+    # so a real track still gets transcribed.
+    declared_voice = Path(str(manifest.get("voiceFile") or "")).name
+    voice_candidates = [declared_voice] if declared_voice else []
+    voice_candidates += [c for c in MOBILE_VOICE_FILES if c != declared_voice]
+    voice_file = next((c for c in voice_candidates if (raw_dir / c).exists()), "voice.webm")
     return {
         "source_kind": "riffrec_zip",
         "session": session,
