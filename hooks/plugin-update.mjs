@@ -16,11 +16,35 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { P } from "./_util.mjs";
 
-const MARKETPLACE_NAME = "incubator";
-const PLUGIN_REF = "incubator-build@incubator";
+const FALLBACK_MARKETPLACE = "incubator";
+const PLUGIN_NAME = "incubator-build";
+
+// Channel awareness: a marketplace install places this file at
+// ~/.claude/plugins/cache/<marketplace>/<plugin>/hooks/plugin-update.mjs.
+// Deriving the marketplace from our own path means the identical code
+// self-updates from whichever channel it was installed from — "incubator"
+// (stable, main) or "incubator-beta" (beta branch) — with no per-branch
+// edits that a beta→main merge could leak. Local/dev installs don't match
+// the cache layout and fall back to the stable channel names.
+function deriveChannel() {
+  try {
+    const here = fileURLToPath(new URL(".", import.meta.url)); // .../<plugin>/hooks/
+    const parts = here.split(sep).filter(Boolean);
+    const cacheIdx = parts.lastIndexOf("cache");
+    if (cacheIdx > 0 && parts[cacheIdx - 1] === "plugins" && parts.length > cacheIdx + 2) {
+      const marketplace = parts[cacheIdx + 1];
+      const plugin = parts[cacheIdx + 2];
+      return { marketplace, pluginRef: `${plugin}@${marketplace}` };
+    }
+  } catch {}
+  return { marketplace: FALLBACK_MARKETPLACE, pluginRef: `${PLUGIN_NAME}@${FALLBACK_MARKETPLACE}` };
+}
+
+const { marketplace: MARKETPLACE_NAME, pluginRef: PLUGIN_REF } = deriveChannel();
 const INTERVAL_MS = 1 * 60 * 60 * 1000;
 const STAMP_PATH = join(P.incubator, "last-update-check");
 const LOG_PATH = join(P.logsDir, "plugin-update.log");
@@ -53,6 +77,7 @@ try {
   const header =
     `[plugin-update hook]\n` +
     `started_at:       ${startedAt}\n` +
+    `channel:          ${MARKETPLACE_NAME} (${PLUGIN_REF})\n` +
     `last_check_epoch: ${last}\n` +
     `since_last_ms:    ${sinceMs}\n` +
     `interval_ms:      ${INTERVAL_MS}\n` +

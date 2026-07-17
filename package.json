@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "test:skills": "node scripts/validate-skills.mjs",
-    "test:hooks": "node --test hooks/*.test.mjs"
+    "test:hooks": "node --test hooks/*.test.mjs",
+    "test:channel": "node scripts/check-channel.mjs",
+    "test:evals": "node evals/run-routing.mjs"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0"
