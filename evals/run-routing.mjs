@@ -11,12 +11,17 @@
 // hitting the turn cap without a skill call is itself the routing failure
 // we're measuring.
 //
-// Environment isolation: when ANTHROPIC_API_KEY is set (CI, or exported
-// locally), runs use --bare so ONLY this plugin is loaded — that's the
-// authoritative configuration. Without it, runs fall back to your normal
-// claude auth AND your personal plugins/skills, which can legitimately steal
-// routing (e.g. another debugging skill wins) — treat unkeyed local results
-// as indicative, not authoritative.
+// Auth + environment isolation, in order of preference:
+//   1. CI with CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`): billed to
+//      the Claude subscription, no API credits. Bare mode doesn't read OAuth
+//      tokens, so these runs go non-bare — a fresh CI runner has no other
+//      plugins installed, so the environment is clean anyway. Authoritative.
+//   2. ANTHROPIC_API_KEY set (CI or exported locally): runs use --bare so
+//      ONLY this plugin is loaded. Authoritative, but costs API credits.
+//      Note: if both are set, the API key wins the CLI's auth chain.
+//   3. Neither (local dev): your normal claude subscription auth, but your
+//      personal plugins/skills also load and can legitimately steal routing
+//      (e.g. another debugging skill wins) — indicative, not authoritative.
 //
 // These evals cost real tokens and are non-deterministic, so they gate the
 // beta→main release promotion (see .github/workflows/evals.yml and
@@ -56,7 +61,14 @@ const CONCURRENCY = Math.max(1, Number.parseInt(argValue("--concurrency", "4"), 
 const TIMEOUT_MS = (Number.parseInt(argValue("--timeout", "180"), 10) || 180) * 1000;
 const MAX_TURNS = argValue("--max-turns", "4");
 const ATTEMPTS = Math.max(1, Number.parseInt(argValue("--attempts", "2"), 10) || 2);
+// --bare requires ANTHROPIC_API_KEY (bare mode skips OAuth/keychain and does
+// not read CLAUDE_CODE_OAUTH_TOKEN). OAuth-token runs stay non-bare.
 const BARE = Boolean(process.env.ANTHROPIC_API_KEY);
+const MODE_LABEL = BARE
+  ? "bare, API key (authoritative)"
+  : process.env.CI
+    ? "clean CI runner, subscription auth (authoritative)"
+    : "user env (indicative — your other plugins/skills also load and can steal routing)";
 
 // Headless -p sessions lack the interactive harness's skill-use nudging, so
 // the model often just does the work inline with Bash — which would measure
@@ -280,7 +292,7 @@ if (selected.length === 0) {
 }
 
 console.log(
-  `routing evals: ${selected.length}/${fixtures.length} case(s), model=${MODEL}, concurrency=${CONCURRENCY}, max-turns=${MAX_TURNS}, mode=${BARE ? "bare (authoritative)" : "user env (indicative — your other plugins/skills also load and can steal routing)"}\n`,
+  `routing evals: ${selected.length}/${fixtures.length} case(s), model=${MODEL}, concurrency=${CONCURRENCY}, max-turns=${MAX_TURNS}, mode=${MODE_LABEL}\n`,
 );
 
 if (KEEP_LOGS) {

@@ -77,16 +77,19 @@ Don't run both channels at once — two installs of the same plugin means duplic
 This guards the trigger phrases in the skill descriptions — historically the most regression-prone part of the plugin.
 
 - CI: `evals.yml` runs them on promotion PRs into `main`, on manual dispatch, and weekly (model/CLI updates can shift routing with no commit here).
-  Requires the `ANTHROPIC_API_KEY` repo secret; runs `--bare` so only this plugin is loaded.
-- Local: `npm run test:evals` (uses your normal claude auth; your other plugins also load and can steal routing, so treat unkeyed local results as indicative).
-  Export `ANTHROPIC_API_KEY` for an authoritative bare run.
+  Auth comes from the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (from `claude setup-token`) — billed to the Claude subscription, no API credits.
+  A fresh CI runner has no other plugins installed, so these runs are authoritative even though OAuth tokens can't use `--bare`.
+  `ANTHROPIC_API_KEY` works as an optional fallback (costs API credits, enables `--bare`); if both are set, the API key wins the CLI's auth chain.
+- Local: `npm run test:evals` (your normal claude subscription auth, no API credits; but your other plugins also load and can steal routing, so treat local results as indicative).
+  Export `ANTHROPIC_API_KEY` only if you want an authoritative `--bare` run locally.
 - Failures write per-case streams to `evals/.artifacts/` with `--keep-logs` (uploaded as a CI artifact).
 
 ## One-time setup (already done, kept for reference)
 
 - `scripts/cut-beta.sh` created the `beta` branch with its channel commit.
 - GitHub default branch set to `beta` so PRs target it: `gh api -X PATCH repos/{owner}/{repo} -f default_branch=beta`.
-- `ANTHROPIC_API_KEY` added to repo Actions secrets for the eval gate.
+- Eval-gate auth: ran `claude setup-token` locally and added the printed token as the `CLAUDE_CODE_OAUTH_TOKEN` repo Actions secret.
+  The token is valid for one year — renew it (same two steps) when it expires.
 
 ## Known limitations
 
