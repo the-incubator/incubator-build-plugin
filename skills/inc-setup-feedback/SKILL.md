@@ -51,37 +51,41 @@ node --version
 - No `package.json` → tell the user to run this from the target app's root (or `cd` there) and stop.
 - Neither Vite nor Next detected → the installer still runs (it assumes/forces a bundler via `--bundler`), but the mount step in Step 5 differs by bundler, so ask the user which framework the app uses before proceeding.
 
-Check whether it's already installed (idempotent — don't double-mount):
+Check whether it's already installed (idempotent — don't double-mount).
+Search the **whole repo**, not a fixed list of roots — monorepo frontends live in paths like `apps/web/src/` or `packages/web/src/` too, and missing one would mint a second token and write a second `preview-feedback` tree the app never imports:
 
 ```bash
-{ test -f src/preview-feedback/PreviewFeedbackMount.tsx || \
-  test -f client/src/preview-feedback/PreviewFeedbackMount.tsx || \
-  test -f preview-feedback/PreviewFeedbackMount.tsx; } && echo "ALREADY_INSTALLED"
-grep -rl "PreviewFeedbackMount" src client/src app 2>/dev/null | grep -v preview-feedback/ | grep -q . && echo "ALREADY_MOUNTED"
+MOUNT_FILE=$(git ls-files -co --exclude-standard 2>/dev/null \
+  | grep -E '(^|/)preview-feedback/PreviewFeedbackMount\.tsx$' | head -1)
+[ -n "$MOUNT_FILE" ] && echo "ALREADY_INSTALLED at $MOUNT_FILE"
+git grep -l "PreviewFeedbackMount" -- '*.tsx' '*.ts' 2>/dev/null | grep -v 'preview-feedback/' | grep -q . && echo "ALREADY_MOUNTED"
 ```
 
+(In a non-git app, fall back to `find . -path ./node_modules -prune -o -name PreviewFeedbackMount.tsx -print` and `grep -rl` excluding `node_modules`.)
+
 Resolve the frontend source root before installing:
-- standard Vite/Next app with `src/` → `OUT_DIR=src/preview-feedback`;
-- monorepo/full-stack app whose browser client lives in `client/src/` → `OUT_DIR=client/src/preview-feedback`;
-- root-level Next app without `src/` → `OUT_DIR=preview-feedback`.
+- **existing install** → `OUT_DIR=$(dirname "$MOUNT_FILE")` — always operate on the tree the app actually imports, never a second copy elsewhere;
+- new install, standard Vite/Next app with `src/` → `OUT_DIR=src/preview-feedback`;
+- new install, monorepo/full-stack app whose browser client lives in `client/src/`, `apps/<app>/src/`, or `packages/<app>/src/` → that app's `…/src/preview-feedback`;
+- new install, root-level Next app without `src/` → `OUT_DIR=preview-feedback`.
 
 Inspect the actual app entry/layout before choosing.
 Never accept the installer default if it would create a second feedback-client directory outside the real frontend source tree.
 
-If already installed **and** mounted, this is an **existing-install refresh**, not a no-op — but do not route anywhere yet.
-Do not mint a new token just to update the client source.
-First establish that the installed client is clean: resolve the existing output directory from the file that exists, then check it before any installer can overwrite it:
+If already installed — **mounted or not** — treat it as an **existing install**: never let a fresh Step 3B run overwrite the existing client directory, and do not mint a new token just to update the client source.
+(An interrupted earlier setup can leave the files installed but unmounted; that case must not fall through to a blind reinstall.)
+First establish that the installed client is clean:
 
 ```bash
-# Set this to the directory detected above.
-OUT_DIR="src/preview-feedback" # or: client/src/preview-feedback, preview-feedback
+OUT_DIR="$(dirname "$MOUNT_FILE")"
 git status --short -- "$OUT_DIR"
 ```
 
 The routing decision is this check's result:
 
-- Output is empty → the installed client is clean; **route to Step 3A**.
-- Output is non-empty → stop before downloading into the target directory. Tell the user which feedback-client files are dirty and ask whether they want a careful merge. Never overwrite custom annotation layers, styling, wrappers, or other local changes.
+- Output empty **and** mounted → **route to Step 3A** (Step 5 is skipped later; the mount already exists).
+- Output empty, **not** mounted → refresh via **Step 3A**, then continue through Step 5 to mount. Exception: if `.env.local` has no `…_FEEDBACK_COLLECTOR_URL` block at all (setup was interrupted before the mint), run **Step 2 + Step 3B** instead but with `--out-dir "$OUT_DIR"` pointed at the existing directory — the clean tree makes the overwrite safe, and 3B mints and writes the env block in the same pass.
+- Output non-empty → stop before downloading into the target directory. Tell the user which feedback-client files are dirty and ask whether they want a careful merge. Never overwrite custom annotation layers, styling, wrappers, or other local changes.
 - Not a git repo / cleanliness cannot be established → ask before overwriting an existing install.
 
 ## Step 2 — Decide token parameters (new installs only)
@@ -103,7 +107,7 @@ Only change it if the user is pointing at a different incubator deployment.
 
 ## Step 3A — Refresh a clean existing install without rotating its token
 
-Use this path only when Step 1 found both an existing install and mount, and `git status --short -- "$OUT_DIR"` was empty.
+Use this path only when Step 1 found an existing install (mounted, or unmounted with the feedback env block present) and `git status --short -- "$OUT_DIR"` was empty.
 The installer appends its env block only when the file has no `…_FEEDBACK_COLLECTOR_URL` line and never rewrites an existing one, so placeholders can be passed for required flags without reading, printing, or replacing the existing token.
 Do not rely on that invariant alone for something as unrecoverable as the token (it's write-only — a clobber forces a rotation): back up `.env.local` first and assert after the run that it is byte-identical, restoring the backup if not.
 
@@ -118,10 +122,12 @@ RESULT="$(mktemp -t inc-feedback-result.XXXXXX.json)"
 
 curl -fsSL "$COLLECTOR_URL/feedback-client.mjs" -o "$INSTALLER"
 grep -q 'RECORDING_MAX_MS' "$INSTALLER"
+grep -q 'filesPresent' "$INSTALLER"
 grep -q 'recording.webm' "$INSTALLER"
 grep -q 'Screen + voice · 8 min max' "$INSTALLER"
 
-# Guard the existing token: snapshot the env file, compare after, restore on drift.
+# Guard the existing token: snapshot the env file, compare after, restore on
+# drift. The backup holds the raw token - it is deleted on every path below.
 ENV_FILE=".env.local"
 ENV_BACKUP=""
 if [ -f "$ENV_FILE" ]; then
@@ -129,25 +135,48 @@ if [ -f "$ENV_FILE" ]; then
   cp "$ENV_FILE" "$ENV_BACKUP"
 fi
 
+# Capture the exit status instead of letting `set -e` kill the shell here -
+# the env guard below must run even (especially) when the installer fails.
+INSTALL_STATUS=0
 node "$INSTALLER" --dir . --json --yes --skip-install \
   --out-dir "$OUT_DIR" \
   --collector-url "$COLLECTOR_URL" \
   --token "existing-token-preserved" \
   --project "existing-project-preserved" \
-  > "$RESULT"
+  > "$RESULT" || INSTALL_STATUS=$?
 
-if [ -n "$ENV_BACKUP" ] && ! cmp -s "$ENV_BACKUP" "$ENV_FILE"; then
-  cp "$ENV_BACKUP" "$ENV_FILE"
-  echo "ENV_CLOBBER_REVERTED: installer modified $ENV_FILE on a refresh; original restored"
-  exit 1
+if [ -n "$ENV_BACKUP" ]; then
+  if ! cmp -s "$ENV_BACKUP" "$ENV_FILE"; then
+    cp "$ENV_BACKUP" "$ENV_FILE"
+    rm -f "$ENV_BACKUP"
+    echo "ENV_CLOBBER_REVERTED: installer modified $ENV_FILE on a refresh; original restored"
+    exit 1
+  fi
+  rm -f "$ENV_BACKUP"
+elif [ -f "$ENV_FILE" ]; then
+  # No env file existed before this refresh: the app's real feedback vars live
+  # elsewhere (another env file, or only in the deployment platform). The
+  # installer just created .env.local with the placeholder values - delete it
+  # so a local preview build can never submit with the placeholder token.
+  rm -f "$ENV_FILE"
+  echo "PLACEHOLDER_ENV_REMOVED: no pre-existing $ENV_FILE; installer-created copy deleted"
+fi
+
+if [ "$INSTALL_STATUS" -ne 0 ]; then
+  echo "INSTALLER_FAILED status=$INSTALL_STATUS"
+  exit "$INSTALL_STATUS"
 fi
 
 echo "RESULT_FILE=$RESULT"
 ```
 
-If any contract grep fails, stop: the collector deployment is serving an older installer.
+The four greps are a **staleness gate**, not a behavioral proof — they detect a collector still serving a pre-cap installer bundle; whether the cap actually enforces is owned by the canonical client's fake-timer test suite, and Step 7 re-verifies the installed constants' values.
+If any of them fails, stop: the collector deployment is serving an older installer.
 Do not replace a capped local client with it; report that the incubator app must be deployed first.
-If `ENV_CLOBBER_REVERTED` prints, the served installer no longer honors the leave-env-untouched invariant — the original `.env.local` was restored; stop and report it as an installer regression instead of continuing.
+Interpreting the guard markers:
+- `ENV_CLOBBER_REVERTED` → the served installer no longer honors the leave-env-untouched invariant; the original `.env.local` was restored (and the backup deleted). Stop and report it as an installer regression.
+- `PLACEHOLDER_ENV_REMOVED` → expected when the app keeps its feedback vars outside `.env.local`; the placeholder file the installer created was deleted. Continue, but skip Step 6's `.env.local` checks — the deployment platform's env is the source of truth here.
+- `INSTALLER_FAILED status=N` → the refresh did not complete; the env guard already ran (restore or placeholder cleanup). Investigate the installer output in `RESULT_FILE` before retrying.
 
 After a successful refresh, skip Step 5 because the component is already mounted.
 Continue through Step 4 to inspect the result, then Steps 6 and 7 to verify env/build/UI.
