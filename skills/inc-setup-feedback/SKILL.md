@@ -1,7 +1,7 @@
 ---
 name: inc:setup-feedback
 description: Use when the user wants to wire or refresh the incubator preview-feedback client in an app so external reviewers can annotate a deployed preview and the feedback lands in the incubator app. Triggers on "setup feedback", "set up the feedback tool", "install the preview feedback client", "update the preview feedback client", "wire up preview feedback", "add the review annotation tool", "mint a feedback token", or "/inc:setup-feedback". Safely refreshes clean existing installs, mints a scoped feedback token for new installs, mounts <PreviewFeedbackMount /> at the app root, keeps the enable flag off locally, verifies the 8-minute recording safety contract, and confirms the app still builds.
-allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(head *), Bash(tail *), Bash(echo *), Bash(set *), Bash(git status *), Bash(git check-ignore *), Bash(git ls-files *)
+allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(head *), Bash(tail *), Bash(echo *), Bash(set *), Bash(cp *), Bash(cmp *), Bash(rm *), Bash(find *), Bash(dirname *), Bash(git status *), Bash(git check-ignore *), Bash(git ls-files *), Bash(git grep *)
 argument-hint: "[optional: project slug, e.g. 'my-app-preview']"
 ---
 
@@ -58,7 +58,7 @@ Search the **whole repo**, not a fixed list of roots — monorepo frontends live
 MOUNT_FILE=$(git ls-files -co --exclude-standard 2>/dev/null \
   | grep -E '(^|/)preview-feedback/PreviewFeedbackMount\.tsx$' | head -1)
 [ -n "$MOUNT_FILE" ] && echo "ALREADY_INSTALLED at $MOUNT_FILE"
-git grep -l "PreviewFeedbackMount" -- '*.tsx' '*.ts' 2>/dev/null | grep -v 'preview-feedback/' | grep -q . && echo "ALREADY_MOUNTED"
+git grep -l "PreviewFeedbackMount" -- '*.tsx' '*.ts' '*.jsx' '*.js' 2>/dev/null | grep -v 'preview-feedback/' | grep -q . && echo "ALREADY_MOUNTED"
 ```
 
 (In a non-git app, fall back to `find . -path ./node_modules -prune -o -name PreviewFeedbackMount.tsx -print` and `grep -rl` excluding `node_modules`.)
@@ -178,7 +178,7 @@ Interpreting the guard markers:
 - `PLACEHOLDER_ENV_REMOVED` → expected when the app keeps its feedback vars outside `.env.local`; the placeholder file the installer created was deleted. Continue, but skip Step 6's `.env.local` checks — the deployment platform's env is the source of truth here.
 - `INSTALLER_FAILED status=N` → the refresh did not complete; the env guard already ran (restore or placeholder cleanup). Investigate the installer output in `RESULT_FILE` before retrying.
 
-After a successful refresh, skip Step 5 because the component is already mounted.
+After a successful refresh: if Step 1 found the component already mounted, skip Step 5; if this was the clean-but-unmounted case, continue **through Step 5** to mount it — that's the half the interrupted setup never finished.
 Continue through Step 4 to inspect the result, then Steps 6 and 7 to verify env/build/UI.
 
 ## Step 3B — Mint token + run the installer for a new install (one shell step)
@@ -216,6 +216,7 @@ RESULT="$(mktemp -t inc-feedback-result.XXXXXX.json)"
 INSTALLER="$(mktemp -t inc-feedback.XXXXXX.mjs)"
 curl -fsSL "$COLLECTOR_URL/feedback-client.mjs" -o "$INSTALLER"
 grep -q 'RECORDING_MAX_MS' "$INSTALLER"
+grep -q 'filesPresent' "$INSTALLER"
 grep -q 'recording.webm' "$INSTALLER"
 grep -q 'Screen + voice · 8 min max' "$INSTALLER"
 
