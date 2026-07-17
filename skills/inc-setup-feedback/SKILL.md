@@ -8,6 +8,7 @@ argument-hint: "[optional: project slug, e.g. 'my-app-preview']"
 # Setup Feedback — Wire the Preview-Feedback Client into an App
 
 Install the incubator preview-feedback client into a **target app** so external reviewers (a client, a designer, your team) can click-to-annotate a deployed preview and record a screen/voice walkthrough, with the structured feedback landing in the incubator app for Claude to act on.
+On phones — where no browser can screen-record — the client records the walkthrough as a DOM event stream (rrweb) plus voice instead, and the analyzer renders it to video at analysis time; reviewers get the same record button either way.
 
 This skill runs **from the target app's root** (the app being previewed), not from the plugin repo.
 For a new install, it mints a per-project token, runs the self-contained installer, mounts one component at the app root, and verifies the build.
@@ -18,9 +19,9 @@ In Claude Code, use `${CLAUDE_PLUGIN_ROOT}` (set automatically).
 In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
 **What it composes** (you don't need to know the internals, but for grounding):
-[Agentation](https://github.com/benjitaylor/agentation) for click-to-annotate + [Riffrec](https://github.com/kieranklaassen/riffrec) for screen/voice recording, both mounted under one `<PreviewFeedbackMount />` wrapper that auto-picks **local** mode in dev (no token, no collector — just you + Claude) and **remote** mode when the preview enable flag is set (branded submit panel → collector).
+[Agentation](https://github.com/benjitaylor/agentation) for click-to-annotate + [Riffrec](https://github.com/kieranklaassen/riffrec) for screen/voice recording on desktop + [rrweb](https://github.com/rrweb-io/rrweb) (with fflate) for the mobile DOM-recording path, all mounted under one `<PreviewFeedbackMount />` wrapper that auto-picks **local** mode in dev (no token, no collector — just you + Claude) and **remote** mode when the preview enable flag is set (branded submit panel → collector).
 
-**Recording safety contract:** the installed client must make the 8-minute maximum explicit before recording, show elapsed and remaining time, warn for the final minute, call RiffRec's normal stop/save flow once at 8:00, and reject any result whose `filesPresent` omits `recording.webm`.
+**Recording safety contract:** the installed client must make the 8-minute maximum explicit before recording, show elapsed and remaining time, warn for the final minute, call RiffRec's normal stop/save flow once at 8:00, and reject any riffrec result whose `filesPresent` omits `recording.webm` (mobile rrweb bundles carry no screen video by design — for those the required file is `rrweb-events.json`).
 The reviewer’s annotations and any earlier valid staged walkthrough must survive a failed or rejected recording.
 
 **Current RiffRec integration boundary:** npm's published RiffRec `2.1.1` downloads the ZIP itself and does not return its `Blob`, so the client currently captures that ZIP at the `URL.createObjectURL` boundary.
@@ -324,6 +325,10 @@ grep -q 'RECORDING_MAX_MS' "$OUT_DIR/recording-limit.ts"
 grep -q 'RECORDING_WARNING_MS' "$OUT_DIR/recording-limit.ts"
 grep -q 'hasScreenRecording' "$OUT_DIR/PreviewFeedback.tsx"
 grep -q 'Screen + voice · 8 min max' "$OUT_DIR/PreviewFeedback.tsx"
+# Mobile recording path (rrweb). Soft check: an older collector build serves a
+# client without it - note "mobile recording not included; update the collector
+# app and re-run" in the summary instead of failing the install.
+test -f "$OUT_DIR/mobile-recorder.ts" || echo "NOTE: no mobile-recorder.ts (collector serving an older client)"
 # Assert the contract VALUES (8 min cap, 60 s warning), not one arithmetic
 # spelling of them - the canonical source is free to reformat the constants.
 node --input-type=module -e "

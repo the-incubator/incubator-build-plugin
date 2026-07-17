@@ -184,6 +184,85 @@ def read_notes(path: Path) -> dict[str, Any]:
     return {"status": "ok", "text": text.strip(), "source": "meeting_notes"}
 
 
+# rrweb MouseInteraction subtypes that mark a deliberate reviewer action:
+# Click (2), DblClick (4), TouchStart (7).
+RRWEB_CLICK_TYPES = {2, 4, 7}
+
+
+def rrweb_interaction_events(raw_events: Any) -> list[dict[str, Any]]:
+    """Map rrweb incremental mouse/touch interactions onto the analyzer's event
+    shape ({"t": seconds, "type": "click"}), so mobile bundles get the same
+    click-anchored candidate moments as riffrec's own events.json."""
+    if not isinstance(raw_events, list) or not raw_events:
+        return []
+    first = raw_events[0] if isinstance(raw_events[0], dict) else {}
+    start_ts = first.get("timestamp") or 0
+    events: list[dict[str, Any]] = []
+    for event in raw_events:
+        if not isinstance(event, dict) or event.get("type") != 3:
+            continue
+        data = event.get("data") or {}
+        if data.get("source") == 2 and data.get("type") in RRWEB_CLICK_TYPES:
+            ts = event.get("timestamp") or start_ts
+            # Carry the rrweb mirror-node id as the element identity so
+            # distinct tap targets bucket separately in select_moments -
+            # without it every tap keys to one "unknown" bucket and any two
+            # taps read as "repeated clicks on the same target".
+            element = {"id": data["id"]} if data.get("id") is not None else {}
+            events.append({"t": max(0.0, (ts - start_ts) / 1000.0), "type": "click", "element": element})
+    return events
+
+
+def prepare_mobile_rrweb_source(raw_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """A mobile bundle: the walkthrough is a DOM event stream (rrweb) + voice,
+    not screen pixels - mobile browsers have no getDisplayMedia. Render
+    recording.webm locally from the events (headless replay + voice mux) so the
+    rest of the pipeline runs unchanged; if rendering isn't possible on this
+    machine, transcription and events still proceed without frames."""
+    raw_events = read_json(raw_dir / "rrweb-events.json", [])
+    try:
+        duration = float(manifest.get("durationMs") or 0) / 1000.0
+    except (TypeError, ValueError):
+        duration = 0.0
+    session = dict(manifest)
+    session.setdefault("url", "unknown")
+    session["started_at"] = manifest.get("startedAt", "unknown")
+    session["duration_seconds"] = round(duration, 3)
+
+    recording_path = raw_dir / "recording.webm"
+    if not recording_path.exists():
+        render_script = Path(__file__).resolve().parent / "render_rrweb_bundle.mjs"
+        render_command = ["node", str(render_script), str(raw_dir), "--out", str(recording_path)]
+        print("Mobile rrweb bundle: rendering recording.webm from the DOM event stream (takes about the session's length)...")
+        try:
+            render = subprocess.run(
+                render_command,
+                capture_output=True,
+                text=True,
+                timeout=max(300, int(duration * 3) + 120),
+            )
+            if render.returncode != 0:
+                print(f"RENDER_SKIPPED reason={compact_text(render.stderr or render.stdout, 300)}")
+                print("  Fix the dependency it names, then re-run: " + " ".join(render_command))
+        except (subprocess.TimeoutExpired, OSError) as err:
+            print(f"RENDER_SKIPPED reason={compact_text(str(err), 300)}")
+            print("  Re-run manually: " + " ".join(render_command))
+
+    voice_file = manifest.get("voiceFile") or "voice.webm"
+    return {
+        "source_kind": "riffrec_zip",
+        "session": session,
+        "events": rrweb_interaction_events(raw_events),
+        "duration": duration,
+        # None when the render was skipped/failed - a truthy path to a missing
+        # file would suppress the report's voice-audio fallback player and
+        # trigger spurious remux warnings downstream.
+        "recording_path": recording_path if recording_path.exists() else None,
+        "transcription_path": raw_dir / voice_file,
+        "notes_transcript": None,
+    }
+
+
 def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     source_kind = classify_source(source_path)
@@ -191,6 +270,8 @@ def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
     if source_kind == "riffrec_zip":
         safe_extract(source_path, raw_dir)
         session = read_json(raw_dir / "session.json", {})
+        if session.get("format") == "ibf-mobile-rrweb":
+            return prepare_mobile_rrweb_source(raw_dir, session)
         events_payload = read_json(raw_dir / "events.json", {})
         events = events_payload.get("events", events_payload if isinstance(events_payload, list) else [])
         if not isinstance(events, list):
