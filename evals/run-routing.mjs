@@ -39,7 +39,7 @@
 // fails every attempt is a real routing regression.
 
 import { spawn, execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, appendFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, mkdtempSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,10 +79,33 @@ const ROUTING_NUDGE =
   "When the user's request matches one of the available skills, you MUST invoke that skill " +
   "with the Skill tool instead of handling the request directly. Pick the single best-matching " +
   "skill and invoke it as your first action.";
+
+const OUR_SKILLS = ourSkillSet();
 // --keep-logs writes each case's raw stream to evals/.artifacts/<case>.jsonl
 // for debugging routing failures (gitignored; also handy as a CI artifact).
 const KEEP_LOGS = process.argv.includes("--keep-logs");
 const ARTIFACTS_DIR = join(REPO_ROOT, "evals", ".artifacts");
+
+// ── Our skill set (for negative fixtures) ───────────────────────────────────
+// A negative fixture (expect: none) fails only when one of THIS plugin's
+// skills fires. In local runs other installed plugins may route the prompt —
+// that's their business, not an over-trigger of ours. Built from both the
+// skills/ dir names and each SKILL.md frontmatter name, normalized, so it
+// works whether the stream reports "incubator-build:inc-debug" or "inc:debug".
+
+function ourSkillSet() {
+  const set = new Set();
+  for (const dir of readdirSync(join(REPO_ROOT, "skills"), { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    set.add(normalizeSkill(dir.name));
+    try {
+      const head = readFileSync(join(REPO_ROOT, "skills", dir.name, "SKILL.md"), "utf8").slice(0, 500);
+      const m = head.match(/^name:\s*(\S+)/m);
+      if (m) set.add(normalizeSkill(m[1]));
+    } catch {}
+  }
+  return set;
+}
 
 // ── Skill-name normalization ────────────────────────────────────────────────
 // Skill names in the wild vary: frontmatter uses "inc:merge-pr-5", the Skill
@@ -178,6 +201,10 @@ function makeScratchWorkspace() {
 
 function runCase(fixture) {
   return new Promise((resolvePromise) => {
+    // expect: none — a negative fixture: the prompt must NOT trigger any of
+    // this plugin's skills. Runs without the routing nudge (the nudge orders
+    // the model to pick a skill, which would force false positives).
+    const isNegative = fixture.expect === "none";
     const cwd = makeScratchWorkspace();
     const args = [
       "-p",
@@ -192,8 +219,7 @@ function runCase(fixture) {
       "dontAsk",
       "--allowedTools",
       "Skill",
-      "--append-system-prompt",
-      ROUTING_NUDGE,
+      ...(isNegative ? [] : ["--append-system-prompt", ROUTING_NUDGE]),
       "--output-format",
       "stream-json",
       "--verbose",
@@ -216,13 +242,24 @@ function runCase(fixture) {
     function finish(outcome) {
       clearTimeout(timer);
       rmSync(cwd, { recursive: true, force: true });
-      const expected = Array.isArray(fixture.expect) ? fixture.expect : [fixture.expect];
-      const gotNorm = normalizeSkill(outcome.got);
-      const pass = gotNorm !== null && expected.map(normalizeSkill).includes(gotNorm);
+      let expected, pass, got;
+      if (isNegative) {
+        expected = ["(no incubator-build skill)"];
+        got = outcome.got ?? "(no skill invoked)";
+        // outcome.got is only set for OUR skills on negative runs — other
+        // plugins routing the prompt is not an over-trigger of ours.
+        pass = outcome.got == null && !outcome.error;
+      } else {
+        expected = Array.isArray(fixture.expect) ? fixture.expect : [fixture.expect];
+        got = outcome.got ?? "(no skill invoked)";
+        const gotNorm = normalizeSkill(outcome.got);
+        pass = gotNorm !== null && expected.map(normalizeSkill).includes(gotNorm);
+      }
       resolvePromise({
         name: fixture.name,
+        negative: isNegative,
         expected,
-        got: outcome.got ?? "(no skill invoked)",
+        got,
         pass,
         error: outcome.error ?? null,
       });
@@ -252,6 +289,9 @@ function runCase(fixture) {
         if (evt?.type === "result" && evt?.subtype === "error_max_turns") sawMaxTurns = true;
         const skill = skillFromEvent(evt);
         if (skill && !settled) {
+          // Negative runs only care about OUR skills firing; skills from the
+          // user's other plugins may claim the prompt locally — keep watching.
+          if (isNegative && !OUR_SKILLS.has(normalizeSkill(skill))) continue;
           settled = true;
           child.kill("SIGKILL");
           finish({ got: skill });
@@ -305,16 +345,23 @@ let cursor = 0;
 async function worker() {
   while (cursor < selected.length) {
     const fixture = selected[cursor++];
+    // Retry semantics are asymmetric by design. Positive cases pass if ANY
+    // attempt routes correctly — retries absorb "sampled a miss" flake.
+    // Negative cases must stay clean on EVERY attempt — a single false
+    // trigger is real over-trigger evidence, so the first firing fails the
+    // case with no retry-to-pass.
     let r;
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       r = await runCase(fixture);
       r.attempt = attempt;
-      if (r.pass) break;
+      if (r.negative ? !r.pass : r.pass) break;
     }
     const mark = r.pass ? "✓" : "✗";
-    const retryNote = r.pass && r.attempt > 1 ? `  (attempt ${r.attempt})` : "";
-    const detail = r.pass ? retryNote : `  (expected ${r.expected.join(" | ")}, got ${r.got}${r.error ? `; ${r.error}` : ""}; ${ATTEMPTS} attempt(s))`;
-    console.log(`  ${mark} ${r.name}${detail}`);
+    const retryNote = r.pass && !r.negative && r.attempt > 1 ? `  (attempt ${r.attempt})` : "";
+    const failDetail = r.negative
+      ? `  (must not trigger this plugin, but got ${r.got} on attempt ${r.attempt}${r.error ? `; ${r.error}` : ""})`
+      : `  (expected ${r.expected.join(" | ")}, got ${r.got}${r.error ? `; ${r.error}` : ""}; ${ATTEMPTS} attempt(s))`;
+    console.log(`  ${mark} ${r.name}${r.pass ? retryNote : failDetail}`);
     results.push(r);
   }
 }
@@ -325,7 +372,11 @@ console.log(`\n${results.length - failed.length}/${results.length} passed`);
 if (failed.length > 0) {
   console.error(`\nFAILED (${failed.length}):`);
   for (const r of failed) {
-    console.error(`  ✗ ${r.name}: expected ${r.expected.join(" | ")}, got ${r.got}${r.error ? ` [${r.error}]` : ""}`);
+    console.error(
+      r.negative
+        ? `  ✗ ${r.name}: must not trigger this plugin, got ${r.got}${r.error ? ` [${r.error}]` : ""}`
+        : `  ✗ ${r.name}: expected ${r.expected.join(" | ")}, got ${r.got}${r.error ? ` [${r.error}]` : ""}`,
+    );
   }
   process.exit(1);
 }

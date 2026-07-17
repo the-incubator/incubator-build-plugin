@@ -74,3 +74,26 @@ cases:
   - name: plan-before-code
     prompt: "plan this feature before we write any code: add CSV export to the reports page"
     expect: inc-plan
+
+  # ── Negative fixtures: expect: none ──────────────────────────────────────
+  # These prompts must NOT trigger any incubator-build skill. They guard
+  # against over-triggering — the symmetric regression to the positive cases
+  # above, and the one trigger-broadening PRs actually introduce. Negative
+  # runs drop the routing nudge, and a single false trigger fails the case
+  # (no retry-to-pass). Grow this list from real over-trigger incidents.
+
+  - name: neg-general-knowledge
+    prompt: "what's the difference between a git tag and a git branch?"
+    expect: none
+
+  - name: neg-trivial-edit
+    prompt: "rename the `steps` variable to `buildSteps` in src/build.ts"
+    expect: none
+
+  - name: neg-explain-code
+    prompt: "what does this regex do? ^\\d+\\.\\d+\\.\\d+$"
+    expect: none
+
+  - name: neg-read-only-question
+    prompt: "which branch am I on and what's changed in the working tree?"
+    expect: none

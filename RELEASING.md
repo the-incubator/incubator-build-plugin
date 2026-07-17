@@ -73,8 +73,9 @@ Don't run both channels at once — two installs of the same plugin means duplic
 
 ## The eval gate
 
-`evals/run-routing.mjs` runs the routing fixtures in `evals/routing.yaml`: realistic user prompts that must invoke the expected skill.
-This guards the trigger phrases in the skill descriptions — historically the most regression-prone part of the plugin.
+`evals/run-routing.mjs` runs the routing fixtures in `evals/routing.yaml`: realistic user prompts that must invoke the expected skill, plus negative fixtures (`expect: none`) that must NOT trigger any of this plugin's skills.
+Together they guard the trigger phrases in the skill descriptions — historically the most regression-prone part of the plugin — in both directions: under-triggering and over-triggering.
+Where eval coverage goes next lives in [evals/ROADMAP.md](evals/ROADMAP.md).
 
 - CI: `evals.yml` runs them on promotion PRs into `main`, on manual dispatch, and weekly (model/CLI updates can shift routing with no commit here).
   Auth comes from the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (from `claude setup-token`) — billed to the Claude subscription, no API credits.
