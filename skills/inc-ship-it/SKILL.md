@@ -64,6 +64,8 @@ merge-pr runs its own pre-flight (branch freshness), the merge gates (new env va
 
 The report's #1 job is to answer one question at a glance: **is this deployed to production or not?** Never bury that under CI/preview detail. Preview deploys are *not* production — never let "app deploy pending" or a green preview read as "shipped."
 
+**When the report drops (deployed path):** the moment `inc:merge-pr-5` reports the deploy **Ready** and the **first health check** passes, emit the report. Do **not** hold it for the 3-min log scan or the 10-minute post-deploy watch - stage 8's detail reflects only what is confirmed at drop time (`Ready in <t>, health <code>`; the log-scan result isn't known yet, so never claim it). merge-pr arms its watch at that same moment, so its `👀` watch line lands immediately under the report - making it unambiguous that monitoring is still active. Later results (the 3-min scan checkpoint, then the closing `👀 Post-deploy watch: ✅ CLEAN - …` or 🚨 issue line) post on their own below - don't re-render the report.
+
 Render the full pipeline as a stage checklist so the user can see exactly how far the run got and where it stopped. Every stage carries one status glyph:
 
 - `✅` done
@@ -92,13 +94,33 @@ PR: https://github.com/org/repo/pull/194
 Blocked: clear the merge gate above, then re-run /inc:ship-it.
 ```
 
+Deployed path — the report drops at deploy Ready + first health pass, with the watch line directly below it:
+
+```
+═══ INC BUILD REPORT ═══
+Production: ✅ DEPLOYED to production
+
+  ✅ 1. Reviewed working changes   tier 1 pass, 1 safe fix auto-applied
+  ✅ 2. PR opened                  #201, ready
+  ✅ 3. Tests                      passed
+  ✅ 4. CI + AI reviewers          typecheck · lint · build green
+  ✅ 5. Feedback resolved          2 threads resolved
+  ✅ 6. Merge gates                GO
+  ✅ 7. Merged to main             squash commit ab12cd34, remote branch deleted
+  ✅ 8. Deployed to production     <platform> <service> Ready in 3m 40s, health 200
+
+PR: https://github.com/org/repo/pull/201
+
+👀 Post-deploy watch: monitoring production health + error logs for 10 min (started 14:41, first health check 200) - checking every ~30s for errors, 5xx, and failed health checks. I'll ping you only if something goes red.
+```
+
 **Stage 3 (Tests) is called out on its own** — separate from the other CI checks in stage 4 — because a red test suite is the single most important "do not ship" signal and must never be buried behind typecheck/lint/preview noise. It reflects the CI **test job** specifically: `✅ passed`, `⛔ failing: <n> in <file>` (name the failing suite/file when the check surfaces it), `🔄 running` while the job is pending, or `⬜ no test suite` when the repo has no test job in CI. Include a pass **count** only when CI reports it cheaply — never parse logs to fabricate one. Tests run only in CI in this pipeline (the review and commit steps don't run the suite), so stage 3 stays `⬜ not reached` until a PR exists and CI has started.
 
 Fill each stage's glyph and detail from what actually happened; set stages the run never reached to `⬜ not reached`.
 
 The `Production:` line is the single source of truth. It takes exactly one of these forms — pick by what stages 7 (Merged) and 8 (Deployed) actually show, and never collapse "merged but unobserved" into "not deployed":
 
-- `✅ DEPLOYED to production` — **only** when stages 7 and 8 are both `✅` (the merge landed **and** `inc:merge-pr-5` observed the deploy reach `Ready`).
+- `✅ DEPLOYED to production` — **only** when stages 7 and 8 are both `✅` (the merge landed **and** `inc:merge-pr-5` observed the deploy reach `Ready` **and** the first health check passed). The 10-minute post-deploy watch may still be running when this drops - its outcome lands later as a standalone `👀` line, never by holding the report back.
 - `⏳ MERGED — deploy unconfirmed (<skipped | timed out | no deploy step>)` — stage 7 is `✅` but stage 8 never reached a confirmed `Ready`: the deploy observation was skipped or timed out, or the repo has no deploy step. The merge may already have triggered a rollout, so this is **not** `NOT DEPLOYED` — report the state as unconfirmed and name why.
 - `⛔ NOT DEPLOYED — deploy failed` — stage 7 is `✅` but the observed deploy (stage 8) failed. The new code did not go live; treat as rollback territory.
 - `NOT DEPLOYED — stopped at <stage>` — the run never merged (stage 7 is not `✅`). `<stage>` MUST be one of these canonical labels, matching the stage the run stopped at: `review`, `PR`, `tests`, `CI`, `feedback`, or `merge gates`.
