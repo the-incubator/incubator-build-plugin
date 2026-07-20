@@ -137,9 +137,17 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    "want me to open the recording at 0:42 where he describes the color states?" - and to expand
    the full transcript. Keep raw recordings and frames local-only per the skill's common rules.
 
-9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, and `requirements-kickoff.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md`, unless the user explicitly asked only to extract or analyze artifacts.
+8d. **Triage every requirement into a bucket.** Read `references/feedback-triage.md` and follow
+   its procedure: assign each synthesized item exactly one bucket - `change` / `try` / `discuss` /
+   `respond` / `blocked` / `defer` - answering "what is the next action, and whose is it?".
+   Present the grouped table to the user, flag the judgment calls, apply their adjustments, and
+   persist the approved tags as `triage.md` in the analyzer output dir. Verification (step 6b and
+   any tentative recollections) must be finished *before* tagging - never tag an unverified claim
+   as `change`. Nothing executes until the user approves the table.
 
-10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" Do not move into implementation planning until the requirements have been confirmed or corrected.
+9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces in the closing stakeholder report as done, tried, asked, answered, waiting, or queued.
+
+10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
 
 ## Automatic handoff
 
@@ -148,9 +156,10 @@ Do not end the workflow after extraction in normal use. The intended sequence is
 1. Run the analyzer.
 2. Read `source-materials.md` so the planner has direct links to raw feedback, transcript, frames, and analysis artifacts.
 3. Inspect or refine `problem-analysis.md` when the evidence needs human-visible interpretation.
-4. Load the `inc:plan` skill with `requirements-kickoff.md`.
-5. Ask the user to confirm, correct, or regroup the captured requirements.
-6. Let `inc:plan` produce the durable plan/requirements doc.
+4. Triage every item into a bucket and get the user's approval of the table (step 8d, `references/feedback-triage.md`).
+5. Load the `inc:plan` skill with `requirements-kickoff.md` and `triage.md`.
+6. Ask the user to confirm, correct, or regroup the captured requirements (skip when the step-4 triage approval already covered it - do not re-ask what the user adjusted).
+7. Let `inc:plan` produce the durable plan/requirements doc, scoped by the buckets.
 
 Only stop after step 1 or 2 when the user asks specifically for raw artifacts, transcript, screenshots, or analysis without planning.
 
@@ -194,6 +203,7 @@ The analyzer writes:
 
 - `report.html`: the human-consumable report - synthesized requirement cards (the `AGENT-SYNTHESIS` block you fill in step 8b, with source badges and seek chips), the repaired recording with a requirement-tracking bar (the `AGENT-SEGMENTS` array you fill), and the timestamped transcript. Media is relative-linked; it plays from its own folder.
 - `report-standalone.html`: the shareable single file with media embedded, written by `build_standalone.py` (step 8c). Not created by the analyzer itself.
+- `triage.md`: the user-approved bucket table (step 8d, `references/feedback-triage.md`) - one bucket per item plus the one line each non-`change` bucket needs downstream. Written by you, not the analyzer.
 - `analysis.md`: session summary, transcript, selected moments, screenshot links, candidate findings, and review checklist.
 - `problem-analysis.md`: a categorized problem statement scaffold for visual, functional, requirement, and UX findings.
 - `review-prompt.md`: a filled prompt containing screenshot paths and transcript for a deeper visual analysis pass.
