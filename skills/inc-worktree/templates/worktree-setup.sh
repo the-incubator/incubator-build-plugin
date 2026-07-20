@@ -90,9 +90,15 @@ prune_worktrees() {
     echo "ERROR: prune unavailable: python3 is required for PR matching" >&2
     return 1
   fi
-  # `local` is dynamically scoped: origin_url is visible in prune_one below.
-  local origin_url merged
+  # `local` is dynamically scoped: origin_url and cwd_list are visible in
+  # prune_one below. cwd_list snapshots every process's working directory once
+  # so each candidate worktree can be checked for live occupants.
+  local origin_url merged cwd_list
   origin_url="$(git -C "$repo_root" remote get-url origin 2>/dev/null || true)"
+  cwd_list=""
+  if command -v lsof >/dev/null 2>&1; then
+    cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
+  fi
   if ! merged="$(gh pr list --repo "$origin_url" \
       --state merged --limit 300 --json headRefName,headRefOid,number 2>/dev/null)"; then
     log "prune: could not list merged PRs (no GitHub remote or gh auth), skipping"
@@ -128,16 +134,26 @@ prune_one() {
     return 0  # stale registration; `git worktree prune` at the end handles it
   fi
   # A live session may sit in a merged+clean worktree; deleting it underneath
-  # that session breaks it. Recent index activity is the proxy for "in use".
-  # Checked before `git status` (and with --no-optional-locks below) because a
-  # plain status refresh can itself rewrite the index and fake recent activity.
-  local idx
+  # that session breaks it. Two guards: (1) no process may have its cwd inside
+  # the worktree, (2) recent index activity is a proxy for "in use". The index
+  # window is 1 hour for on-demand prune (dry-run + human-confirmed) but 24
+  # hours for hook-mode auto-prune, because an editor can sit in a clean
+  # worktree for hours without a git operation touching the index. The index
+  # check runs before `git status` (and status uses --no-optional-locks below)
+  # because a plain status refresh can itself rewrite the index and fake
+  # recent activity.
+  if [[ -n "$cwd_list" ]] && printf '%s\n' "$cwd_list" | grep -q "^n${path}"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process is running inside it)"
+    return 0
+  fi
+  local idx max_idle=3600
+  [[ "$mode" == "best-effort" ]] && max_idle=86400
   idx="$(git -C "$path" rev-parse --absolute-git-dir 2>/dev/null)/index"
   if [[ -f "$idx" ]] && python3 -c '
 import os, sys, time
-sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < 3600 else 1)
-' "$idx" 2>/dev/null; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (active within the last hour)"
+sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) else 1)
+' "$idx" "$max_idle" 2>/dev/null; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (git activity within the last hour)"
     return 0
   fi
   if [[ -n "$(git --no-optional-locks -C "$path" status --porcelain 2>/dev/null)" ]]; then
@@ -247,7 +263,10 @@ log "fetching origin/$base_branch"
 if git -C "$repo_root" fetch origin "$base_branch" --quiet 2>/dev/null; then
   base_ref="origin/$base_branch"
 elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
-  log "WARN fetch failed, using cached origin/$base_branch"
+  # Deliberate tradeoff: offline/auth-failed creation still works, from the
+  # best base available. The age makes the staleness visible instead of silent.
+  cached_age="$(git -C "$repo_root" log -1 --format=%cr "refs/remotes/origin/$base_branch" 2>/dev/null || echo 'unknown age')"
+  log "WARN fetch failed (offline?); using cached origin/$base_branch (last commit: $cached_age) - this worktree may start behind the true remote tip"
   base_ref="origin/$base_branch"
 else
   log "WARN no origin/$base_branch, branching from local $base_branch"
@@ -297,6 +316,13 @@ linked=0
 while IFS= read -r -d '' src; do
   rel="${src#"$repo_root"/}"
   dest="$worktree_path/$rel"
+  # A tracked env file is already checked out at dest; replacing it with a
+  # symlink would leave a permanent type-change in every worktree's status.
+  # Only gitignored env files get linked.
+  if git -C "$repo_root" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+    log "    skip $rel (tracked in git)"
+    continue
+  fi
   if mkdir -p "$(dirname "$dest")" && ln -sfn "$src" "$dest"; then
     log "    $rel"
     linked=$((linked + 1))

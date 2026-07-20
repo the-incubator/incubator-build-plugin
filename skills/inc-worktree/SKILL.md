@@ -28,8 +28,10 @@ With no argument, detect the repo's state and route:
 
 ```bash
 test -f scripts/worktree-setup.sh && echo HAS_SCRIPT
-jq -e '.hooks.WorktreeCreate' .claude/settings.json >/dev/null 2>&1 && echo HAS_HOOK
+jq -e '.hooks.WorktreeCreate | length > 0' .claude/settings.json >/dev/null 2>&1 && echo HAS_HOOK
 ```
+
+(The `length > 0` matters: a bare `"WorktreeCreate": []` is not an installed hook and must route to repair, not Status.)
 
 - Neither present: run **Init**.
 - Both present: run **Status**, and offer **Prune** if there are candidates.
@@ -75,18 +77,19 @@ Ensure `.gitignore` contains a `.worktrees/` line (check with `git check-ignore 
 
 ### Step 5 - Smoke test
 
-Prove the install works end to end, then clean up the evidence:
+Prove the install works end to end, then clean up the evidence.
+Capture the script's stdout: on a name collision it suffixes (`inc-worktree-smoke-2`), so cleanup must target exactly the path it returned, never a hardcoded one - removing a hardcoded path could delete a pre-existing worktree.
 
 ```bash
-printf '{"name":"inc-worktree-smoke"}' | bash scripts/worktree-setup.sh
+SMOKE_PATH=$(printf '{"name":"inc-worktree-smoke"}' | bash scripts/worktree-setup.sh)
 ```
 
-Verify: stdout is exactly one path under `.worktrees/`, the worktree exists on branch `inc-worktree-smoke`, and any `.env` / `.env.local` files are symlinked inside it.
-Then remove it:
+Verify: `$SMOKE_PATH` is one path under `.worktrees/`, the worktree exists on branch `$(basename "$SMOKE_PATH")`, and any gitignored `.env` / `.env.local` files are symlinked inside it.
+Then remove exactly what was created:
 
 ```bash
-git worktree remove --force .worktrees/inc-worktree-smoke
-git branch -D inc-worktree-smoke
+git worktree remove --force "$SMOKE_PATH"
+git branch -D "$(basename "$SMOKE_PATH")"
 ```
 
 If the repo has a large dependency tree, warn the user the smoke test runs a real install and offer to skip it.
@@ -127,7 +130,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --p
 
 ### Prune safety invariants (also enforced by the script)
 
-- A worktree is removed only when ALL hold: linked worktree on a branch, clean working tree (ignored files like node_modules do not count as dirty), a merged PR whose head branch matches, that PR's head commit equals the local branch tip, and no git index activity in the last hour.
+- A worktree is removed only when ALL hold: linked worktree on a branch, clean working tree (ignored files like node_modules do not count as dirty), a merged PR whose head branch matches, that PR's head commit equals the local branch tip, no process has its working directory inside the worktree (lsof check), and no recent git index activity (24 hours for automatic prune-on-create, 1 hour for on-demand prune, which is dry-run + human-confirmed).
 - The main checkout, detached HEADs, and the worktree the command runs from are never touched.
 - `git branch --merged` is useless under squash merges; PR state via `gh` is the source of truth.
 - Everything keys off `git worktree list`, so worktrees from older placement conventions (for example sibling directories) are covered too.
