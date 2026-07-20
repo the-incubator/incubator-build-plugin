@@ -1,7 +1,7 @@
 ---
 name: inc:merge-pr-5
 description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
-allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification
+allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification, TaskStop
 ---
 
 # Merge PR: Production Deploy Readiness Check
@@ -400,13 +400,13 @@ Pipe through `grep -E` for:
 
 Outcomes:
 
-- **No matches AND the first health check passed** → first print the monitoring-clean checkpoint, then the report line:
+- **No matches, the first health check passed, AND the pre-armed watch has not signaled** → first print the monitoring-clean checkpoint, then the report line:
 
   > ```
   > ✅ POST-DEPLOY MONITORING CLEAN - no error signals in the first 3 minutes.
   > ```
 
-  Then: `Observation: deploy Ready, health <code>, no error signal in first 3m`.
+  Then: `Observation: deploy Ready, health <code>, no error signal in first 3m`. Because the Step 4f watch is already armed during this scan, it can surface a `🚨` health/log alert mid-scan; if it has, treat this as the **Matches found** case instead - do not print CLEAN over a watch that has already gone red.
 
 - **No matches BUT the first health check failed** → do **not** print the CLEAN checkpoint - quiet logs don't override a failed health probe. The earlier 🚨 health outcome and its rollback advisory stand. Record `Observation: deploy Ready, health FAILED (<code>), no log signal in first 3m`.
 
