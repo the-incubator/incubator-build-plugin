@@ -386,9 +386,9 @@ If the persisted block instead gives a **blocking** command (`vercel inspect <ur
 
 This phase starts *after* the ✅ DEPLOY LIVE checkpoint from Step 4b.
 
-**First health check - run it before the log scan.** Set `HEALTH_URL` to the persisted health-check URL from the Deploy Configuration block, then run `curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$HEALTH_URL"` once in the foreground. A 2xx/3xx is the **first-health-pass** signal: together with deploy Ready it confirms the app is live and serving, and callers key off it - `inc:ship-it` drops its INC BUILD REPORT the moment both land, while monitoring continues below it. A non-2xx/3xx here is treated exactly like a `🚨` outcome in Step 4f (surface it, `PushNotification`, advise rollback) - and still continue observing.
+**First health check - run it before the log scan.** Run the persisted **Health check** command from the Deploy Configuration block once in the foreground. It is already a complete command that prints an HTTP status code (e.g. `curl -sf -o /dev/null -w '%{http_code}' <PROD_URL>`) - run it verbatim; do **not** wrap it in another `curl`. A 2xx/3xx is the **first-health-pass** signal: together with deploy Ready it confirms the app is live and serving, and callers key off it - `inc:ship-it` drops its INC BUILD REPORT the moment both land, while monitoring continues below it. A non-2xx/3xx here is treated exactly like a `🚨` outcome in Step 4f (surface it, one `PushNotification`, advise rollback) - and still continue observing; the Step 4f Monitor's first poll will re-report the same unhealthy state, which is the **same incident**, not a new one - don't send a second `PushNotification` for it. Record the result either way: it feeds the 4c outcomes, the 4d record, and ship-it's `Production:` line.
 
-**Arm the 10-minute watch now.** Immediately after the first health check, arm the Step 4f Monitor and print its `👀` opening line - before the 3-min log scan below runs. The Monitor is a background task, so the scan proceeds while it watches; this also keeps the `👀` line directly adjacent to the report a caller like `inc:ship-it` just dropped. Step 4f documents the watch's script and outcomes - only its arming moment lives here.
+**Arm the 10-minute watch now.** Immediately after the first health check, arm the Step 4f Monitor as a background task (`run_in_background: true`, matching the plugin's other background Monitor usage - it must not block this step) and print its `👀` opening line - before the 3-min log scan below runs. The scan proceeds while the Monitor watches; this also keeps the `👀` line directly adjacent to the report a caller like `inc:ship-it` just dropped. If the Monitor cannot be armed (tool rejected or unavailable), never continue as though the watch is active - print `👀 Post-deploy watch: ⚠️ could not start - watch the platform dashboards yourself for the next 10 minutes` and rely on Step 4f's "Still the user's" handoff. Step 4f documents the watch's script and outcomes - only its arming moment lives here.
 
 The app is up; we are now watching for early-burn errors in its first 3 minutes of real traffic. This is a **first-pass smoke check**, not a substitute for real monitoring. Run the **early-log-scan** command persisted in the Deploy Configuration block (`/inc:setup-deploy` records the correct, version-correct log command per platform), then scan its output for error signals.
 
@@ -400,13 +400,15 @@ Pipe through `grep -E` for:
 
 Outcomes:
 
-- **No matches** → first print the monitoring-clean checkpoint, then the report line:
+- **No matches AND the first health check passed** → first print the monitoring-clean checkpoint, then the report line:
 
   > ```
   > ✅ POST-DEPLOY MONITORING CLEAN - no error signals in the first 3 minutes.
   > ```
 
-  Then: `Observation: deploy Ready, no error signal in first 3m`.
+  Then: `Observation: deploy Ready, health <code>, no error signal in first 3m`.
+
+- **No matches BUT the first health check failed** → do **not** print the CLEAN checkpoint - quiet logs don't override a failed health probe. The earlier 🚨 health outcome and its rollback advisory stand. Record `Observation: deploy Ready, health FAILED (<code>), no log signal in first 3m`.
 
 - **Matches found** → first print the monitoring-hit checkpoint, then the detail block:
 
@@ -422,6 +424,8 @@ Outcomes:
 
   The skill does not auto-rollback. Surface the signal and stop; the user decides.
 
+  Also **stop the pre-armed Step 4f watch** (`TaskStop`) before surfacing: it baselined these same log lines at arm time, so left running it would later emit `👀 Post-deploy watch: ✅ CLEAN` and contradict this advisory. Note the stop in one line: `👀 Post-deploy watch: stopped - superseded by the 3-min scan signal above.`
+
 ### Step 4d - Record the observation in the merge-pr report
 
 **Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
@@ -431,6 +435,7 @@ Deploy observation:
   Platform:     <vercel | netlify | fly | railway | gcloud-run | github-actions | skipped>
   Status:       <Ready | Failed | Timed out | Skipped>
   Deploy time:  <Nm Ns>
+  Health check: <passed (<code>) | FAILED (<code>) | n/a>
   Error signal: <none | N matches - see above | n/a>
 ```
 
@@ -462,11 +467,11 @@ Open with the watch line so the boundary is clear. `👀` is the watch's marker 
 > 👀 Post-deploy watch: monitoring production health + error logs for 10 min (started <HH:MM>, first health check <code>) - checking every ~30s for errors, 5xx, and failed health checks. I'll ping you only if something goes red.
 > ```
 
-Use the persisted **health-check URL** and **error-log** commands from the Deploy Configuration block. The watch baselines existing errors first, so it only alerts on signals that appear *after* the deploy:
+Use the production URL from the persisted **Health check** command and the persisted **error-log** command from the Deploy Configuration block. The watch baselines existing errors first, so it only alerts on signals that appear *after* the deploy:
 
 ```bash
 # Run via Monitor(timeout_ms=600000, persistent=false). Quiet unless something's wrong.
-HEALTH_URL="<persisted health-check URL>"
+HEALTH_URL="<production URL from the persisted Health check command>"
 SEEN=$(mktemp); DEADLINE=$(( $(date +%s) + 600 )); BEAT=$(date +%s)
 # Baseline: record errors already in the window so only NEW ones alert.
 # (dedup on the raw line via grep -Fxq - collision-free and portable; no cksum/sha hashing)
