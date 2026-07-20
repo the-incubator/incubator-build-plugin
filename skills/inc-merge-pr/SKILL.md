@@ -1,7 +1,7 @@
 ---
 name: inc:merge-pr-5
 description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
-allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification
+allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification, TaskStop
 ---
 
 # Merge PR: Production Deploy Readiness Check
@@ -360,7 +360,7 @@ If the persisted block instead gives a **blocking** command (`vercel inspect <ur
 
   > ```
   > ✅ DEPLOY LIVE - <platform> <service> reached Ready in <Nm Ns>. Commit <short-sha> is now serving traffic.
-  >    Entering post-deploy monitoring (3-min log scan, then 10-min manual watch handoff)…
+  >    Entering post-deploy monitoring (first health check, then 10-min automated watch + 3-min log scan)…
   > ```
 
   Substitute the real platform name, service/app/site identifier, elapsed wall time from the poll, and the short SHA from `git rev-parse --short HEAD` (or the SHA `gh pr merge` printed). Then proceed to Step 4c.
@@ -382,9 +382,15 @@ If the persisted block instead gives a **blocking** command (`vercel inspect <ur
   Then: "Investigate via `<platform dashboard or CLI log command>`. The merged commit is on `main` - decide whether to roll forward with a fix or revert."
 - **Timed out after 15 min** - do not declare success. Print `⏱ DEPLOY TIMED OUT - still <state> after 15m. Cannot confirm whether new code is live.` and `Observation: timed out - deploy still <state> after 15m`. Ask the user whether to keep polling or hand off to manual monitoring.
 
-### Step 4c - Post-deploy monitoring (3-min log scan)
+### Step 4c - Post-deploy monitoring (first health check + 3-min log scan)
 
-This phase starts *after* the ✅ DEPLOY LIVE checkpoint from Step 4b. The app is up; we are now watching for early-burn errors in its first 3 minutes of real traffic. This is a **first-pass smoke check**, not a substitute for real monitoring. Run the **early-log-scan** command persisted in the Deploy Configuration block (`/inc:setup-deploy` records the correct, version-correct log command per platform), then scan its output for error signals.
+This phase starts *after* the ✅ DEPLOY LIVE checkpoint from Step 4b.
+
+**First health check - run it before the log scan.** Run the persisted **Health check** command from the Deploy Configuration block once in the foreground. It is already a complete command that prints an HTTP status code (e.g. `curl -sf -o /dev/null -w '%{http_code}' <PROD_URL>`) - run it verbatim; do **not** wrap it in another `curl`. A 2xx/3xx is the **first-health-pass** signal: together with deploy Ready it confirms the app is live and serving, and callers key off it - `inc:ship-it` drops its INC BUILD REPORT the moment both land, while monitoring continues below it. A non-2xx/3xx here is treated exactly like a `🚨` outcome in Step 4f (surface it, one `PushNotification`, advise rollback) - and still continue observing; the Step 4f Monitor's first poll will re-report the same unhealthy state, which is the **same incident**, not a new one - don't send a second `PushNotification` for it. Record the result either way: it feeds the 4c outcomes, the 4d record, and ship-it's `Production:` line.
+
+**Arm the 10-minute watch now.** Immediately after the first health check, arm the Step 4f Monitor as a background task (`run_in_background: true`, matching the plugin's other background Monitor usage - it must not block this step) and print its `👀` opening line - before the 3-min log scan below runs. The scan proceeds while the Monitor watches; this also keeps the `👀` line directly adjacent to the report a caller like `inc:ship-it` just dropped. If the Monitor cannot be armed (tool rejected or unavailable), never continue as though the watch is active - print `👀 Post-deploy watch: ⚠️ could not start - watch the platform dashboards yourself for the next 10 minutes` and rely on Step 4f's "Still the user's" handoff. Step 4f documents the watch's script and outcomes - only its arming moment lives here.
+
+The app is up; we are now watching for early-burn errors in its first 3 minutes of real traffic. This is a **first-pass smoke check**, not a substitute for real monitoring. Run the **early-log-scan** command persisted in the Deploy Configuration block (`/inc:setup-deploy` records the correct, version-correct log command per platform), then scan its output for error signals.
 
 Pipe through `grep -E` for:
 
@@ -394,13 +400,15 @@ Pipe through `grep -E` for:
 
 Outcomes:
 
-- **No matches** → first print the monitoring-clean checkpoint, then the report line:
+- **No matches, the first health check passed, AND the pre-armed watch has not signaled** → first print the monitoring-clean checkpoint, then the report line:
 
   > ```
   > ✅ POST-DEPLOY MONITORING CLEAN - no error signals in the first 3 minutes.
   > ```
 
-  Then: `Observation: deploy Ready, no error signal in first 3m`.
+  Then: `Observation: deploy Ready, health <code>, no error signal in first 3m`. Because the Step 4f watch is already armed during this scan, it can surface a `🚨` health/log alert mid-scan; if it has, treat this as the **Matches found** case instead - do not print CLEAN over a watch that has already gone red.
+
+- **No matches BUT the first health check failed** → do **not** print the CLEAN checkpoint - quiet logs don't override a failed health probe. The earlier 🚨 health outcome and its rollback advisory stand. Record `Observation: deploy Ready, health FAILED (<code>), no log signal in first 3m`.
 
 - **Matches found** → first print the monitoring-hit checkpoint, then the detail block:
 
@@ -416,6 +424,8 @@ Outcomes:
 
   The skill does not auto-rollback. Surface the signal and stop; the user decides.
 
+  Also **stop the pre-armed Step 4f watch** (`TaskStop`) before surfacing: it baselined these same log lines at arm time, so left running it would later emit `👀 Post-deploy watch: ✅ CLEAN` and contradict this advisory. Note the stop in one line: `👀 Post-deploy watch: stopped - superseded by the 3-min scan signal above.`
+
 ### Step 4d - Record the observation in the merge-pr report
 
 **Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
@@ -425,6 +435,7 @@ Deploy observation:
   Platform:     <vercel | netlify | fly | railway | gcloud-run | github-actions | skipped>
   Status:       <Ready | Failed | Timed out | Skipped>
   Deploy time:  <Nm Ns>
+  Health check: <passed (<code>) | FAILED (<code>) | n/a>
   Error signal: <none | N matches - see above | n/a>
 ```
 
@@ -448,19 +459,19 @@ When a job exits and **more than one deploy is in flight**, render the update wi
 
 ## Step 4f - Automated post-deploy watch (first ~10 min, only on MERGE: GO)
 
-The 3-min scan (4c) is a snapshot. **Don't hand the next ten minutes to the user - watch it automatically.** Launch a `Monitor` (`timeout_ms: 600000` = 10 min) that, every ~30s, hits the health URL and re-scans error logs, and emits a line **only when something looks wrong** (non-2xx/3xx health, or a new error/crash signal that wasn't already present at deploy time). Each emitted line is a notification; on a real signal, also send a `PushNotification` so it reaches the user's phone. Silence = healthy; a final all-clear line closes the watch.
+The 3-min scan (4c) is a snapshot. **Don't hand the next ten minutes to the user - watch it automatically.** This watch is **armed at the top of Step 4c**, right after the first health check and before the 3-min scan (the Monitor runs in the background while 4c and 4d proceed; it re-hits the same `HEALTH_URL` every ~30s). Launch a `Monitor` (`timeout_ms: 600000` = 10 min) that, every ~30s, hits the health URL and re-scans error logs, and emits a line **only when something looks wrong** (non-2xx/3xx health, or a new error/crash signal that wasn't already present at deploy time). Each emitted line is a notification; on a real signal, also send a `PushNotification` so it reaches the user's phone. Silence = healthy; a final all-clear line closes the watch.
 
-Open with the handoff checkpoint so the boundary is clear:
+Open with the watch line so the boundary is clear. `👀` is the watch's marker - every later update about this watch reuses it, so the user can always spot watch status at a glance:
 
 > ```
-> ✅ DEPLOY LIVE - now auto-watching health + error logs for ~10 min. I'll ping you only if something goes red.
+> 👀 Post-deploy watch: monitoring production health + error logs for 10 min (started <HH:MM>, first health check <code>) - checking every ~30s for errors, 5xx, and failed health checks. I'll ping you only if something goes red.
 > ```
 
-Use the persisted **health-check URL** and **error-log** commands from the Deploy Configuration block. The watch baselines existing errors first, so it only alerts on signals that appear *after* the deploy:
+Use the production URL from the persisted **Health check** command and the persisted **error-log** command from the Deploy Configuration block. The watch baselines existing errors first, so it only alerts on signals that appear *after* the deploy:
 
 ```bash
 # Run via Monitor(timeout_ms=600000, persistent=false). Quiet unless something's wrong.
-HEALTH_URL="<persisted health-check URL>"
+HEALTH_URL="<production URL from the persisted Health check command>"
 SEEN=$(mktemp); DEADLINE=$(( $(date +%s) + 600 )); BEAT=$(date +%s)
 # Baseline: record errors already in the window so only NEW ones alert.
 # (dedup on the raw line via grep -Fxq - collision-free and portable; no cksum/sha hashing)
@@ -472,7 +483,7 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   <persisted error-log command> 2>/dev/null | while IFS= read -r ln; do
     grep -Fxq -- "$ln" "$SEEN" 2>/dev/null || { printf '%s\n' "$ln" >> "$SEEN"; printf '🚨 LOG %s: %s\n' "$(date +%H:%M:%S)" "$ln"; }
   done
-  NOW=$(date +%s); [ $(( NOW - BEAT )) -ge 300 ] && { echo "· watch alive $(date +%H:%M:%S) - health $CODE"; BEAT=$NOW; }
+  NOW=$(date +%s); [ $(( NOW - BEAT )) -ge 300 ] && { echo "👀 watch alive $(date +%H:%M:%S) - health $CODE"; BEAT=$NOW; }
   sleep 30
 done
 echo "✅ POSTDEPLOY_CLEAN - 10 min elapsed, no health failures or new error logs"; rm -f "$SEEN"
@@ -480,10 +491,10 @@ echo "✅ POSTDEPLOY_CLEAN - 10 min elapsed, no health failures or new error log
 
 The error-log command **must be bounded and non-streaming** (e.g. `vercel logs … --limit N`, never `--follow` / `tail -f`): the baseline scan runs synchronously before the first health poll, so a command that blocks waiting for more output would hang the entire 10-minute watch before it ever checks health. The commands `/inc:setup-deploy` persists are already bounded. If the platform has no clean machine-readable error-log command (e.g. Railway's text logs), drop the log block and run the health poll alone - health going non-200 is the highest-signal check regardless.
 
-Outcomes:
-- **A `🚨` line lands** → surface it immediately, send a `PushNotification` (`Post-deploy alert: <health code | error signal>`), and tell the user: "App went red in the post-deploy window - roll back rather than debug live." The skill does **not** auto-rollback.
-- **`✅ POSTDEPLOY_CLEAN`** → record `Post-deploy watch: clean (10m - health + logs)` in the report and close out.
-- **Monitor hits `timeout_ms` with no clean line** → the watch was cut short; note it and offer to re-arm.
+Outcomes (each rendered as a `👀` line so it visually pairs with the opening watch line):
+- **A `🚨` line lands** → surface it immediately as `👀 Post-deploy watch: 🚨 ISSUE at <Nm>/10 min - <health code | error signal>`, send a `PushNotification` (`Post-deploy alert: <health code | error signal>`), and tell the user: "App went red in the post-deploy window - roll back rather than debug live." The skill does **not** auto-rollback.
+- **`✅ POSTDEPLOY_CLEAN`** → close with `👀 Post-deploy watch: ✅ CLEAN - 10 min of health + logs watched, no new errors, health <code> throughout. Deploy fully settled.` and record `Post-deploy watch: clean (10m - health + logs)` in the report.
+- **Monitor hits `timeout_ms` with no clean line** → the watch was cut short; note it as `👀 Post-deploy watch: ⏱ cut short at <Nm>/10 min` and offer to re-arm.
 
 **Still the user's (the CLI can't see it):** error dashboards behind auth (Sentry / Datadog / Rollbar) and business metrics. A glance there is still worth it - but health and runtime error logs are now covered automatically, not handed off.
 
