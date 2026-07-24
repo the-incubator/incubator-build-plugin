@@ -1144,7 +1144,8 @@ def write_requirements_kickoff(
             "",
             "## Next Steps",
             "",
-            "-> Resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
+            "-> Triage every requirement into a bucket (change / try / discuss / respond / blocked / defer per `references/feedback-triage.md`) and get the table approved as `triage.md`.",
+            "-> Then resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n")
@@ -1613,6 +1614,13 @@ def write_html_report(
   .req-body dd {{ margin: 0; }}
   .req-body .quote {{ margin: 12px 0 0; padding: 8px 12px; border-left: 2px solid #2a3644; color: #b7c4d2; font-style: italic; font-size: 12.5px; }}
   .src {{ font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }}
+  .bucket {{ font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .05em; text-transform: uppercase; }}
+  .bucket-change  {{ background: #12321f; color: #7ee0a3; }}
+  .bucket-try     {{ background: #14263a; color: #6fb3ff; }}
+  .bucket-discuss {{ background: #2e2440; color: #c39bff; }}
+  .bucket-respond {{ background: #3a2d12; color: #ffca6b; }}
+  .bucket-blocked {{ background: #3a1a1a; color: #ff9a8a; }}
+  .bucket-defer   {{ background: #222b35; color: #8a97a6; }}
   .src-written {{ background: #12283a; color: #7db6ff; }}
   .src-spoken  {{ background: #2e2440; color: #c39bff; }}
   .src-both    {{ background: #12321f; color: #7ee0a3; }}
@@ -1689,7 +1697,14 @@ def write_html_report(
     muted-badge (exploratory). button.tstamp with data-t seconds seeks the recording.
     Border-left color: #7ee0a3 concrete, default blue exploratory, #8a97a6 caveats.
     Caveats the reviewer flagged get their own card (id req-caveat, resolved or
-    unresolved per the reachability check). -->{pins_block}
+    unresolved per the reachability check).
+    Bucket badges (added only after the triage table is approved - see
+    references/feedback-triage.md): append one span.bucket bucket-<name> to each card's
+    req-badges row, where <name> is change|try|discuss|respond|blocked|defer, e.g.
+    <span class="bucket bucket-change">change</span>. Non-code outcomes are delivered on
+    the card body: respond adds <dt>Answer</dt><dd>...</dd>, blocked adds
+    <dt>Waiting on</dt><dd>input + named owner</dd>, defer adds
+    <dt>Queued</dt><dd>backlog pointer</dd>. -->{pins_block}
     <!-- AGENT-SYNTHESIS-END -->
   </section>
 
@@ -1910,7 +1925,8 @@ def main() -> int:
     print(f"STANDALONE_BUILD=python3 {Path(__file__).resolve().parent / 'build_standalone.py'} {output_dir}")
     print(f"Source materials: {display_path(source_materials_md, repo_root)}")
     print(f"Problem statements: {display_path(problem_analysis_md, repo_root)}")
-    print(f"Planning handoff: load inc:plan with {display_path(kickoff_md, repo_root)}")
+    print("Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer per references/feedback-triage.md) and get the table approved as triage.md before planning.")
+    print(f"Planning handoff: after triage approval, load inc:plan with {display_path(kickoff_md, repo_root)} and triage.md")
     print("Planning should first confirm whether the captured requirements are complete and correctly grouped.")
     return 0
 
