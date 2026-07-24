@@ -65,6 +65,13 @@ default_branch() {
     echo "${ref#origin/}"
     return
   fi
+  # origin/HEAD is often unset in older clones; ask the remote directly so a
+  # repo whose default branch is trunk/develop never falls through to guesses.
+  ref="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null | awk '/^ref:/{print $2; exit}')"
+  if [[ -n "$ref" ]]; then
+    echo "${ref#refs/heads/}"
+    return
+  fi
   for b in main master; do
     if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$b"; then
       echo "$b"
@@ -90,16 +97,17 @@ prune_worktrees() {
     echo "ERROR: prune unavailable: python3 is required for PR matching" >&2
     return 1
   fi
-  # `local` is dynamically scoped: origin_url and cwd_list are visible in
-  # prune_one below. cwd_list snapshots every process's working directory once
-  # so each candidate worktree can be checked for live occupants.
-  local origin_url merged cwd_list
-  origin_url="$(git -C "$repo_root" remote get-url origin 2>/dev/null || true)"
+  # `local` is dynamically scoped: cwd_list is visible in prune_one below. It
+  # snapshots every process's working directory once so each candidate
+  # worktree can be checked for live occupants. gh runs from $repo_root and
+  # infers the repo from the git remote - passing the raw remote URL to
+  # --repo breaks on SSH-style remotes (gh expects [HOST/]OWNER/REPO).
+  local merged cwd_list
   cwd_list=""
   if command -v lsof >/dev/null 2>&1; then
     cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
   fi
-  if ! merged="$(gh pr list --repo "$origin_url" \
+  if ! merged="$(cd "$repo_root" && gh pr list \
       --state merged --limit 300 --json headRefName,headRefOid,number 2>/dev/null)"; then
     log "prune: could not list merged PRs (no GitHub remote or gh auth), skipping"
     return 0
@@ -119,7 +127,11 @@ prune_worktrees() {
         ;;
     esac
   done < <(git -C "$repo_root" worktree list --porcelain; echo)
-  git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+  # A dry run must not mutate .git/worktrees metadata; only real prune passes
+  # clean up stale registrations.
+  if [[ "$mode" != "dry-run" ]]; then
+    git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
+  fi
 }
 
 prune_one() {
@@ -176,7 +188,7 @@ for pr in json.load(sys.stdin):
   # fall past it and become unprunable. In CLI modes, fall back to an exact
   # per-branch lookup. Hook mode skips this to keep worktree creation fast.
   if [[ -z "$pr" && "$mode" != "best-effort" ]]; then
-    pr="$(gh pr list --repo "$origin_url" --head "$branch" --state merged \
+    pr="$(cd "$repo_root" && gh pr list --head "$branch" --state merged \
         --limit 1 --json headRefOid,number 2>/dev/null | python3 -c '
 import json, sys
 tip = sys.argv[1]
@@ -303,7 +315,9 @@ cleanup_on_failure() {
 trap cleanup_on_failure EXIT
 
 log "creating worktree '$branch' at $worktree_path from $base_ref"
-git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_ref" >&2
+# --no-track: without it the new branch tracks origin/<default>, so `git
+# status` compares against main and push.default=upstream can push to main.
+git -C "$repo_root" worktree add --no-track -b "$branch" "$worktree_path" "$base_ref" >&2
 
 worktree_created=1
 
@@ -336,6 +350,29 @@ done < <(
 )
 if [[ "$linked" -eq 0 ]]; then
   log "    (no .env / .env.local files found)"
+fi
+
+# --- Copy .worktreeinclude matches (best-effort) ------------------------------
+# This hook replaces Claude Code's default worktree creator, which copies
+# gitignored files matching .worktreeinclude patterns. Honor the same
+# contract: copies (not symlinks), matching the default creator's semantics.
+if [[ -f "$repo_root/.worktreeinclude" ]]; then
+  log "copying .worktreeinclude matches"
+  copied=0
+  while IFS= read -r -d '' rel; do
+    case "$rel" in .worktrees/*) continue ;; esac
+    dest="$worktree_path/$rel"
+    [[ -e "$dest" || -L "$dest" ]] && continue
+    if mkdir -p "$(dirname "$dest")" && cp "$repo_root/$rel" "$dest"; then
+      log "    $rel"
+      copied=$((copied + 1))
+    else
+      log "    WARN failed to copy $rel"
+    fi
+  done < <(git -C "$repo_root" ls-files -z --others --ignored --exclude-from=.worktreeinclude 2>/dev/null)
+  if [[ "$copied" -eq 0 ]]; then
+    log "    (no new files matched .worktreeinclude)"
+  fi
 fi
 
 # --- Install dependencies (best-effort) --------------------------------------
