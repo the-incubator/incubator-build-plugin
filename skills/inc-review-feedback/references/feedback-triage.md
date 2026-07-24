@@ -9,6 +9,7 @@ Do not implement anything at this stage.
 
 Every item lands in exactly one bucket.
 When torn between two, apply the membership tests in order - the first that passes wins.
+One check precedes the ordered tests: if the ask conflicts with a known deliberate prior decision, it routes to `respond` no matter how small or unambiguous the change would be - otherwise the `change` test passes first and a past decision gets silently overwritten.
 
 ### 1. `change` - make it, no discussion needed
 
@@ -76,8 +77,9 @@ The key word is *consciously* - a defer is a decision with a pointer (backlog en
 1. Verify anything tentative (see the pre-tag rule), then assign a bucket to every item.
 2. Present one table: `ID · bucket · one-line summary`, grouped by bucket, with a one-line legend.
 3. Explicitly flag the judgment calls - items where you weighed two buckets - and say which test decided it.
-4. Ask the user for adjustments ("R16 → discuss" style). Apply them without debate; the user's tag wins.
-5. Persist the final tags as `triage.md` in the analyzer output dir, next to `requirements-kickoff.md`: the approved table plus, for each non-`change` item, the one line its downstream action needs (the open question for `try`/`discuss`, the answer for `respond`, the dependency and owner for `blocked`, the backlog pointer for `defer`). The tags drive execution batching and the closing stakeholder report. Nothing executes until the user approves the table.
+4. Ask the user for adjustments ("R16 → discuss" style). Apply them without debate; the user's tag wins. One exception: moving a still-unverified item into `change` does not skip the pre-tag rule - run the pending verification first, or record in `triage.md` that the user explicitly waived it.
+5. Persist the final tags as `triage.md` in the analyzer output dir, next to `requirements-kickoff.md`: the approved table plus, for each non-`change` item, the one line its downstream action needs (the open question for `try`/`discuss`, the answer for `respond`, the dependency and owner for `blocked`, the backlog pointer for `defer`). The tags drive execution batching and the closing report. Nothing executes until the user approves the table.
+6. Deliver the outcomes on the report. After approval, badge every requirement card in `report.html` with its bucket (the conventions comment inside the report's synthesis block carries the exact markup); `respond` cards carry the written answer inline, `blocked` cards name the owner, `defer` cards carry the backlog pointer. The re-badged report is the closing surface the reviewer gets back - it is how non-code outcomes are delivered rather than silently dropped.
 
 ## Calibration example
 

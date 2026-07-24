@@ -145,7 +145,13 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    any tentative recollections) must be finished *before* tagging - never tag an unverified claim
    as `change`. Nothing executes until the user approves the table.
 
-9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces in the closing stakeholder report as done, tried, asked, answered, waiting, or queued.
+   After approval, badge each requirement card in `report.html` with its bucket per the
+   conventions comment inside the report's synthesis block (`respond` cards carry the written
+   answer inline, `blocked` cards name the owner, `defer` cards carry the backlog pointer), and
+   rebuild the standalone (step 8c) if it was already shared. The re-badged report is the closing
+   surface that delivers non-code outcomes back to the reviewer.
+
+9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces on the re-badged `report.html` (step 8d) as done, tried, asked, answered, waiting, or queued.
 
 10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
 
