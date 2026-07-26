@@ -252,8 +252,10 @@ print(match)
     return 0
   fi
   # Clean was verified above via `git status`; --force only bypasses git's
-  # refusal over ignored files such as node_modules.
-  if git -C "$repo_root" worktree remove --force "$path" >&2 2>/dev/null; then
+  # refusal over ignored files such as node_modules. Capture git's own error so
+  # a failed destructive step explains itself instead of just saying "failed".
+  local remove_err
+  if remove_err="$(git -C "$repo_root" worktree remove --force "$path" 2>&1 >/dev/null)"; then
     git -C "$repo_root" branch -D "$branch" >/dev/null 2>&1 || true
     if [[ "$mode" == "best-effort" ]]; then
       log "pruned $path (branch $branch, PR #$pr merged)"
@@ -261,20 +263,52 @@ print(match)
       echo "PRUNED $path branch=$branch (PR #$pr merged)"
     fi
   else
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (git worktree remove failed)"
+    remove_err="$(printf '%s' "$remove_err" | head -1)"
+    if [[ "$mode" == "best-effort" ]]; then
+      log "could not remove $path: ${remove_err:-unknown error}"
+    else
+      echo "KEEP $path branch=$branch (git worktree remove failed: ${remove_err:-unknown error})"
+    fi
   fi
   return 0
 }
 
-# --- CLI mode: --prune -------------------------------------------------------
-if [[ "${1:-}" == "--prune" ]]; then
-  if [[ "${2:-}" == "--dry-run" ]]; then
-    prune_worktrees dry-run
-  else
-    prune_worktrees apply
-  fi
-  exit 0
-fi
+# --- CLI mode ----------------------------------------------------------------
+# Argument handling is strict on purpose. Hook mode takes no arguments and
+# reads stdin, so a mistyped flag must never fall through to it (that would
+# block on a terminal, then create a stray worktree), and a mistyped
+# `--dry-run` must never fall through to the destructive apply path.
+usage() {
+  cat >&2 <<'USAGE'
+usage:
+  worktree-setup.sh                      hook mode: reads {"name": "..."} on stdin,
+                                         prints the created worktree path on stdout
+  worktree-setup.sh --prune [--dry-run]  remove worktrees whose PR has merged
+  worktree-setup.sh --help               this message
+USAGE
+}
+case "${1:-}" in
+  --prune)
+    case "${2:-}" in
+      "")         prune_worktrees apply ;;
+      --dry-run)  prune_worktrees dry-run ;;
+      *)          echo "ERROR: unknown argument '$2' after --prune" >&2; usage; exit 2 ;;
+    esac
+    exit 0
+    ;;
+  --help|-h)
+    usage
+    exit 0
+    ;;
+  "")
+    : # no arguments: fall through to hook mode below
+    ;;
+  *)
+    echo "ERROR: unknown argument '$1'" >&2
+    usage
+    exit 2
+    ;;
+esac
 
 # =============================================================================
 # Hook mode: create a worktree
