@@ -9,11 +9,17 @@ Do not implement anything at this stage.
 
 Every item lands in exactly one bucket.
 When torn between two, apply the membership tests in order - the first that passes wins.
-One check precedes the ordered tests: if the ask conflicts with a known deliberate prior decision, it routes to `respond` no matter how small or unambiguous the change would be - otherwise the `change` test passes first and a past decision gets silently overwritten.
+
+**Two pre-checks run before the ordered tests.** Both encode a decision someone already made, and the ordered tests would otherwise overrule it:
+
+1. **Conflicts with a deliberate prior decision → `respond`**, no matter how small or unambiguous the change would be. Otherwise `change` passes first and a past decision gets silently overwritten.
+2. **The reviewer explicitly scoped it out of this pass → `defer`**, no matter how small the ask or how open-ended the direction. "Not for this round", "at some point", "just noting it" is a scheduling decision the reviewer already made; without this pre-check a small version of it satisfies `change` and a broad version satisfies `discuss`, and either way we spend effort they told us not to spend.
 
 ### 1. `change` - make it, no discussion needed
 
-The ask is unambiguous, verified, and small enough that any reasonable implementation is the right one.
+The ask is unambiguous, verified, and specified closely enough that any reasonable implementation is the right one.
+
+**Size is not the criterion - convergence is.** A large but fully specified, verified, wanted-now feature is still a `change`; it is simply a bigger implementation task. Do not push it to `discuss` merely because it is big: `discuss` exists for items whose *direction* is unresolved, and its downstream action produces no code, so routing settled work there briefs something that was already decided.
 
 - **Test:** could two different engineers implement this and produce essentially the same outcome?
 - **Downstream:** straight to implementation; the closing report shows "done" with before/after.
@@ -30,10 +36,11 @@ The tag carries an obligation: the report must state the approach chosen and the
 
 ### 3. `discuss` - talk before building
 
-The cost of a wrong first take is high (big effort, wide blast radius, or the direction itself is unresolved), so building speculatively wastes more than a conversation costs.
+The **direction** is unresolved, so building speculatively wastes more than a conversation costs.
 This is the inverse of `try`.
+Effort and blast radius raise the cost of guessing wrong, but they never by themselves make an item `discuss`: a settled ask stays `change` however large it is (see above). What lands here is an item where nobody yet knows what the right outcome looks like.
 
-- **Test:** if the first attempt were wrong, would the rework be expensive or the stakeholder annoyed?
+- **Test:** is the direction itself still open - could a reasonable engineer build the "right" thing and still have missed what the reviewer wanted?
 - **Downstream:** no code - produce mocks, options, or a short brief; the report asks the question explicitly.
 - **Example:** "something about the blue feels off" on a whole component - a felt reaction with no direction; restyling on a guess risks a full redo, so mock 2-3 directions instead.
 

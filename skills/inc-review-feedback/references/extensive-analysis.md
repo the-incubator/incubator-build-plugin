@@ -166,6 +166,13 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
 
 10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
 
+    **If the confirmation changes the requirement set, the triage gate reopens for what changed.**
+    A requirement that was added, split, merged, or materially reworded has no approved bucket -
+    and a split or merge leaves stale rows behind in `triage.md`. Run those items back through
+    step 8d (just the deltas, not the whole table), get them approved, and update `triage.md`
+    before planning continues. Otherwise new work reaches implementation without ever passing the
+    gate this step exists to enforce.
+
 11. **Close the report once the work lands.** Step 8d badged intent; this step records outcome, and
     only now is `report.html` the closing report. After the `change` and `try` items have been
     implemented, reopen the report and finish those cards:
@@ -175,6 +182,10 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
     - `try` → add `<dt>Tried</dt><dd>the approach taken and the open question the reviewer can
       veto</dd>`. A `try` card that shows a diff but never states the question has not been
       closed - the veto is the point of the bucket.
+    - `discuss` → add `<dt>Asked</dt><dd>the question put to the reviewer, plus a link or
+      reference to the mocks, options, or brief produced in step 9</dd>`. Its outcome is the
+      conversation being started, so a bare `discuss` badge with nothing attached is not "asked" -
+      the reviewer must be able to see what they are being asked to weigh in on.
     - `respond` / `blocked` / `defer` → already complete from step 8d. Only touch them if the
       answer, the dependency, or the backlog pointer changed while the work was underway.
 

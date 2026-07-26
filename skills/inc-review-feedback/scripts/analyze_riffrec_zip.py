@@ -1826,26 +1826,39 @@ def write_html_report(
     output_path.write_text(html)
 
 
-def compute_analysis_id(source_path: Path) -> str:
+def compute_analysis_id(source_path: Path, sidecar_paths: list[Path] | None = None) -> str:
     """A short fingerprint of the input this analysis was produced from.
 
-    Deterministic per input: the same source bytes always yield the same id, so a
-    rerun over unchanged input is recognizable as the *same* analysis, while an
-    edited or different source produces a new one. The triage gate stamps this id
-    into `triage.md` so a resumed workflow can tell an approval that still matches
-    the evidence from one left over from a previous analysis."""
+    Deterministic per input: the same inputs always yield the same id, so a rerun
+    over unchanged input is recognizable as the *same* analysis, while edited or
+    different input produces a new one. The triage gate stamps this id into
+    `triage.md` so a resumed workflow can tell an approval that still matches the
+    evidence from one left over from a previous analysis.
+
+    The sidecar counts as input, not decoration: the reviewer's written pins become
+    first-class requirements, so editing `annotations.json` (or pointing
+    `--annotations` at a different file) changes what there is to triage even when
+    the recording is byte-identical. Hashing only the recording would leave the id
+    unchanged and silently preserve an approval that predates the new pins."""
     digest = hashlib.sha256()
-    digest.update(str(source_path.name).encode("utf-8", "replace"))
-    try:
-        with source_path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-    except OSError:
-        # Unreadable source: fall back to path + size so the id is still stable.
+
+    def absorb(path: Path, label: str) -> None:
+        digest.update(f"|{label}:{path.name}|".encode("utf-8", "replace"))
         try:
-            digest.update(str(source_path.stat().st_size).encode())
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
         except OSError:
-            digest.update(b"unknown")
+            # Unreadable: fall back to size so the id is still stable per input.
+            try:
+                digest.update(str(path.stat().st_size).encode())
+            except OSError:
+                digest.update(b"unknown")
+
+    absorb(source_path, "source")
+    for sidecar in sorted(sidecar_paths or [], key=lambda p: p.name):
+        if sidecar.exists():
+            absorb(sidecar, "sidecar")
     return digest.hexdigest()[:12]
 
 
@@ -1873,7 +1886,9 @@ def reconcile_existing_triage(output_dir: Path, analysis_id: str) -> list[str]:
     if existing_id == analysis_id:
         return [
             f"NOTE: an approved triage.md for this same analysis ({analysis_id}) is already here.",
-            "      Its buckets still hold, but report.html was just regenerated - re-apply the bucket badges.",
+            "      Its buckets still hold, but report.html was regenerated blank - there are no requirement",
+            "      cards left to badge. Re-synthesize the report first (extensive-analysis step 8b), then",
+            "      re-apply the bucket badges. Do not hand off the regenerated report as-is.",
         ]
 
     stamp = existing_id or "unstamped"
@@ -1904,7 +1919,12 @@ def main() -> int:
 
     output_dir = (args.output_dir or default_output_dir(source_path)).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    analysis_id = compute_analysis_id(source_path)
+    sidecar_candidates: list[Path] = []
+    if args.annotations:
+        sidecar_candidates.append(args.annotations.expanduser().resolve())
+    else:
+        sidecar_candidates.append(source_path.parent / "annotations.json")
+    analysis_id = compute_analysis_id(source_path, sidecar_candidates)
     triage_notices = reconcile_existing_triage(output_dir, analysis_id)
     raw_dir = output_dir / "raw"
     frames_dir = output_dir / "frames"

@@ -13,24 +13,21 @@
 > The `Deploy window:` line is policy, not a command. `none` means no restriction - the merge skill
 > just merges. It still runs its lightweight risk check and confirms on riskier changes.
 
-**Deploy status (newest production deploy):**
-`echo does-not-deploy`
+### Observation: SKIP — do not run a deploy watch
 
-**Wait for a specific deploy to reach Ready:**
-`echo does-not-deploy`
+**There are deliberately no status / wait-for-Ready / log-scan commands in this block.** Nothing
+here deploys, so there is no state to poll. A placeholder probe would be worse than none: the
+merge skill's wait loop only recognizes real deployment states, so a dummy command that exits 0
+with unrecognized output drives it to `parse-error` after four polls instead of skipping — which
+reads as a broken deploy watch rather than the no-op it actually is.
 
-**Early-log scan (errors in the first minutes):**
-`echo does-not-deploy`
+`inc:merge-pr-5` / `inc:ship-it`: treat this block as `OBSERVATION_READY=skip`, print
+`Observation: skipped - plugin source repo, no runtime deploy`, and finish. Do not probe, do not
+poll, do not run the post-deploy watch. The absence of a deploy is the expected outcome here, not
+a failed observation.
 
-**Health check:**
-none - there is no runtime surface to probe. Post-merge correctness is covered by the `validate`
-workflow (`npm run test:skills`) on the PR, which must be green before the merge gates pass.
-
-### Notes for the merge/ship skills
-
-There is nothing to observe after a merge here: no service starts, no URL changes, no logs are
-produced. `inc:merge-pr-5` should report `Observation: skipped - plugin source repo, no runtime
-deploy` and finish. Do not treat the absence of a deploy as a failed observation.
+**Health check:** none — there is no runtime surface. Post-merge correctness is covered by the
+`validate` workflow (`npm run test:skills`), which must be green before the merge gates pass.
 
 The real post-merge verification is on the consumer side: a user's plugin updater pulls the new
 `version`, and a stale local checkout can keep running old skill code even after main moves.
