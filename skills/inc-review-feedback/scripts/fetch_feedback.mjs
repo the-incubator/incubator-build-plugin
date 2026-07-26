@@ -264,7 +264,7 @@ async function printSessions(list, { summary = true, limit = 10 } = {}) {
 
   if (ranked.length > shown.length) {
     process.stderr.write(
-      `\n  …and ${ranked.length - shown.length} more not summarized — re-run with --limit ${ranked.length}.\n`,
+      `\n  …and ${ranked.length - shown.length} more not summarized - re-run with --limit ${ranked.length}.\n`,
     );
   }
   process.stderr.write("\n");
@@ -319,7 +319,7 @@ async function main() {
     }
     if (ranked.length > 1) {
       process.stderr.write(
-        `${ranked.length} submissions match this branch (pr=${ctx.prNum ?? "none"}). Show this list to the user and ask which to review — each is separate feedback, not a duplicate:\n`,
+        `${ranked.length} submissions match this branch (pr=${ctx.prNum ?? "none"}). Show this list to the user and ask which to review - each is separate feedback, not a duplicate:\n`,
       );
       await printSessions(ranked, { summary: flags.summary, limit: Math.max(flags.limit, Math.min(ranked.length, CANDIDATE_CAP)) });
       process.exit(2);
@@ -338,7 +338,7 @@ async function main() {
   }
   if (ranked.length > 1) {
     process.stderr.write(
-      `"${flags.query}" matched ${ranked.length} submissions. Show this list to the user and ask which to review — each is separate feedback, not a duplicate:\n`,
+      `"${flags.query}" matched ${ranked.length} submissions. Show this list to the user and ask which to review - each is separate feedback, not a duplicate:\n`,
     );
     await printSessions(ranked, { summary: flags.summary, limit: Math.max(flags.limit, Math.min(ranked.length, CANDIDATE_CAP)) });
     process.exit(2);

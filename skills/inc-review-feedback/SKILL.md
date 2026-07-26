@@ -46,9 +46,9 @@ Read the resolver's stdout, then continue:
 
 Whenever the resolver matches more than one submission (exit **2**), or the user is browsing with `--list`, it prints a **summarized list** instead of resolving: reviewer, project, status, when, how many comments, whether there's a recording, which pages, and the first few comments verbatim.
 
-**Show that list to the user and ask which one to review — never silently pick the top match.**
+**Show that list to the user and ask which one to review - never silently pick the top match.**
 Two submissions from the same reviewer are almost always **separate rounds** of feedback, not duplicates: the same name with a later timestamp means new comments, not a resend.
-Reproduce the list in your own reply (one short line per submission — reviewer, when, comment count, the gist) because the user can't see the tool output.
+Reproduce the list in your own reply (one short line per submission: reviewer, when, comment count, the gist) because the user can't see the tool output.
 
 If the user wants several, process them **one at a time, oldest first**, and label which round each artifact came from.
 When you finish one and others are still unreviewed, say so explicitly rather than treating the request as closed.

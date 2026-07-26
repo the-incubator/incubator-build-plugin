@@ -36,7 +36,7 @@ Exit codes:
 
 - `0` — resolved and fetched. Parse the lines above and continue.
 - `1` — no match. Show the user what you searched and offer `--list`, a link, or a reviewer name.
-- `2` — **more than one match**. The candidates were printed to stderr as a summarized list (see below). Show them to the user and ask which session id to use, then re-run with that id. Do not guess.
+- `2` - **more than one match**. The candidates were printed to stderr as a summarized list (see below). Show them to the user and ask which session id to use, then re-run with that id. Do not guess.
 - `3` — usage / auth / transport error. Surface the message.
 
 ## The summarized list
@@ -52,11 +52,11 @@ Exit codes:
       · …and 13 more
 ```
 
-The sessions endpoint carries no comment text or count, so each summarized session costs one extra `feedback get` call — that's what `--limit` caps and what `--no-summary` turns off.
+The sessions endpoint carries no comment text or count, so each summarized session costs one extra `feedback get` call - that's what `--limit` caps and what `--no-summary` turns off.
 A session whose detail fetch fails still lists, marked `contents unavailable`.
 
 **Always relay this list to the user and let them choose.**
-Repeat submissions from one reviewer are separate rounds, not duplicates — picking the newest and stopping silently loses a whole round of feedback.
+Repeat submissions from one reviewer are separate rounds, not duplicates - picking the newest and stopping silently loses a whole round of feedback.
 Process the chosen ones one at a time, oldest first, and name the round in each artifact.
 
 ## Notes
