@@ -80,7 +80,13 @@ If the file has an existing `WorktreeCreate` entry pointing elsewhere, stop and 
 Ensure the repository's own `.gitignore` contains a `.worktrees/` line; append it if missing.
 
 ```bash
-grep -qE '^\.worktrees/?$' .gitignore 2>/dev/null || printf '.worktrees/\n' >> .gitignore
+if ! grep -qE '^\.worktrees/?$' .gitignore 2>/dev/null; then
+  # Insert a line break first when the file does not end in one, or the new
+  # rule glues onto the last one: `dist/` + `.worktrees/` = `dist/.worktrees/`,
+  # which ignores nothing and leaves .worktrees/ visible as untracked content.
+  if [ -s .gitignore ] && [ -n "$(tail -c1 .gitignore)" ]; then printf '\n' >> .gitignore; fi
+  printf '.worktrees/\n' >> .gitignore
+fi
 ```
 
 Check the tracked file, not `git check-ignore`: the latter also succeeds when the rule lives only in the developer's `core.excludesFile` or `.git/info/exclude`, which collaborators do not get - they would end up with an untracked `.worktrees/` directory after this setup is committed.

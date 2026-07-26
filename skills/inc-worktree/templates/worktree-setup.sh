@@ -390,23 +390,32 @@ fetch_branch() {
   git -C "$repo_root" fetch origin "+refs/heads/$1:refs/remotes/origin/$1" --quiet 2>/dev/null
 }
 log "fetching origin/$base_branch"
-if fetch_branch "$base_branch"; then
+fetched=0
+# `if`, not `fetch_branch ... && fetched=1`: under `set -e` the && form makes
+# the whole statement fail when the fetch does, aborting an offline creation
+# that is supposed to fall back to the cached ref below.
+if fetch_branch "$base_branch"; then fetched=1; fi
+# A recorded origin/HEAD can itself be stale, and a stale one still fetches
+# happily whenever the old branch survives the rename: a remote that switches
+# its default from main to develop but keeps main around leaves the cached
+# symref working yet wrong, silently basing every worktree on the old default.
+# So ask the remote for its current default whenever we can reach it - on the
+# fetch-success path too, not only when the cached branch has disappeared.
+# Offline runs never pay for this: the fetch above already failed by then.
+# `|| true` is load-bearing: `pipefail` propagates ls-remote's failure through
+# the pipe, and `set -e` would then abort the script instead of falling through
+# to the cached-ref path - an unreachable remote must degrade, not crash.
+remote_default="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null \
+  | awk '/^ref:/{print $2; exit}' || true)"
+remote_default="${remote_default#refs/heads/}"
+if [[ -n "$remote_default" && "$remote_default" != "$base_branch" ]] \
+   && fetch_branch "$remote_default"; then
+  log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
+  git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
+  base_branch="$remote_default"
+  base_ref="origin/$remote_default"
+elif (( fetched )); then
   base_ref="origin/$base_branch"
-else
-  # A recorded origin/HEAD can itself be stale. After a remote renames its
-  # default (master -> main), fetching the deleted branch fails while its
-  # cached remote-tracking ref lingers - branching from that would silently
-  # base every worktree on an abandoned tip. Re-ask the remote first.
-  remote_default="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null \
-    | awk '/^ref:/{print $2; exit}')"
-  remote_default="${remote_default#refs/heads/}"
-  if [[ -n "$remote_default" && "$remote_default" != "$base_branch" ]] \
-     && fetch_branch "$remote_default"; then
-    log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
-    git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
-    base_branch="$remote_default"
-    base_ref="origin/$remote_default"
-  fi
 fi
 if [[ -n "$base_ref" ]]; then
   : # fetched cleanly above
@@ -584,8 +593,11 @@ install_deps() {
     log "running pnpm install --frozen-lockfile"
     pnpm --dir "$worktree_path" install --frozen-lockfile >&2
   elif [[ -f "$worktree_path/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
-    # Yarn 1 spells it --frozen-lockfile; Berry spells it --immutable.
-    if [[ "$(yarn --version 2>/dev/null | cut -d. -f1)" == "1" ]]; then
+    # Yarn 1 spells it --frozen-lockfile; Berry spells it --immutable. Probe
+    # from inside the worktree: Corepack and `.yarnrc.yml` pin the generation
+    # per directory, so asking the hook's own checkout can report Berry for a
+    # tree that actually resolves to Classic (and then --immutable fails).
+    if [[ "$( (cd "$worktree_path" && yarn --version) 2>/dev/null | cut -d. -f1)" == "1" ]]; then
       install_cmd="yarn install --frozen-lockfile"
     else
       install_cmd="yarn install --immutable"
