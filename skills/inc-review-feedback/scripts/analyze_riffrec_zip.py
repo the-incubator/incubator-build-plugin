@@ -10,6 +10,7 @@ video frames when available, and CE-friendly markdown artifacts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as html_lib
 import json
 import os
@@ -1003,6 +1004,7 @@ def write_requirements_kickoff(
     findings: list[dict[str, Any]],
     moments: list[dict[str, Any]],
     repo_root: Path,
+    analysis_id: str = "",
 ) -> None:
     title = topic.replace("-", " ").title()
     date = datetime.now(timezone.utc).date().isoformat()
@@ -1144,7 +1146,14 @@ def write_requirements_kickoff(
             "",
             "## Next Steps",
             "",
-            "-> Triage every requirement into a bucket (change / try / discuss / respond / blocked / defer per `references/feedback-triage.md`) and get the table approved as `triage.md`.",
+            "-> Triage every requirement into a bucket (change / try / discuss / respond / blocked / defer) and get the table approved as `triage.md`.",
+            f"   Rules: `{Path(__file__).resolve().parent.parent / 'references' / 'feedback-triage.md'}`",
+            (
+                f"   Stamp the approved `triage.md` with a first line of `Analysis: {analysis_id}`;"
+                " an approval carrying a different id belongs to a superseded analysis, so re-run the gate."
+                if analysis_id
+                else "   Stamp the approved `triage.md` with the `Analysis:` id printed by the analyzer."
+            ),
             "-> Then resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
         ]
     )
@@ -1811,6 +1820,75 @@ def write_html_report(
     output_path.write_text(html)
 
 
+def compute_analysis_id(source_path: Path) -> str:
+    """A short fingerprint of the input this analysis was produced from.
+
+    Deterministic per input: the same source bytes always yield the same id, so a
+    rerun over unchanged input is recognizable as the *same* analysis, while an
+    edited or different source produces a new one. The triage gate stamps this id
+    into `triage.md` so a resumed workflow can tell an approval that still matches
+    the evidence from one left over from a previous analysis."""
+    digest = hashlib.sha256()
+    digest.update(str(source_path.name).encode("utf-8", "replace"))
+    try:
+        with source_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        # Unreadable source: fall back to path + size so the id is still stable.
+        try:
+            digest.update(str(source_path.stat().st_size).encode())
+        except OSError:
+            digest.update(b"unknown")
+    return digest.hexdigest()[:12]
+
+
+def reconcile_existing_triage(output_dir: Path, analysis_id: str) -> list[str]:
+    """Keep an approved `triage.md` from silently outliving the analysis it approved.
+
+    The analyzer overwrites the evidence and the report on every run, but `triage.md`
+    is written by the agent, not by us - so without this it survives untouched and a
+    resumed workflow can scope planning against buckets approved for different
+    evidence. A stamp mismatch supersedes the file (renamed, never deleted - it is
+    the user's approved work); a match keeps it but still warns, because the
+    regenerated report has lost its bucket badges."""
+    triage_path = output_dir / "triage.md"
+    if not triage_path.exists():
+        return []
+
+    head = ""
+    try:
+        head = triage_path.read_text(errors="replace")[:2000]
+    except OSError:
+        pass
+    match = re.search(r"^Analysis:\s*([0-9a-f]{6,})\s*$", head, re.MULTILINE)
+    existing_id = match.group(1) if match else None
+
+    if existing_id == analysis_id:
+        return [
+            f"NOTE: an approved triage.md for this same analysis ({analysis_id}) is already here.",
+            "      Its buckets still hold, but report.html was just regenerated - re-apply the bucket badges.",
+        ]
+
+    stamp = existing_id or "unstamped"
+    superseded = output_dir / f"triage.superseded-{stamp}.md"
+    counter = 2
+    while superseded.exists():
+        superseded = output_dir / f"triage.superseded-{stamp}-{counter}.md"
+        counter += 1
+    try:
+        triage_path.rename(superseded)
+    except OSError:
+        return [
+            f"WARNING: triage.md here was approved for a different analysis ({stamp}) and could not be moved.",
+            "         Do NOT reuse it - re-run the triage gate before planning.",
+        ]
+    return [
+        f"WARNING: triage.md here was approved for a different analysis ({stamp}), not this one ({analysis_id}).",
+        f"         Moved to {superseded.name}. Re-run the triage gate; do not plan from the superseded buckets.",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     source_path = args.source_path.expanduser().resolve()
@@ -1820,6 +1898,8 @@ def main() -> int:
 
     output_dir = (args.output_dir or default_output_dir(source_path)).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    analysis_id = compute_analysis_id(source_path)
+    triage_notices = reconcile_existing_triage(output_dir, analysis_id)
     raw_dir = output_dir / "raw"
     frames_dir = output_dir / "frames"
     source = prepare_source(source_path, raw_dir)
@@ -1869,7 +1949,7 @@ def main() -> int:
     write_problem_analysis(problem_analysis_md, transcript, moments, findings, annotations, repo_root)
     write_review_prompt(review_prompt_md, transcript, moments, repo_root)
     write_source_materials(source_materials_md, source_path, source_kind, session, transcript, moments, raw_dir, frames_dir, repo_root)
-    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root)
+    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root, analysis_id)
 
     # Riffrec records screen and microphone as two separate cue-less webm streams;
     # repair both so the report's player gets reliable duration/seeking and audio.
@@ -1892,6 +1972,7 @@ def main() -> int:
     structured = {
         "source": str(source_path),
         "source_kind": source_kind,
+        "analysis_id": analysis_id,
         "output_dir": str(output_dir),
         "session": session,
         "event_counts": event_counts(events),
@@ -1928,7 +2009,13 @@ def main() -> int:
     print(f"STANDALONE_BUILD=python3 {Path(__file__).resolve().parent / 'build_standalone.py'} {output_dir}")
     print(f"Source materials: {display_path(source_materials_md, repo_root)}")
     print(f"Problem statements: {display_path(problem_analysis_md, repo_root)}")
-    print("Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer per references/feedback-triage.md) and get the table approved as triage.md before planning.")
+    triage_rules = Path(__file__).resolve().parent.parent / "references" / "feedback-triage.md"
+    print(f"ANALYSIS_ID={analysis_id}")
+    for notice in triage_notices:
+        print(notice)
+    print(f"Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer) and get the table approved as triage.md before planning.")
+    print(f"Triage rules: {triage_rules}")
+    print(f"  Stamp the approved triage.md with a first line of 'Analysis: {analysis_id}' so a later rerun can tell it apart from a stale approval.")
     print(f"Planning handoff: after triage approval, load inc:plan with {display_path(kickoff_md, repo_root)} and triage.md")
     print("Planning should first confirm whether the captured requirements are complete and correctly grouped.")
     return 0

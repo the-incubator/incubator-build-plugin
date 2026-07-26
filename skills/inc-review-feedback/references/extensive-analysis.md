@@ -146,14 +146,43 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    as `change`. Nothing executes until the user approves the table.
 
    After approval, badge each requirement card in `report.html` with its bucket per the
-   conventions comment inside the report's synthesis block (`respond` cards carry the written
-   answer inline, `blocked` cards name the owner, `defer` cards carry the backlog pointer), and
-   rebuild the standalone (step 8c) if it was already shared. The re-badged report is the closing
-   surface that delivers non-code outcomes back to the reviewer.
+   BUCKET-BADGE CONTRACT comment in the report (it sits just after the synthesis block, so it
+   survives the step-8b card fill). `respond` cards carry the written answer inline, `blocked`
+   cards name the owner, `defer` cards carry the backlog pointer. Rebuild the standalone
+   (step 8c) if it was already shared.
 
-9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces on the re-badged `report.html` (step 8d) as done, tried, asked, answered, waiting, or queued.
+   **This pass records intent, not outcome.** It runs before planning, so a `change` or `try`
+   card can only say what was decided, never what shipped - those two buckets are settled by
+   step 11 after the work lands. `respond`, `blocked`, and `defer` are complete here: their
+   outcome *is* the answer, the dependency, or the pointer. Do not describe this version of the
+   report as the closing report; it becomes that in step 11.
+
+   Stamp the approved `triage.md` with a first line of `Analysis: <id>`, using the `ANALYSIS_ID`
+   the analyzer printed. Re-running the analyzer regenerates the evidence and the report, and it
+   supersedes any `triage.md` carrying a different id (renaming it to `triage.superseded-*.md`) -
+   an approval only counts for the analysis it was made against.
+
+9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces on `report.html` as done, tried, asked, answered, waiting, or queued (intent at step 8d, outcome at step 11).
 
 10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
+
+11. **Close the report once the work lands.** Step 8d badged intent; this step records outcome, and
+    only now is `report.html` the closing report. After the `change` and `try` items have been
+    implemented, reopen the report and finish those cards:
+
+    - `change` → add `<dt>Result</dt><dd>what shipped, with the before/after evidence</dd>`.
+      Screenshots captured during implementation belong here.
+    - `try` → add `<dt>Tried</dt><dd>the approach taken and the open question the reviewer can
+      veto</dd>`. A `try` card that shows a diff but never states the question has not been
+      closed - the veto is the point of the bucket.
+    - `respond` / `blocked` / `defer` → already complete from step 8d. Only touch them if the
+      answer, the dependency, or the backlog pointer changed while the work was underway.
+
+    Rebuild the standalone (step 8c) so the shared copy reflects the outcomes, then send the
+    report back to the reviewer. Every item they raised is now visibly done, tried, asked,
+    answered, waiting, or queued - which is the whole point of triaging them in the first place.
+    If implementation is happening outside this session, say so explicitly and hand the reviewer
+    the intent-stage report rather than letting it pass as closed.
 
 ## Automatic handoff
 
@@ -166,6 +195,7 @@ Do not end the workflow after extraction in normal use. The intended sequence is
 5. Load the `inc:plan` skill with `requirements-kickoff.md` and `triage.md`.
 6. Ask the user to confirm, correct, or regroup the captured requirements (skip when the step-4 triage approval already covered it - do not re-ask what the user adjusted).
 7. Let `inc:plan` produce the durable plan/requirements doc, scoped by the buckets.
+8. Once the `change` / `try` work lands, close the report with the outcomes (step 11) and send it back to the reviewer.
 
 Only stop after step 1 or 2 when the user asks specifically for raw artifacts, transcript, screenshots, or analysis without planning.
 
@@ -209,7 +239,7 @@ The analyzer writes:
 
 - `report.html`: the human-consumable report - synthesized requirement cards (the `AGENT-SYNTHESIS` block you fill in step 8b, with source badges and seek chips), the repaired recording with a requirement-tracking bar (the `AGENT-SEGMENTS` array you fill), and the timestamped transcript. Media is relative-linked; it plays from its own folder.
 - `report-standalone.html`: the shareable single file with media embedded, written by `build_standalone.py` (step 8c). Not created by the analyzer itself.
-- `triage.md`: the user-approved bucket table (step 8d, `references/feedback-triage.md`) - one bucket per item plus the one line each non-`change` bucket needs downstream. Written by you, not the analyzer.
+- `triage.md`: the user-approved bucket table (step 8d, `references/feedback-triage.md`) - an `Analysis: <id>` stamp on the first line, one bucket per item, plus the one line each non-`change` bucket needs downstream. Written by you, not the analyzer. A rerun supersedes a stamp that no longer matches, renaming it to `triage.superseded-<id>.md`.
 - `analysis.md`: session summary, transcript, selected moments, screenshot links, candidate findings, and review checklist.
 - `problem-analysis.md`: a categorized problem statement scaffold for visual, functional, requirement, and UX findings.
 - `review-prompt.md`: a filled prompt containing screenshot paths and transcript for a deeper visual analysis pass.
