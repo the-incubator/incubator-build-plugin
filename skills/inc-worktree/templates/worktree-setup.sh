@@ -161,9 +161,19 @@ prune_one() {
   # check runs before `git status` (and status uses --no-optional-locks below)
   # because a plain status refresh can itself rewrite the index and fake
   # recent activity.
-  if [[ -n "$cwd_list" ]] && printf '%s\n' "$cwd_list" | grep -q "^n${path}"; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process is running inside it)"
-    return 0
+  # Literal comparison, not grep: a path containing regex metacharacters (`[`,
+  # `+`, ...) would silently stop matching and disarm this guard. The boundary
+  # test also keeps /a/b from matching a sibling /a/bc.
+  if [[ -n "$cwd_list" ]]; then
+    local cwd_line cwd_path
+    while IFS= read -r cwd_line; do
+      [[ "$cwd_line" == n* ]] || continue
+      cwd_path="${cwd_line#n}"
+      if [[ "$cwd_path" == "$path" || "$cwd_path" == "$path"/* ]]; then
+        [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process is running inside it)"
+        return 0
+      fi
+    done <<< "$cwd_list"
   fi
   local idx max_idle=3600
   [[ "$mode" == "best-effort" ]] && max_idle=86400
@@ -345,10 +355,24 @@ worktree_created=1
 # main checkout. Note the flip side: editing .env inside a worktree edits the
 # shared file. Switch `ln -s` to `cp` here if a repo needs isolation instead.
 log "symlinking local .env / .env.local files"
+# Other worktrees live inside the repo (.worktrees/, or Claude Code's default
+# .claude/worktrees/). Their env files belong to unrelated sessions, so the
+# scan must never pick them up. The registered-path list covers custom
+# placements too; find's -prune below is just the fast path.
+other_worktrees="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null \
+  | sed -n 's/^worktree //p' | tail -n +2)"
 linked=0
 while IFS= read -r -d '' src; do
   rel="${src#"$repo_root"/}"
   dest="$worktree_path/$rel"
+  skip=""
+  while IFS= read -r wt; do
+    [[ -n "$wt" && "$src" == "$wt"/* ]] && { skip=1; break; }
+  done <<< "$other_worktrees"
+  if [[ -n "$skip" ]]; then
+    log "    skip $rel (belongs to another worktree)"
+    continue
+  fi
   # Only gitignored env files get linked. A tracked file is already checked
   # out at dest (a symlink would leave a permanent type-change), and an
   # untracked-but-not-ignored file would show as `?? .env` dirt in every
@@ -365,7 +389,8 @@ while IFS= read -r -d '' src; do
   fi
 done < <(
   find "$repo_root" \
-    \( -name node_modules -o -name .git -o -name .worktrees \) -prune -o \
+    \( -name node_modules -o -name .git -o -name .worktrees \
+       -o -path "$repo_root/.claude/worktrees" \) -prune -o \
     -type f \( -name '.env' -o -name '.env.local' \) -print0
 )
 if [[ "$linked" -eq 0 ]]; then
@@ -374,13 +399,20 @@ fi
 
 # --- Copy .worktreeinclude matches (best-effort) ------------------------------
 # This hook replaces Claude Code's default worktree creator, which copies
-# gitignored files matching .worktreeinclude patterns. Honor the same
-# contract: copies (not symlinks), matching the default creator's semantics.
+# files that BOTH match .worktreeinclude and are gitignored. Honor the same
+# contract: same intersection, and copies (not symlinks) as the default does.
 if [[ -f "$repo_root/.worktreeinclude" ]]; then
   log "copying .worktreeinclude matches"
   copied=0
   while IFS= read -r -d '' rel; do
-    case "$rel" in .worktrees/*) continue ;; esac
+    case "$rel" in .worktrees/* | .claude/worktrees/*) continue ;; esac
+    # --exclude-from makes ls-files match the include patterns, but says
+    # nothing about .gitignore; a matched file that is not gitignored would
+    # land as `??` dirt in every new worktree.
+    if ! git -C "$repo_root" check-ignore -q "$rel" 2>/dev/null; then
+      log "    skip $rel (not gitignored)"
+      continue
+    fi
     dest="$worktree_path/$rel"
     [[ -e "$dest" || -L "$dest" ]] && continue
     if mkdir -p "$(dirname "$dest")" && cp "$repo_root/$rel" "$dest"; then
