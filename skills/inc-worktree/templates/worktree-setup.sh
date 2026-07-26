@@ -515,8 +515,12 @@ fi
 if [[ -f "$worktree_path/.worktreeinclude" ]]; then
   log "copying .worktreeinclude matches"
   copied=0
+  seen_includes=""
   while IFS= read -r -d '' rel; do
     case "$rel" in .worktrees/* | .claude/worktrees/*) continue ;; esac
+    # The two enumerations below can overlap; copy each path once.
+    case "$seen_includes" in *"|$rel|"*) continue ;; esac
+    seen_includes="$seen_includes|$rel|"
     # --exclude-from makes ls-files match the include patterns, but says
     # nothing about .gitignore; a matched file that is not gitignored would
     # land as `??` dirt in every new worktree.
@@ -532,8 +536,18 @@ if [[ -f "$worktree_path/.worktreeinclude" ]]; then
     else
       log "    WARN failed to copy $rel"
     fi
-  done < <(git -C "$repo_root" ls-files -z --others --ignored \
-             --exclude-from="$worktree_path/.worktreeinclude" 2>/dev/null)
+  done < <(
+    # Neither call passes --exclude-standard, so only .worktreeinclude patterns
+    # select paths - .gitignore does not widen the set.
+    git -C "$repo_root" ls-files -z --others --ignored \
+      --exclude-from="$worktree_path/.worktreeinclude" 2>/dev/null
+    # `--others` is defined against the stale main index, so it omits paths
+    # main still tracks. That is exactly the case where the include rule
+    # matters: the fetched tree stopped tracking such a path and now ignores
+    # it. Enumerate those too; the fetched-tree checks above still decide.
+    git -C "$repo_root" ls-files -z --cached --ignored \
+      --exclude-from="$worktree_path/.worktreeinclude" 2>/dev/null
+  )
   if [[ "$copied" -eq 0 ]]; then
     log "    (no new files matched .worktreeinclude)"
   fi
