@@ -46,15 +46,15 @@ PYTHON3_OK=""
 command -v python3 >/dev/null 2>&1 && PYTHON3_OK=1
 
 # --- Resolve the main checkout root ------------------------------------------
-# Anchor everything at the MAIN worktree even if invoked from a linked one:
-# the common git dir lives in the main checkout at <main-root>/.git. Derive
-# from cwd first; CLAUDE_PROJECT_DIR is only a fallback for when the hook
-# fires outside the repo, because in CLI mode it can name a different repo
-# (the session's project) than the one being pruned.
-if common_dir="$(git rev-parse --git-common-dir 2>/dev/null)"; then
-  common_dir="$(cd "$common_dir" && pwd -P)"
-  repo_root="$(dirname "$common_dir")"
-else
+# Anchor everything at the MAIN worktree even if invoked from a linked one.
+# The main worktree is always the first entry of `git worktree list` - git's
+# own metadata, which stays correct where dirname(--git-common-dir) does not
+# (submodules and --separate-git-dir checkouts, whose .git is a file pointing
+# at external storage). Derive from cwd first; CLAUDE_PROJECT_DIR is only a
+# fallback for when the hook fires outside the repo, because in CLI mode it
+# can name a different repo (the session's project) than the one being pruned.
+repo_root="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1)"
+if [[ -z "$repo_root" ]]; then
   repo_root="${CLAUDE_PROJECT_DIR:?not inside a git repository and CLAUDE_PROJECT_DIR unset}"
 fi
 
@@ -99,13 +99,20 @@ prune_worktrees() {
   fi
   # `local` is dynamically scoped: cwd_list is visible in prune_one below. It
   # snapshots every process's working directory once so each candidate
-  # worktree can be checked for live occupants. gh runs from $repo_root and
+  # worktree can be checked for live occupants. Without lsof that guard is
+  # blind, so unattended pruning must not run at all; interactive modes warn
+  # and rely on the human reviewing the plan. gh runs from $repo_root and
   # infers the repo from the git remote - passing the raw remote URL to
   # --repo breaks on SSH-style remotes (gh expects [HOST/]OWNER/REPO).
   local merged cwd_list
   cwd_list=""
   if command -v lsof >/dev/null 2>&1; then
     cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
+  elif [[ "$mode" == "best-effort" ]]; then
+    log "prune: lsof not found (cannot detect live worktrees), skipping"
+    return 0
+  else
+    echo "WARN: lsof not found - the live-process guard is unavailable; review the plan carefully" >&2
   fi
   if ! merged="$(cd "$repo_root" && gh pr list \
       --state merged --limit 300 --json headRefName,headRefOid,number 2>/dev/null)"; then
@@ -173,28 +180,36 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
     return 0
   fi
   local pr
+  # Branch names get reused across PRs: scan every merged PR with this head
+  # branch and prune if ANY of them merged exactly this tip. SHA_MISMATCH only
+  # when name matches exist but none has this tip.
   pr="$(printf '%s' "$merged" | python3 -c '
 import json, sys
 branch, tip = sys.argv[1], sys.argv[2]
+match = ""
 for pr in json.load(sys.stdin):
     if pr.get("headRefName") == branch:
         if pr.get("headRefOid") == tip:
-            print(pr.get("number"))
-        else:
-            print("SHA_MISMATCH")
-        break
+            match = str(pr.get("number"))
+            break
+        match = match or "SHA_MISMATCH"
+print(match)
 ' "$branch" "$sha" 2>/dev/null || true)"
   # The bulk list caps at the 300 most recent merged PRs; an old worktree can
   # fall past it and become unprunable. In CLI modes, fall back to an exact
   # per-branch lookup. Hook mode skips this to keep worktree creation fast.
   if [[ -z "$pr" && "$mode" != "best-effort" ]]; then
     pr="$(cd "$repo_root" && gh pr list --head "$branch" --state merged \
-        --limit 1 --json headRefOid,number 2>/dev/null | python3 -c '
+        --limit 20 --json headRefOid,number 2>/dev/null | python3 -c '
 import json, sys
 tip = sys.argv[1]
-prs = json.load(sys.stdin)
-if prs:
-    print(prs[0]["number"] if prs[0].get("headRefOid") == tip else "SHA_MISMATCH")
+match = ""
+for p in json.load(sys.stdin):
+    if p.get("headRefOid") == tip:
+        match = str(p.get("number"))
+        break
+    match = match or "SHA_MISMATCH"
+print(match)
 ' "$sha" 2>/dev/null || true)"
   fi
   if [[ -z "$pr" ]]; then
@@ -272,7 +287,11 @@ prune_worktrees best-effort || true
 base_branch="$(default_branch)"
 base_ref="$base_branch"
 log "fetching origin/$base_branch"
-if git -C "$repo_root" fetch origin "$base_branch" --quiet 2>/dev/null; then
+# Explicit destination refspec: with a narrowed remote.origin.fetch config,
+# `git fetch origin <branch>` can succeed without updating the remote-tracking
+# ref. The + prefix keeps the ref moving even if the remote branch rewound.
+if git -C "$repo_root" fetch origin \
+    "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" --quiet 2>/dev/null; then
   base_ref="origin/$base_branch"
 elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
   # Deliberate tradeoff: offline/auth-failed creation still works, from the
@@ -330,11 +349,12 @@ linked=0
 while IFS= read -r -d '' src; do
   rel="${src#"$repo_root"/}"
   dest="$worktree_path/$rel"
-  # A tracked env file is already checked out at dest; replacing it with a
-  # symlink would leave a permanent type-change in every worktree's status.
-  # Only gitignored env files get linked.
-  if git -C "$repo_root" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
-    log "    skip $rel (tracked in git)"
+  # Only gitignored env files get linked. A tracked file is already checked
+  # out at dest (a symlink would leave a permanent type-change), and an
+  # untracked-but-not-ignored file would show as `?? .env` dirt in every
+  # worktree's status, which also blocks pruning.
+  if ! git -C "$repo_root" check-ignore -q "$rel" 2>/dev/null; then
+    log "    skip $rel (not gitignored)"
     continue
   fi
   if mkdir -p "$(dirname "$dest")" && ln -sfn "$src" "$dest"; then
