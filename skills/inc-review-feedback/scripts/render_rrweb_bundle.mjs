@@ -204,7 +204,13 @@ async function main() {
     });
     const page = await context.newPage();
     const captureStart = Date.now();
-    await page.goto(pathToFileURL(htmlPath).href);
+    // domcontentloaded, not the default "load": the Replayer builds its iframe
+    // during parse, but "load" additionally waits on every subresource the
+    // recorded snapshot references - hundreds of images plus third-party hosts
+    // that can hang. On a real page that costs 10-40s of dead wait per render
+    // and can exceed the 30s timeout outright. Actual readiness is what the
+    // __READY__ wait below checks; late images just pop in during playback.
+    await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "domcontentloaded" });
     await page.waitForFunction("window.__READY__ || window.__ERROR__", null, { timeout: 60_000 });
     const pageError = await page.evaluate("window.__ERROR__");
     if (pageError) throw new Error(`replayer failed to initialize: ${pageError} (is cdn.jsdelivr.net reachable?)`);

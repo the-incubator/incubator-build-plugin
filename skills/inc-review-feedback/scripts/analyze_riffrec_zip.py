@@ -292,13 +292,19 @@ def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
             duration = float(session.get("duration_seconds") or events_payload.get("duration_seconds") or 0)
         except (TypeError, ValueError):
             duration = 0.0
+        # A zip may carry only one of the two media tracks (e.g. mic consent given
+        # but no screen share). A missing file must resolve to None here: downstream
+        # treats a non-None recording_path as "this is a video session" and would
+        # render no player at all instead of falling back to the voice track.
+        recording = raw_dir / "recording.webm"
+        voice = raw_dir / "voice.webm"
         return {
             "source_kind": source_kind,
             "session": session,
             "events": events,
             "duration": duration,
-            "recording_path": raw_dir / "recording.webm",
-            "transcription_path": raw_dir / "voice.webm",
+            "recording_path": recording if recording.exists() else None,
+            "transcription_path": voice if voice.exists() else None,
             "notes_transcript": None,
         }
 
