@@ -37,6 +37,12 @@
 # IMPORTANT: in hook mode Claude reads stdout as the path, so every diagnostic
 # goes to stderr. Only the final worktree path may touch stdout.
 
+# Capability marker - callers grep for this EXACT line to confirm this script
+# supports `--prune` before passing flags to it. A legacy script that merely
+# mentions --prune in a comment or usage string would otherwise be treated as
+# prune-capable and get hook-mode stdin instead.
+# worktree-setup-capability: prune
+
 set -euo pipefail
 
 log() { echo "[worktree-setup] $*" >&2; }
@@ -72,26 +78,51 @@ if [[ -z "$repo_root" ]]; then
 fi
 
 # --- Default branch detection ------------------------------------------------
-default_branch() {
+# The remote is asked for its default at most ONCE per run, and the answer is
+# cached. Two distinct facts come out of it, which must not be conflated:
+#   REMOTE_REACHABLE - ls-remote itself succeeded (so a fetch is worth trying)
+#   REMOTE_DEFAULT   - the remote advertised a symbolic HEAD (it may not: a
+#                      detached remote HEAD returns an object line and no ref:)
+REMOTE_PROBED=""
+REMOTE_REACHABLE=""
+REMOTE_DEFAULT=""
+probe_remote_default() {
+  [[ -n "$REMOTE_PROBED" ]] && return 0
+  REMOTE_PROBED=1
+  local out
+  if out="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null)"; then
+    REMOTE_REACHABLE=1
+    REMOTE_DEFAULT="$(printf '%s\n' "$out" | awk '/^ref:/{print $2; exit}')"
+    REMOTE_DEFAULT="${REMOTE_DEFAULT#refs/heads/}"
+  fi
+  return 0
+}
+
+# Sets DEFAULT_BRANCH rather than echoing it. Echoing would force the caller
+# into `$(default_branch)`, whose SUBSHELL discards the probe cache above and
+# makes an unreachable remote pay a second ls-remote timeout.
+DEFAULT_BRANCH=""
+resolve_default_branch() {
   local ref
   if ref="$(git -C "$repo_root" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)"; then
-    echo "${ref#origin/}"
+    DEFAULT_BRANCH="${ref#origin/}"
     return
   fi
   # origin/HEAD is often unset in older clones; ask the remote directly so a
   # repo whose default branch is trunk/develop never falls through to guesses.
-  ref="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null | awk '/^ref:/{print $2; exit}')"
-  if [[ -n "$ref" ]]; then
-    echo "${ref#refs/heads/}"
+  # Shared probe, so this never costs a second round-trip below.
+  probe_remote_default
+  if [[ -n "$REMOTE_DEFAULT" ]]; then
+    DEFAULT_BRANCH="$REMOTE_DEFAULT"
     return
   fi
   for b in main master; do
     if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$b"; then
-      echo "$b"
+      DEFAULT_BRANCH="$b"
       return
     fi
   done
-  git -C "$repo_root" rev-parse --abbrev-ref HEAD
+  DEFAULT_BRANCH="$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)"
 }
 
 # --- Prune -------------------------------------------------------------------
@@ -143,15 +174,19 @@ prune_worktrees() {
   local self_root
   self_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
-  local path="" sha="" branch=""
+  local path="" sha="" branch="" locked=""
   while IFS= read -r line; do
     case "$line" in
-      worktree\ *) path="${line#worktree }"; sha=""; branch="" ;;
+      worktree\ *) path="${line#worktree }"; sha=""; branch=""; locked="" ;;
       HEAD\ *)     sha="${line#HEAD }" ;;
       branch\ *)   branch="${line#branch refs/heads/}" ;;
+      # `git worktree lock` is an explicit "do not remove this" from the user,
+      # and --force would override it. Carry the flag through so prune_one can
+      # honour it instead of silently deleting a deliberately pinned worktree.
+      locked|locked\ *) locked=1 ;;
       "")
-        prune_one "$mode" "$path" "$sha" "$branch" "$merged" "$self_root" || true
-        path=""; sha=""; branch=""
+        prune_one "$mode" "$path" "$sha" "$branch" "$merged" "$self_root" "$locked" || true
+        path=""; sha=""; branch=""; locked=""
         ;;
     esac
   done < <(git -C "$repo_root" worktree list --porcelain; echo)
@@ -177,12 +212,60 @@ path_occupied() {
   return 1
 }
 
+# Every reason a worktree's CONTENTS make it unsafe to remove, in one place so
+# it can be re-run immediately before the destructive step. Echoes the reason
+# and returns 1 when unsafe, returns 0 when the tree looks removable.
+# Details, all guarding a --force removal:
+#   - a FAILED status (corrupt/unreadable index) must never read as "clean";
+#     capture the exit status separately from the empty-output case
+#   - --untracked-files=all overrides a repo/user `status.showUntrackedFiles`
+#     setting that would otherwise hide uncommitted new files
+#   - --ignore-submodules=none overrides `diff.ignoreSubmodules=all`, which
+#     would otherwise hide uncommitted work inside an initialized submodule
+#   - core.fileMode=true overrides a repo that turned it off, where an
+#     uncommitted chmod (0644 -> 0755) is invisible to status and would be
+#     destroyed by --force. A filesystem that cannot store the bit reports the
+#     tree dirty instead, which only ever keeps a worktree
+#   - `git status` is blind to files marked assume-unchanged or skip-worktree:
+#     both tell git to trust the index and stop stat-ing the file, so an edited
+#     file reports clean. Their mere presence means "contents unverifiable"
+#   - the branch tip is compared against the SHA the plan was built from, so a
+#     commit made after the scan is not silently discarded
+tree_unsafe_reason() {
+  local path="$1" expected_sha="${2:-}"
+  local status_out flagged_out tip
+  if ! status_out="$(git --no-optional-locks -c core.fileMode=true -C "$path" status --porcelain \
+      --untracked-files=all --ignore-submodules=none 2>/dev/null)"; then
+    echo "could not read git status"; return 1
+  fi
+  if [[ -n "$status_out" ]]; then
+    echo "uncommitted changes"; return 1
+  fi
+  if ! flagged_out="$(git --no-optional-locks -C "$path" ls-files -v 2>/dev/null)"; then
+    echo "could not read index flags"; return 1
+  fi
+  if printf '%s\n' "$flagged_out" | grep -qE '^[a-zS] '; then
+    echo "assume-unchanged/skip-worktree entries hide their contents from git status"; return 1
+  fi
+  if [[ -n "$expected_sha" ]]; then
+    tip="$(git -C "$path" rev-parse HEAD 2>/dev/null || true)"
+    if [[ -z "$tip" || "$tip" != "$expected_sha" ]]; then
+      echo "branch tip moved since the plan was made"; return 1
+    fi
+  fi
+  return 0
+}
+
 prune_one() {
-  local mode="$1" path="$2" sha="$3" branch="$4" merged="$5" self_root="$6"
+  local mode="$1" path="$2" sha="$3" branch="$4" merged="$5" self_root="$6" locked="${7:-}"
   [[ -z "$path" || "$path" == "$repo_root" ]] && return 0
   [[ -n "$self_root" && "$path" == "$self_root" ]] && return 0
   if [[ -z "$branch" ]]; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path (detached HEAD)"
+    return 0
+  fi
+  if [[ -n "$locked" ]]; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (locked with git worktree lock)"
     return 0
   fi
   if [[ ! -d "$path" ]]; then
@@ -214,42 +297,9 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (git activity within the last hour)"
     return 0
   fi
-  # Two safety details here, both guarding a --force removal:
-  #   - a FAILED status (corrupt/unreadable index) must never read as "clean";
-  #     capture the exit status separately from the empty-output case
-  #   - --untracked-files=all overrides a repo/user `status.showUntrackedFiles`
-  #     setting that would otherwise hide uncommitted new files
-  #   - --ignore-submodules=none overrides `diff.ignoreSubmodules=all`, which
-  #     would otherwise hide uncommitted work inside an initialized submodule
-  #   - core.fileMode=true overrides a repo that turned it off, where an
-  #     uncommitted chmod (0644 -> 0755) is invisible to status and would be
-  #     destroyed by the --force below. A filesystem that cannot store the bit
-  #     reports the tree dirty instead, which only ever keeps a worktree
-  local status_out
-  if ! status_out="$(git --no-optional-locks -c core.fileMode=true -C "$path" status --porcelain \
-      --untracked-files=all --ignore-submodules=none 2>/dev/null)"; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read git status)"
-    return 0
-  fi
-  if [[ -n "$status_out" ]]; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (uncommitted changes)"
-    return 0
-  fi
-  # `git status` is blind to files marked assume-unchanged or skip-worktree:
-  # both tell git to trust the index and stop stat-ing the file, so an edited
-  # file reports clean and a --force removal would destroy work that was never
-  # committed and never shown. Those bits are rare and always set deliberately,
-  # so their mere presence means "this tree's contents are unverifiable" -- keep
-  # it rather than diff every flagged entry. `ls-files -v` lowercases the tag
-  # letter for assume-unchanged and prints `S` for skip-worktree; a listing that
-  # fails is unreadable index state, which keeps for the same reason as above.
-  local flagged_out
-  if ! flagged_out="$(git --no-optional-locks -C "$path" ls-files -v 2>/dev/null)"; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read index flags)"
-    return 0
-  fi
-  if printf '%s\n' "$flagged_out" | grep -qE '^[a-zS] '; then
-    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (assume-unchanged/skip-worktree entries hide their contents from git status)"
+  local keep_reason
+  if ! keep_reason="$(tree_unsafe_reason "$path")"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch ($keep_reason)"
     return 0
   fi
   local pr
@@ -310,13 +360,22 @@ print(match)
   if [[ -z "${lsof_problem:-}" ]]; then
     local fresh_cwd
     if ! fresh_cwd="$(lsof -a -d cwd -Fn 2>/dev/null)"; then
-      echo "KEEP $path branch=$branch (could not re-check live processes before removal)"
+      [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not re-check live processes before removal)"
       return 0
     fi
     if path_occupied "$path" "$fresh_cwd"; then
-      echo "KEEP $path branch=$branch (a process entered it while the prune plan was being prepared)"
+      [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process entered it while the prune plan was being prepared)"
       return 0
     fi
+  fi
+  # The cwd re-scan only covers processes sitting IN the worktree. A process
+  # working from outside can still have written an untracked file or advanced
+  # the branch since the snapshot - the per-branch GitHub lookup alone can take
+  # seconds. Re-run the full content check, now including the branch tip, so
+  # --force cannot discard work that appeared after the plan was made.
+  if ! keep_reason="$(tree_unsafe_reason "$path" "$sha")"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (changed while the prune plan was being prepared: $keep_reason)"
+    return 0
   fi
   # Clean was verified above via `git status`; --force only bypasses git's
   # refusal over ignored files such as node_modules. Capture git's own error so
@@ -418,7 +477,8 @@ log "pruning stale worktrees (merged PR + clean tree)"
 prune_worktrees best-effort || true
 
 # --- Freshness: fetch, then branch from origin's default branch --------------
-base_branch="$(default_branch)"
+resolve_default_branch
+base_branch="$DEFAULT_BRANCH"
 base_ref=""
 # Explicit destination refspec: with a narrowed remote.origin.fetch config,
 # `git fetch origin <branch>` can succeed without updating the remote-tracking
@@ -426,24 +486,22 @@ base_ref=""
 fetch_branch() {
   git -C "$repo_root" fetch origin "+refs/heads/$1:refs/remotes/origin/$1" --quiet 2>/dev/null
 }
-# Resolve the remote's default BEFORE fetching, so the remote is contacted at
-# most twice online and exactly once when it is unreachable. A recorded
-# origin/HEAD can be stale and a stale one still fetches happily whenever the
-# old branch survives the rename (default moves main -> develop, main stays),
-# which would silently base every worktree on the abandoned default - so the
-# cached symref is never trusted on its own while the remote can be reached.
-# `|| true` is load-bearing: `pipefail` propagates ls-remote's failure through
-# the pipe and `set -e` would abort the script instead of falling through to
-# the cached-ref path below.
+# Resolve the remote's default BEFORE fetching, reusing the single cached probe
+# above, so the remote is contacted at most twice online (probe + fetch) and
+# exactly once when it is unreachable. A recorded origin/HEAD can be stale and
+# a stale one still fetches happily whenever the old branch survives the rename
+# (default moves main -> develop, main stays), which would silently base every
+# worktree on the abandoned default - so the cached symref is never trusted on
+# its own while the remote can be reached.
 log "resolving origin's default branch"
-remote_default="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null \
-  | awk '/^ref:/{print $2; exit}' || true)"
-remote_default="${remote_default#refs/heads/}"
-if [[ -n "$remote_default" ]]; then
-  if [[ "$remote_default" != "$base_branch" ]]; then
-    log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
-    git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
-    base_branch="$remote_default"
+probe_remote_default
+if [[ -n "$REMOTE_REACHABLE" ]]; then
+  # Reachable but no symref (detached remote HEAD) still means "fetch is worth
+  # trying" - only the default-branch correction is skipped.
+  if [[ -n "$REMOTE_DEFAULT" && "$REMOTE_DEFAULT" != "$base_branch" ]]; then
+    log "WARN local origin/HEAD said '$base_branch', but the remote default is '$REMOTE_DEFAULT' - using it"
+    git -C "$repo_root" remote set-head origin "$REMOTE_DEFAULT" >/dev/null 2>&1 || true
+    base_branch="$REMOTE_DEFAULT"
   fi
   log "fetching origin/$base_branch"
   # `if`, not `fetch_branch ... && fetched=1`: under `set -e` the && form makes
@@ -568,7 +626,10 @@ while IFS= read -r -d '' src; do
   # this hook exists because local main goes stale, so the remote may already
   # track a path that stale main still ignores. Judging by $repo_root there
   # would clobber a tracked file in the new worktree with a local secret.
-  if git -C "$worktree_path" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+  # --literal-pathspecs: `--` stops option parsing but leaves glob magic on, so
+  # an env path containing pathspec metacharacters (dir[1]/.env) could match a
+  # different tracked file (dir1/.env) and mis-classify this one as tracked.
+  if git -C "$worktree_path" --literal-pathspecs ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
     log "    skip $rel (tracked in the fetched tree)"
     continue
   fi
@@ -651,7 +712,10 @@ install_deps() {
   if [[ -f "$worktree_path/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
     install_cmd="pnpm install --frozen-lockfile"
     log "running pnpm install --frozen-lockfile"
-    pnpm --dir "$worktree_path" install --frozen-lockfile >&2
+    # cd, not --dir: Corepack resolves the pnpm shim from the CURRENT directory,
+    # so --dir would run the outer checkout's pinned generation against this
+    # tree's lockfile. Same reason the yarn branch below probes from inside.
+    (cd "$worktree_path" && pnpm install --frozen-lockfile) >&2
   elif [[ -f "$worktree_path/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
     # Yarn 1 spells it --frozen-lockfile; Berry spells it --immutable. Probe
     # from inside the worktree: Corepack and `.yarnrc.yml` pin the generation

@@ -119,11 +119,11 @@ If the repo needs extra per-worktree setup beyond env files and dependency insta
 ## Status
 
 Probe before running the installed script with flags: a legacy hook script treats unknown arguments as hook mode, so it can hang waiting on stdin or create a stray worktree.
-Only use it when it demonstrably supports `--prune`; otherwise run the plugin template directly.
+Only use it when it declares the exact capability marker `# worktree-setup-capability: prune`; otherwise run the plugin template directly.
 
 ```bash
 git worktree list
-if grep -q -- '--prune' scripts/worktree-setup.sh 2>/dev/null; then
+if grep -qxF '# worktree-setup-capability: prune' scripts/worktree-setup.sh 2>/dev/null; then
   bash scripts/worktree-setup.sh --prune --dry-run
 else
   bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
@@ -142,7 +142,7 @@ Works in any repo, even one that never ran Init: the template script anchors its
 bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
 ```
 
-(Prefer the repo's installed `scripts/worktree-setup.sh` only when `grep -q -- '--prune' scripts/worktree-setup.sh` confirms support; a legacy script would treat the flags as hook mode.)
+(Prefer the repo's installed `scripts/worktree-setup.sh` only when `grep -qxF '# worktree-setup-capability: prune' scripts/worktree-setup.sh` confirms support - an exact capability marker, not a substring search, because a legacy script that merely mentions `--prune` in a comment or usage string would be handed the flags and treat them as hook mode.)
 
 1. **Dry-run first.** Run with `--prune --dry-run` and present the plan: every `WOULD-PRUNE` line (with PR number) and every `KEEP` line (with reason).
 2. **Confirm.** Deleting worktrees is destructive; confirm with AskUserQuestion before applying, showing the count and, when cheap to compute, the disk it frees.
