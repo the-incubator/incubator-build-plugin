@@ -10,6 +10,7 @@ video frames when available, and CE-friendly markdown artifacts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as html_lib
 import json
 import os
@@ -1009,6 +1010,7 @@ def write_requirements_kickoff(
     findings: list[dict[str, Any]],
     moments: list[dict[str, Any]],
     repo_root: Path,
+    analysis_id: str = "",
 ) -> None:
     title = topic.replace("-", " ").title()
     date = datetime.now(timezone.utc).date().isoformat()
@@ -1150,7 +1152,15 @@ def write_requirements_kickoff(
             "",
             "## Next Steps",
             "",
-            "-> Resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
+            "-> Triage every requirement into a bucket (change / try / discuss / respond / blocked / defer) and get the table approved as `triage.md`.",
+            f"   Rules: `{Path(__file__).resolve().parent.parent / 'references' / 'feedback-triage.md'}`",
+            (
+                f"   Stamp the approved `triage.md` with a first line of `Analysis: {analysis_id}`;"
+                " an approval carrying a different id belongs to a superseded analysis, so re-run the gate."
+                if analysis_id
+                else "   Stamp the approved `triage.md` with the `Analysis:` id printed by the analyzer."
+            ),
+            "-> Then resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n")
@@ -1619,6 +1629,13 @@ def write_html_report(
   .req-body dd {{ margin: 0; }}
   .req-body .quote {{ margin: 12px 0 0; padding: 8px 12px; border-left: 2px solid #2a3644; color: #b7c4d2; font-style: italic; font-size: 12.5px; }}
   .src {{ font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }}
+  .bucket {{ font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .05em; text-transform: uppercase; }}
+  .bucket-change  {{ background: #12321f; color: #7ee0a3; }}
+  .bucket-try     {{ background: #14263a; color: #6fb3ff; }}
+  .bucket-discuss {{ background: #2e2440; color: #c39bff; }}
+  .bucket-respond {{ background: #3a2d12; color: #ffca6b; }}
+  .bucket-blocked {{ background: #3a1a1a; color: #ff9a8a; }}
+  .bucket-defer   {{ background: #222b35; color: #8a97a6; }}
   .src-written {{ background: #12283a; color: #7db6ff; }}
   .src-spoken  {{ background: #2e2440; color: #c39bff; }}
   .src-both    {{ background: #12321f; color: #7ee0a3; }}
@@ -1697,6 +1714,16 @@ def write_html_report(
     Caveats the reviewer flagged get their own card (id req-caveat, resolved or
     unresolved per the reachability check). -->{pins_block}
     <!-- AGENT-SYNTHESIS-END -->
+    <!-- BUCKET-BADGE CONTRACT (deliberately OUTSIDE the AGENT-SYNTHESIS markers so it
+         survives the card fill - the triage step runs after synthesis and still needs it).
+         Added only once the triage table is approved; see references/feedback-triage.md.
+         Append one span.bucket bucket-<name> to each card's req-badges row, where <name>
+         is change|try|discuss|respond|blocked|defer, e.g.
+         <span class="bucket bucket-change">change</span>.
+         Non-code outcomes are delivered on the card body:
+         respond adds <dt>Answer</dt><dd>the written answer</dd>,
+         blocked adds <dt>Waiting on</dt><dd>missing input + named owner</dd>,
+         defer adds <dt>Queued</dt><dd>backlog pointer</dd>. -->
   </section>
 
   <section>
@@ -1799,6 +1826,90 @@ def write_html_report(
     output_path.write_text(html)
 
 
+def compute_analysis_id(source_path: Path, sidecar_paths: list[Path] | None = None) -> str:
+    """A short fingerprint of the input this analysis was produced from.
+
+    Deterministic per input: the same inputs always yield the same id, so a rerun
+    over unchanged input is recognizable as the *same* analysis, while edited or
+    different input produces a new one. The triage gate stamps this id into
+    `triage.md` so a resumed workflow can tell an approval that still matches the
+    evidence from one left over from a previous analysis.
+
+    The sidecar counts as input, not decoration: the reviewer's written pins become
+    first-class requirements, so editing `annotations.json` (or pointing
+    `--annotations` at a different file) changes what there is to triage even when
+    the recording is byte-identical. Hashing only the recording would leave the id
+    unchanged and silently preserve an approval that predates the new pins."""
+    digest = hashlib.sha256()
+
+    def absorb(path: Path, label: str) -> None:
+        digest.update(f"|{label}:{path.name}|".encode("utf-8", "replace"))
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            # Unreadable: fall back to size so the id is still stable per input.
+            try:
+                digest.update(str(path.stat().st_size).encode())
+            except OSError:
+                digest.update(b"unknown")
+
+    absorb(source_path, "source")
+    for sidecar in sorted(sidecar_paths or [], key=lambda p: p.name):
+        if sidecar.exists():
+            absorb(sidecar, "sidecar")
+    return digest.hexdigest()[:12]
+
+
+def reconcile_existing_triage(output_dir: Path, analysis_id: str) -> list[str]:
+    """Keep an approved `triage.md` from silently outliving the analysis it approved.
+
+    The analyzer overwrites the evidence and the report on every run, but `triage.md`
+    is written by the agent, not by us - so without this it survives untouched and a
+    resumed workflow can scope planning against buckets approved for different
+    evidence. A stamp mismatch supersedes the file (renamed, never deleted - it is
+    the user's approved work); a match keeps it but still warns, because the
+    regenerated report has lost its bucket badges."""
+    triage_path = output_dir / "triage.md"
+    if not triage_path.exists():
+        return []
+
+    head = ""
+    try:
+        head = triage_path.read_text(errors="replace")[:2000]
+    except OSError:
+        pass
+    match = re.search(r"^Analysis:\s*([0-9a-f]{6,})\s*$", head, re.MULTILINE)
+    existing_id = match.group(1) if match else None
+
+    if existing_id == analysis_id:
+        return [
+            f"NOTE: an approved triage.md for this same analysis ({analysis_id}) is already here.",
+            "      Its buckets still hold, but report.html was regenerated blank - there are no requirement",
+            "      cards left to badge. Re-synthesize the report first (extensive-analysis step 8b), then",
+            "      re-apply the bucket badges. Do not hand off the regenerated report as-is.",
+        ]
+
+    stamp = existing_id or "unstamped"
+    superseded = output_dir / f"triage.superseded-{stamp}.md"
+    counter = 2
+    while superseded.exists():
+        superseded = output_dir / f"triage.superseded-{stamp}-{counter}.md"
+        counter += 1
+    try:
+        triage_path.rename(superseded)
+    except OSError:
+        return [
+            f"WARNING: triage.md here was approved for a different analysis ({stamp}) and could not be moved.",
+            "         Do NOT reuse it - re-run the triage gate before planning.",
+        ]
+    return [
+        f"WARNING: triage.md here was approved for a different analysis ({stamp}), not this one ({analysis_id}).",
+        f"         Moved to {superseded.name}. Re-run the triage gate; do not plan from the superseded buckets.",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     source_path = args.source_path.expanduser().resolve()
@@ -1808,6 +1919,13 @@ def main() -> int:
 
     output_dir = (args.output_dir or default_output_dir(source_path)).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_candidates: list[Path] = []
+    if args.annotations:
+        sidecar_candidates.append(args.annotations.expanduser().resolve())
+    else:
+        sidecar_candidates.append(source_path.parent / "annotations.json")
+    analysis_id = compute_analysis_id(source_path, sidecar_candidates)
+    triage_notices = reconcile_existing_triage(output_dir, analysis_id)
     raw_dir = output_dir / "raw"
     frames_dir = output_dir / "frames"
     source = prepare_source(source_path, raw_dir)
@@ -1857,7 +1975,7 @@ def main() -> int:
     write_problem_analysis(problem_analysis_md, transcript, moments, findings, annotations, repo_root)
     write_review_prompt(review_prompt_md, transcript, moments, repo_root)
     write_source_materials(source_materials_md, source_path, source_kind, session, transcript, moments, raw_dir, frames_dir, repo_root)
-    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root)
+    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root, analysis_id)
 
     # Riffrec records screen and microphone as two separate cue-less webm streams;
     # repair both so the report's player gets reliable duration/seeking and audio.
@@ -1880,6 +1998,7 @@ def main() -> int:
     structured = {
         "source": str(source_path),
         "source_kind": source_kind,
+        "analysis_id": analysis_id,
         "output_dir": str(output_dir),
         "session": session,
         "event_counts": event_counts(events),
@@ -1916,7 +2035,14 @@ def main() -> int:
     print(f"STANDALONE_BUILD=python3 {Path(__file__).resolve().parent / 'build_standalone.py'} {output_dir}")
     print(f"Source materials: {display_path(source_materials_md, repo_root)}")
     print(f"Problem statements: {display_path(problem_analysis_md, repo_root)}")
-    print(f"Planning handoff: load inc:plan with {display_path(kickoff_md, repo_root)}")
+    triage_rules = Path(__file__).resolve().parent.parent / "references" / "feedback-triage.md"
+    print(f"ANALYSIS_ID={analysis_id}")
+    for notice in triage_notices:
+        print(notice)
+    print(f"Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer) and get the table approved as triage.md before planning.")
+    print(f"Triage rules: {triage_rules}")
+    print(f"  Stamp the approved triage.md with a first line of 'Analysis: {analysis_id}' so a later rerun can tell it apart from a stale approval.")
+    print(f"Planning handoff: after triage approval, load inc:plan with {display_path(kickoff_md, repo_root)} and triage.md")
     print("Planning should first confirm whether the captured requirements are complete and correctly grouped.")
     return 0
 

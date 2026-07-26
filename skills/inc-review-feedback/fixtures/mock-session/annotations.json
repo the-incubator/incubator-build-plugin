@@ -1,0 +1,19 @@
+{
+  "annotations": [
+    {
+      "comment": "This label says 'Recipes Recipes' - duplicated word, delete one.",
+      "element": "h2.section-title",
+      "pageUrl": "/dashboard"
+    },
+    {
+      "comment": "Maybe make this card a bit wider? Feels squeezed. Just a thought.",
+      "element": "div.recipe-card",
+      "pageUrl": "/dashboard"
+    },
+    {
+      "comment": "Why is this week's meal plan locked? Assuming that's intentional gating for free accounts - confirm?",
+      "element": "section.meal-plan-locked",
+      "pageUrl": "/dashboard/plan"
+    }
+  ]
+}
