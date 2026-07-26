@@ -53,7 +53,9 @@ command -v python3 >/dev/null 2>&1 && PYTHON3_OK=1
 # at external storage). Derive from cwd first; CLAUDE_PROJECT_DIR is only a
 # fallback for when the hook fires outside the repo, because in CLI mode it
 # can name a different repo (the session's project) than the one being pruned.
-repo_root="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1)"
+# `|| true`: outside a repository this pipeline fails, and under errexit +
+# pipefail a bare assignment would abort before the fallback below can run.
+repo_root="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1 || true)"
 if [[ -z "$repo_root" ]]; then
   repo_root="${CLAUDE_PROJECT_DIR:?not inside a git repository and CLAUDE_PROJECT_DIR unset}"
 fi
@@ -185,7 +187,17 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (git activity within the last hour)"
     return 0
   fi
-  if [[ -n "$(git --no-optional-locks -C "$path" status --porcelain 2>/dev/null)" ]]; then
+  # Two safety details here, both guarding a --force removal:
+  #   - a FAILED status (corrupt/unreadable index) must never read as "clean";
+  #     capture the exit status separately from the empty-output case
+  #   - --untracked-files=all overrides a repo/user `status.showUntrackedFiles`
+  #     setting that would otherwise hide uncommitted new files
+  local status_out
+  if ! status_out="$(git --no-optional-locks -C "$path" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read git status)"
+    return 0
+  fi
+  if [[ -n "$status_out" ]]; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (uncommitted changes)"
     return 0
   fi
@@ -207,9 +219,12 @@ print(match)
 ' "$branch" "$sha" 2>/dev/null || true)"
   # The bulk list caps at the 300 most recent merged PRs; an old worktree can
   # fall past it and become unprunable. In CLI modes, fall back to an exact
-  # per-branch lookup. Hook mode skips this to keep worktree creation fast.
-  if [[ -z "$pr" && "$mode" != "best-effort" ]]; then
-    pr="$(cd "$repo_root" && gh pr list --head "$branch" --state merged \
+  # per-branch lookup. SHA_MISMATCH also triggers it: a newer PR can reuse the
+  # branch name while the PR that actually merged this tip sits past the cap.
+  # Hook mode skips the fallback to keep worktree creation fast.
+  if [[ ( -z "$pr" || "$pr" == "SHA_MISMATCH" ) && "$mode" != "best-effort" ]]; then
+    local fallback_pr
+    fallback_pr="$(cd "$repo_root" && gh pr list --head "$branch" --state merged \
         --limit 20 --json headRefOid,number 2>/dev/null | python3 -c '
 import json, sys
 tip = sys.argv[1]
@@ -221,6 +236,8 @@ for p in json.load(sys.stdin):
     match = match or "SHA_MISMATCH"
 print(match)
 ' "$sha" 2>/dev/null || true)"
+    # Only let the fallback improve the verdict, never erase a known mismatch.
+    [[ -n "$fallback_pr" ]] && pr="$fallback_pr"
   fi
   if [[ -z "$pr" ]]; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (no merged PR for this branch)"
@@ -391,7 +408,7 @@ done < <(
   find "$repo_root" \
     \( -name node_modules -o -name .git -o -name .worktrees \
        -o -path "$repo_root/.claude/worktrees" \) -prune -o \
-    -type f \( -name '.env' -o -name '.env.local' \) -print0
+    \( -type f -o -type l \) \( -name '.env' -o -name '.env.local' \) -print0
 )
 if [[ "$linked" -eq 0 ]]; then
   log "    (no .env / .env.local files found)"
@@ -451,9 +468,12 @@ if ! install_deps; then
 fi
 
 # --- Repo-specific extras (best-effort) --------------------------------------
-if [[ -x "$repo_root/scripts/worktree-post-setup.sh" ]]; then
+# Run the copy from the new worktree, not the main checkout: the whole point
+# of the fresh base is that the worktree may carry a newer version of this
+# script than a stale local main has.
+if [[ -x "$worktree_path/scripts/worktree-post-setup.sh" ]]; then
   log "running scripts/worktree-post-setup.sh"
-  if ! "$repo_root/scripts/worktree-post-setup.sh" "$worktree_path" >&2; then
+  if ! "$worktree_path/scripts/worktree-post-setup.sh" "$worktree_path" >&2; then
     log "WARN worktree-post-setup.sh failed - continuing"
   fi
 fi

@@ -28,10 +28,14 @@ With no argument, detect the repo's state and route:
 
 ```bash
 test -f scripts/worktree-setup.sh && echo HAS_SCRIPT
-jq -e '.hooks.WorktreeCreate | length > 0' .claude/settings.json >/dev/null 2>&1 && echo HAS_HOOK
+jq -e '[.hooks.WorktreeCreate[]?.hooks[]?.command // empty]
+       | map(select(test("worktree-setup\\.sh"))) | length > 0' \
+  .claude/settings.json >/dev/null 2>&1 && echo HAS_HOOK
 ```
 
-(The `length > 0` matters: a bare `"WorktreeCreate": []` is not an installed hook and must route to repair, not Status.)
+Both details matter.
+A bare `"WorktreeCreate": []` is not an installed hook, and a non-empty hook pointing at some *other* command means `scripts/worktree-setup.sh` is never invoked - an unconnected script plus a foreign hook is half-installed, not installed.
+Either case routes to repair, not Status.
 
 - Neither present: run **Init**.
 - Both present: run **Status**, and offer **Prune** if there are candidates.
@@ -73,7 +77,13 @@ If the file has an existing `WorktreeCreate` entry pointing elsewhere, stop and 
 
 ### Step 4 - Gitignore the worktree directory
 
-Ensure `.gitignore` contains a `.worktrees/` line (check with `git check-ignore -q .worktrees/` - trailing slash matters); append it if missing.
+Ensure the repository's own `.gitignore` contains a `.worktrees/` line; append it if missing.
+
+```bash
+grep -qE '^\.worktrees/?$' .gitignore 2>/dev/null || printf '.worktrees/\n' >> .gitignore
+```
+
+Check the tracked file, not `git check-ignore`: the latter also succeeds when the rule lives only in the developer's `core.excludesFile` or `.git/info/exclude`, which collaborators do not get - they would end up with an untracked `.worktrees/` directory after this setup is committed.
 
 ### Step 5 - Smoke test
 
