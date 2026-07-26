@@ -106,15 +106,23 @@ prune_worktrees() {
   # and rely on the human reviewing the plan. gh runs from $repo_root and
   # infers the repo from the git remote - passing the raw remote URL to
   # --repo breaks on SSH-style remotes (gh expects [HOST/]OWNER/REPO).
-  local merged cwd_list
+  local merged cwd_list lsof_problem=""
   cwd_list=""
-  if command -v lsof >/dev/null 2>&1; then
-    cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null || true)"
-  elif [[ "$mode" == "best-effort" ]]; then
-    log "prune: lsof not found (cannot detect live worktrees), skipping"
-    return 0
-  else
-    echo "WARN: lsof not found - the live-process guard is unavailable; review the plan carefully" >&2
+  if ! command -v lsof >/dev/null 2>&1; then
+    lsof_problem="lsof not found"
+  elif ! cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null)"; then
+    # An installed lsof can still fail (permissions, /proc restrictions, a
+    # transient error). Forcing success with `|| true` would leave cwd_list
+    # empty and make the guard silently pass everything.
+    lsof_problem="lsof scan failed"
+    cwd_list=""
+  fi
+  if [[ -n "$lsof_problem" ]]; then
+    if [[ "$mode" == "best-effort" ]]; then
+      log "prune: $lsof_problem (cannot detect live worktrees), skipping"
+      return 0
+    fi
+    echo "WARN: $lsof_problem - the live-process guard is unavailable; review the plan carefully" >&2
   fi
   if ! merged="$(cd "$repo_root" && gh pr list \
       --state merged --limit 300 --json headRefName,headRefOid,number 2>/dev/null)"; then
@@ -192,8 +200,11 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
   #     capture the exit status separately from the empty-output case
   #   - --untracked-files=all overrides a repo/user `status.showUntrackedFiles`
   #     setting that would otherwise hide uncommitted new files
+  #   - --ignore-submodules=none overrides `diff.ignoreSubmodules=all`, which
+  #     would otherwise hide uncommitted work inside an initialized submodule
   local status_out
-  if ! status_out="$(git --no-optional-locks -C "$path" status --porcelain --untracked-files=all 2>/dev/null)"; then
+  if ! status_out="$(git --no-optional-locks -C "$path" status --porcelain \
+      --untracked-files=all --ignore-submodules=none 2>/dev/null)"; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read git status)"
     return 0
   fi
@@ -333,10 +344,16 @@ fi
 # multibyte input collapses to dashes rather than leaking through. The sed pass
 # removes patterns git refuses in a ref name: runs of dots, a leading or
 # trailing dot/dash, and a trailing ".lock".
+# Order matters: trim the ends BEFORE rewriting a trailing ".lock", or an
+# input like "foo.lock." trims down to "foo.lock" after the rewrite already
+# ran and git rejects the ref.
 slug="$(printf '%s' "$slug" \
   | LC_ALL=C tr -c '[:alnum:]._-' '-' \
-  | sed -E 's/\.{2,}/-/g; s/\.lock$/-lock/; s/^[-.]+//; s/[-.]+$//')"
-if [[ -z "$slug" ]]; then
+  | sed -E 's/\.{2,}/-/g; s/^[-.]+//; s/[-.]+$//; s/\.lock$/-lock/')"
+# Final backstop: whatever survived must actually be a legal branch name, or
+# `git worktree add` aborts worktree creation entirely.
+if [[ -z "$slug" ]] || ! git check-ref-format --branch "$slug" >/dev/null 2>&1; then
+  [[ -n "$slug" ]] && log "WARN slug '$slug' is not a valid branch name, using a generated one"
   slug="wt-$$"
 fi
 
@@ -346,14 +363,34 @@ prune_worktrees best-effort || true
 
 # --- Freshness: fetch, then branch from origin's default branch --------------
 base_branch="$(default_branch)"
-base_ref="$base_branch"
-log "fetching origin/$base_branch"
+base_ref=""
 # Explicit destination refspec: with a narrowed remote.origin.fetch config,
 # `git fetch origin <branch>` can succeed without updating the remote-tracking
 # ref. The + prefix keeps the ref moving even if the remote branch rewound.
-if git -C "$repo_root" fetch origin \
-    "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" --quiet 2>/dev/null; then
+fetch_branch() {
+  git -C "$repo_root" fetch origin "+refs/heads/$1:refs/remotes/origin/$1" --quiet 2>/dev/null
+}
+log "fetching origin/$base_branch"
+if fetch_branch "$base_branch"; then
   base_ref="origin/$base_branch"
+else
+  # A recorded origin/HEAD can itself be stale. After a remote renames its
+  # default (master -> main), fetching the deleted branch fails while its
+  # cached remote-tracking ref lingers - branching from that would silently
+  # base every worktree on an abandoned tip. Re-ask the remote first.
+  remote_default="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null \
+    | awk '/^ref:/{print $2; exit}')"
+  remote_default="${remote_default#refs/heads/}"
+  if [[ -n "$remote_default" && "$remote_default" != "$base_branch" ]] \
+     && fetch_branch "$remote_default"; then
+    log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
+    git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
+    base_branch="$remote_default"
+    base_ref="origin/$remote_default"
+  fi
+fi
+if [[ -n "$base_ref" ]]; then
+  : # fetched cleanly above
 elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$base_branch"; then
   # Deliberate tradeoff: offline/auth-failed creation still works, from the
   # best base available. The age makes the staleness visible instead of silent.
@@ -362,6 +399,7 @@ elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$base_br
   base_ref="origin/$base_branch"
 else
   log "WARN no origin/$base_branch, branching from local $base_branch"
+  base_ref="$base_branch"
 fi
 
 # --- Pick a free branch name and worktree path -------------------------------
@@ -384,12 +422,21 @@ done
 # behind: non-zero exit tells Claude "creation failed", so on-disk state has
 # to match. This trap removes the worktree + branch only on a failing exit.
 worktree_created=""
+# `-b` creates the branch before the checkout phase, so a checkout failure
+# (a failing smudge/LFS filter, for example) can leave the branch behind even
+# though no worktree exists. Track the name from before the attempt so the
+# trap can delete it either way; the name was proven free just above.
+branch_claimed="$branch"
 cleanup_on_failure() {
   local code=$?
-  if [[ -n "$worktree_created" && "$code" -ne 0 ]]; then
+  [[ "$code" -eq 0 ]] && return 0
+  if [[ -n "$worktree_created" ]]; then
     log "setup failed (exit $code); removing partially created worktree"
     git -C "$repo_root" worktree remove --force "$worktree_path" >&2 2>/dev/null || true
-    git -C "$repo_root" branch -D "$branch" >&2 2>/dev/null || true
+  fi
+  if [[ -n "$branch_claimed" ]] \
+     && git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch_claimed"; then
+    git -C "$repo_root" branch -D "$branch_claimed" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup_on_failure EXIT
