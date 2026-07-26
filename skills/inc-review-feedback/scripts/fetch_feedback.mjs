@@ -10,6 +10,12 @@
 //   node fetch_feedback.mjs --branch            # match sessions to the current git branch
 //   node fetch_feedback.mjs --list              # print recent submissions and stop
 //
+// Whenever more than one submission is in play (--list, or an ambiguous query), the
+// candidates are printed as a summarized list: who, when, how many comments, whether
+// there's a recording, which pages, and the first few comments verbatim. That summary
+// costs one extra API call per listed session, capped by --limit (default 10); pass
+// --no-summary for the bare one-line-per-session table.
+//
 // <query> is one of:
 //   - a link            https://…/f/<id>  (any URL; the id is the last path segment)
 //   - a session id       88240c83-dfd7-…  (or a non-uuid id like qa-e2e-9a3b922b)
@@ -22,11 +28,14 @@
 //   RESOLVED_DIR=<dir>
 // Exit codes: 0 resolved · 1 no match · 2 ambiguous (candidates printed) · 3 usage/error.
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> inc-review-feedback/ -> skills/ -> <plugin root>/scripts/inc-build.mjs
@@ -51,13 +60,15 @@ function incBuild(args, { capture = false } = {}) {
 }
 
 function parseArgs(argv) {
-  const flags = { includeOpen: false };
+  const flags = { includeOpen: false, summary: true, limit: 10 };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--branch") flags.branch = true;
     else if (a === "--list") flags.list = true;
     else if (a === "--include-open") flags.includeOpen = true;
+    else if (a === "--no-summary") flags.summary = false;
+    else if (a === "--limit") flags.limit = Number(argv[++i]) || flags.limit;
     else if (a === "--out") flags.out = argv[++i];
     else if (a === "--repo-dir") flags.repoDir = argv[++i];
     else if (a.startsWith("--")) die(`unknown flag: ${a}`);
@@ -169,6 +180,96 @@ function printTable(list) {
   }
 }
 
+// ---- Summarized listing -----------------------------------------------------
+// Whoever is choosing between submissions needs to know what is *in* each one.
+// The sessions list has no comment text or count, so each listed session costs
+// one extra `feedback get` call; that is why the summary is capped by --limit.
+
+const CANDIDATE_CAP = 12;
+
+function relTime(ms) {
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 48) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
+function whenLabel(s) {
+  const t = ts(s);
+  if (!t) return "time unknown";
+  return `${new Date(t).toISOString().slice(0, 16).replace("T", " ")}Z (${relTime(t)})`;
+}
+
+function clip(str, n) {
+  const one = String(str ?? "").replace(/\s+/g, " ").trim();
+  if (!one) return "(empty comment)";
+  return one.length > n ? `${one.slice(0, n - 1)}…` : one;
+}
+
+function pagePath(url) {
+  try {
+    return new URL(url).pathname || "/";
+  } catch {
+    return url || "?";
+  }
+}
+
+async function loadDetail(id) {
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [INC_BUILD, "feedback", "get", id], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    const parsed = JSON.parse(stdout);
+    return { annotations: parsed.annotations ?? [], session: parsed.session ?? {} };
+  } catch {
+    return null; // best-effort: the session still lists, just without its contents
+  }
+}
+
+// What the reviewer actually left: written comments, a recording, or both.
+function contentLabel(session, detail) {
+  if (!detail) return "contents unavailable";
+  const n = detail.annotations.length;
+  const mb = detail.session.recordingSizeBytes
+    ? ` (${(detail.session.recordingSizeBytes / 1_048_576).toFixed(1)} MB)`
+    : "";
+  const rec = session.hasRecording ? `recording${mb}` : null;
+  if (!n) return rec ? `${rec}, no written comments` : "empty (no comments, no recording)";
+  const comments = `${n} comment${n === 1 ? "" : "s"}`;
+  return rec ? `${comments} + ${rec}` : `${comments}, no recording`;
+}
+
+async function printSessions(list, { summary = true, limit = 10 } = {}) {
+  const ranked = rank(list);
+  if (!summary) return printTable(ranked);
+
+  const shown = ranked.slice(0, Math.max(1, limit));
+  const details = await Promise.all(shown.map((s) => loadDetail(s.feedbackSessionId)));
+
+  shown.forEach((s, i) => {
+    const anns = details[i]?.annotations ?? [];
+    const who = s.reviewerName || s.reviewerRole || "unnamed reviewer";
+    const pages = anns.length ? [...new Set(anns.map((a) => pagePath(a.pageUrl)))] : [pagePath(s.pageUrl)];
+
+    process.stderr.write(`\n  [${i + 1}] ${s.feedbackSessionId}\n`);
+    process.stderr.write(`      ${who} · ${s.project} · ${s.status} · ${whenLabel(s)}\n`);
+    process.stderr.write(
+      `      ${contentLabel(s, details[i])} · ${pages.length > 2 ? `${pages.length} pages` : pages.join(", ")}\n`,
+    );
+    for (const a of anns.slice(0, 3)) process.stderr.write(`      · ${clip(a.comment, 88)}\n`);
+    if (anns.length > 3) process.stderr.write(`      · …and ${anns.length - 3} more\n`);
+  });
+
+  if (ranked.length > shown.length) {
+    process.stderr.write(
+      `\n  …and ${ranked.length - shown.length} more not summarized - re-run with --limit ${ranked.length}.\n`,
+    );
+  }
+  process.stderr.write("\n");
+}
+
 function fetchAndReport(id, outFlag) {
   const outDir = outFlag || join(tmpdir(), "review-feedback", id);
   mkdirSync(outDir, { recursive: true });
@@ -186,14 +287,15 @@ function fetchAndReport(id, outFlag) {
   process.exit(0);
 }
 
-function main() {
+async function main() {
   const flags = parseArgs(process.argv.slice(2));
   const sessions = loadSessions();
   const submittedFirst = flags.includeOpen ? sessions : sessions.filter((s) => s.status === "submitted" || s.hasRecording);
 
   if (flags.list) {
-    process.stderr.write("Recent feedback submissions (best first):\n");
-    printTable(submittedFirst.length ? submittedFirst : sessions);
+    const pool = submittedFirst.length ? submittedFirst : sessions;
+    process.stderr.write(`Recent feedback submissions (${pool.length} total, best first):\n`);
+    await printSessions(pool, { summary: flags.summary, limit: flags.limit });
     process.exit(0);
   }
 
@@ -216,8 +318,10 @@ function main() {
       process.exit(1);
     }
     if (ranked.length > 1) {
-      process.stderr.write(`Multiple submissions match this branch (pr=${ctx.prNum ?? "none"}). Pick one and re-run with its id:\n`);
-      printTable(ranked);
+      process.stderr.write(
+        `${ranked.length} submissions match this branch (pr=${ctx.prNum ?? "none"}). Show this list to the user and ask which to review - each is separate feedback, not a duplicate:\n`,
+      );
+      await printSessions(ranked, { summary: flags.summary, limit: Math.max(flags.limit, Math.min(ranked.length, CANDIDATE_CAP)) });
       process.exit(2);
     }
     return fetchAndReport(ranked[0].feedbackSessionId, flags.out);
@@ -233,11 +337,13 @@ function main() {
     process.exit(1);
   }
   if (ranked.length > 1) {
-    process.stderr.write(`"${flags.query}" matched ${ranked.length} submissions. Pick one and re-run with its id:\n`);
-    printTable(ranked);
+    process.stderr.write(
+      `"${flags.query}" matched ${ranked.length} submissions. Show this list to the user and ask which to review - each is separate feedback, not a duplicate:\n`,
+    );
+    await printSessions(ranked, { summary: flags.summary, limit: Math.max(flags.limit, Math.min(ranked.length, CANDIDATE_CAP)) });
     process.exit(2);
   }
   return fetchAndReport(ranked[0].feedbackSessionId, flags.out);
 }
 
-main();
+main().catch((err) => die(err?.message || String(err), 3));

@@ -39,8 +39,21 @@ Read the resolver's stdout, then continue:
 
 - `RESOLVED_ZIP=<path>` → feed that zip to the analyzer entrypoint below, exactly like a local file.
 - `RESOLVED_ANNOTATIONS=<path>` → the submission has **no recording**; there's nothing to transcribe. Summarize the click-comments in that JSON directly (each has `comment`, `element`, `pageUrl`, and element context) into the quick-bug or extensive artifact — skip transcription.
-- exit **2** (ambiguous) → the resolver printed candidate sessions and deliberately did **not** guess across distinct reviewers; show them and ask the user which `sessionId`, then re-run with it.
+- exit **2** (more than one match) → see "More than one submission" below.
 - exit **1** (no match) / exit **3** (auth or transport) → surface the message. For auth, the check is `node "<plugin root>/scripts/inc-build.mjs" feedback projects` (the CLI uses the plugin's install `credentials.json`); don't retry blindly.
+
+### More than one submission
+
+Whenever the resolver matches more than one submission (exit **2**), or the user is browsing with `--list`, it prints a **summarized list** instead of resolving: reviewer, project, status, when, how many comments, whether there's a recording, which pages, and the first few comments verbatim.
+
+**Show that list to the user and ask which one to review - never silently pick the top match.**
+Two submissions from the same reviewer are almost always **separate rounds** of feedback, not duplicates: the same name with a later timestamp means new comments, not a resend.
+Reproduce the list in your own reply (one short line per submission: reviewer, when, comment count, the gist) because the user can't see the tool output.
+
+If the user wants several, process them **one at a time, oldest first**, and label which round each artifact came from.
+When you finish one and others are still unreviewed, say so explicitly rather than treating the request as closed.
+
+Listing flags: `--limit <n>` (how many to summarize; default 10) and `--no-summary` (bare one-line-per-session table, no per-session fetch).
 
 The full query table, output contract, and exit codes live in `references/fetch-from-collector.md`.
 
