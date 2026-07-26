@@ -1697,15 +1697,18 @@ def write_html_report(
     muted-badge (exploratory). button.tstamp with data-t seconds seeks the recording.
     Border-left color: #7ee0a3 concrete, default blue exploratory, #8a97a6 caveats.
     Caveats the reviewer flagged get their own card (id req-caveat, resolved or
-    unresolved per the reachability check).
-    Bucket badges (added only after the triage table is approved - see
-    references/feedback-triage.md): append one span.bucket bucket-<name> to each card's
-    req-badges row, where <name> is change|try|discuss|respond|blocked|defer, e.g.
-    <span class="bucket bucket-change">change</span>. Non-code outcomes are delivered on
-    the card body: respond adds <dt>Answer</dt><dd>...</dd>, blocked adds
-    <dt>Waiting on</dt><dd>input + named owner</dd>, defer adds
-    <dt>Queued</dt><dd>backlog pointer</dd>. -->{pins_block}
+    unresolved per the reachability check). -->{pins_block}
     <!-- AGENT-SYNTHESIS-END -->
+    <!-- BUCKET-BADGE CONTRACT (deliberately OUTSIDE the AGENT-SYNTHESIS markers so it
+         survives the card fill - the triage step runs after synthesis and still needs it).
+         Added only once the triage table is approved; see references/feedback-triage.md.
+         Append one span.bucket bucket-<name> to each card's req-badges row, where <name>
+         is change|try|discuss|respond|blocked|defer, e.g.
+         <span class="bucket bucket-change">change</span>.
+         Non-code outcomes are delivered on the card body:
+         respond adds <dt>Answer</dt><dd>the written answer</dd>,
+         blocked adds <dt>Waiting on</dt><dd>missing input + named owner</dd>,
+         defer adds <dt>Queued</dt><dd>backlog pointer</dd>. -->
   </section>
 
   <section>
