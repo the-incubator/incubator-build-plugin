@@ -60,6 +60,15 @@ command -v python3 >/dev/null 2>&1 && PYTHON3_OK=1
 repo_root="$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1 || true)"
 if [[ -z "$repo_root" ]]; then
   repo_root="${CLAUDE_PROJECT_DIR:?not inside a git repository and CLAUDE_PROJECT_DIR unset}"
+  # CLAUDE_PROJECT_DIR can itself name a LINKED worktree. Accepting it as-is
+  # would break the main-root invariant the rest of the script relies on:
+  # new worktrees would nest under the linked checkout's .worktrees/ and env
+  # files would be sourced from there. Ask that repo for its own first entry,
+  # exactly as the cwd path above does; keep the raw value if it is not a repo
+  # so the existing "not inside a git repository" failure still surfaces.
+  project_main="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null \
+    | sed -n 's/^worktree //p' | head -1 || true)"
+  [[ -n "$project_main" ]] && repo_root="$project_main"
 fi
 
 # --- Default branch detection ------------------------------------------------
@@ -153,6 +162,21 @@ prune_worktrees() {
   fi
 }
 
+# Does any process have its working directory inside $1? $2 is `lsof -Fn`
+# output. Literal comparison, not grep: a path containing regex metacharacters
+# (`[`, `+`, ...) would silently stop matching and disarm this guard. The
+# boundary test also keeps /a/b from matching a sibling /a/bc.
+path_occupied() {
+  local target="$1" list="$2" line candidate
+  [[ -z "$list" ]] && return 1
+  while IFS= read -r line; do
+    [[ "$line" == n* ]] || continue
+    candidate="${line#n}"
+    [[ "$candidate" == "$target" || "$candidate" == "$target"/* ]] && return 0
+  done <<< "$list"
+  return 1
+}
+
 prune_one() {
   local mode="$1" path="$2" sha="$3" branch="$4" merged="$5" self_root="$6"
   [[ -z "$path" || "$path" == "$repo_root" ]] && return 0
@@ -176,16 +200,9 @@ prune_one() {
   # Literal comparison, not grep: a path containing regex metacharacters (`[`,
   # `+`, ...) would silently stop matching and disarm this guard. The boundary
   # test also keeps /a/b from matching a sibling /a/bc.
-  if [[ -n "$cwd_list" ]]; then
-    local cwd_line cwd_path
-    while IFS= read -r cwd_line; do
-      [[ "$cwd_line" == n* ]] || continue
-      cwd_path="${cwd_line#n}"
-      if [[ "$cwd_path" == "$path" || "$cwd_path" == "$path"/* ]]; then
-        [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process is running inside it)"
-        return 0
-      fi
-    done <<< "$cwd_list"
+  if path_occupied "$path" "$cwd_list"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (a process is running inside it)"
+    return 0
   fi
   local idx max_idle=3600
   [[ "$mode" == "best-effort" ]] && max_idle=86400
@@ -204,8 +221,12 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
   #     setting that would otherwise hide uncommitted new files
   #   - --ignore-submodules=none overrides `diff.ignoreSubmodules=all`, which
   #     would otherwise hide uncommitted work inside an initialized submodule
+  #   - core.fileMode=true overrides a repo that turned it off, where an
+  #     uncommitted chmod (0644 -> 0755) is invisible to status and would be
+  #     destroyed by the --force below. A filesystem that cannot store the bit
+  #     reports the tree dirty instead, which only ever keeps a worktree
   local status_out
-  if ! status_out="$(git --no-optional-locks -C "$path" status --porcelain \
+  if ! status_out="$(git --no-optional-locks -c core.fileMode=true -C "$path" status --porcelain \
       --untracked-files=all --ignore-submodules=none 2>/dev/null)"; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read git status)"
     return 0
@@ -280,6 +301,22 @@ print(match)
   if [[ "$mode" == "dry-run" ]]; then
     echo "WOULD-PRUNE $path branch=$branch (PR #$pr merged)"
     return 0
+  fi
+  # The cwd snapshot was taken before the GitHub queries, the status checks and
+  # (in CLI mode) a human reading the plan - a shell or editor can have entered
+  # this worktree in that window, and removing it would kill a live session.
+  # Re-scan as late as possible, immediately before the irreversible step. A
+  # re-scan that fails leaves occupancy unverifiable, which keeps.
+  if [[ -z "${lsof_problem:-}" ]]; then
+    local fresh_cwd
+    if ! fresh_cwd="$(lsof -a -d cwd -Fn 2>/dev/null)"; then
+      echo "KEEP $path branch=$branch (could not re-check live processes before removal)"
+      return 0
+    fi
+    if path_occupied "$path" "$fresh_cwd"; then
+      echo "KEEP $path branch=$branch (a process entered it while the prune plan was being prepared)"
+      return 0
+    fi
   fi
   # Clean was verified above via `git status`; --force only bypasses git's
   # refusal over ignored files such as node_modules. Capture git's own error so
@@ -389,33 +426,35 @@ base_ref=""
 fetch_branch() {
   git -C "$repo_root" fetch origin "+refs/heads/$1:refs/remotes/origin/$1" --quiet 2>/dev/null
 }
-log "fetching origin/$base_branch"
-fetched=0
-# `if`, not `fetch_branch ... && fetched=1`: under `set -e` the && form makes
-# the whole statement fail when the fetch does, aborting an offline creation
-# that is supposed to fall back to the cached ref below.
-if fetch_branch "$base_branch"; then fetched=1; fi
-# A recorded origin/HEAD can itself be stale, and a stale one still fetches
-# happily whenever the old branch survives the rename: a remote that switches
-# its default from main to develop but keeps main around leaves the cached
-# symref working yet wrong, silently basing every worktree on the old default.
-# So ask the remote for its current default whenever we can reach it - on the
-# fetch-success path too, not only when the cached branch has disappeared.
-# Offline runs never pay for this: the fetch above already failed by then.
+# Resolve the remote's default BEFORE fetching, so the remote is contacted at
+# most twice online and exactly once when it is unreachable. A recorded
+# origin/HEAD can be stale and a stale one still fetches happily whenever the
+# old branch survives the rename (default moves main -> develop, main stays),
+# which would silently base every worktree on the abandoned default - so the
+# cached symref is never trusted on its own while the remote can be reached.
 # `|| true` is load-bearing: `pipefail` propagates ls-remote's failure through
-# the pipe, and `set -e` would then abort the script instead of falling through
-# to the cached-ref path - an unreachable remote must degrade, not crash.
+# the pipe and `set -e` would abort the script instead of falling through to
+# the cached-ref path below.
+log "resolving origin's default branch"
 remote_default="$(git -C "$repo_root" ls-remote --symref origin HEAD 2>/dev/null \
   | awk '/^ref:/{print $2; exit}' || true)"
 remote_default="${remote_default#refs/heads/}"
-if [[ -n "$remote_default" && "$remote_default" != "$base_branch" ]] \
-   && fetch_branch "$remote_default"; then
-  log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
-  git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
-  base_branch="$remote_default"
-  base_ref="origin/$remote_default"
-elif (( fetched )); then
-  base_ref="origin/$base_branch"
+if [[ -n "$remote_default" ]]; then
+  if [[ "$remote_default" != "$base_branch" ]]; then
+    log "WARN local origin/HEAD said '$base_branch', but the remote default is '$remote_default' - using it"
+    git -C "$repo_root" remote set-head origin "$remote_default" >/dev/null 2>&1 || true
+    base_branch="$remote_default"
+  fi
+  log "fetching origin/$base_branch"
+  # `if`, not `fetch_branch ... && fetched=1`: under `set -e` the && form makes
+  # the whole statement fail when the fetch does, aborting a creation that is
+  # supposed to fall back to the cached ref below.
+  if fetch_branch "$base_branch"; then base_ref="origin/$base_branch"; fi
+else
+  # ls-remote just failed against this remote over the same transport a fetch
+  # would use, so a fetch would only buy a second unbounded timeout before the
+  # same fallback. Skip it and go straight to the cached ref.
+  log "WARN could not reach origin (offline, or auth needed) - skipping the fetch"
 fi
 if [[ -n "$base_ref" ]]; then
   : # fetched cleanly above
@@ -423,7 +462,7 @@ elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$base_br
   # Deliberate tradeoff: offline/auth-failed creation still works, from the
   # best base available. The age makes the staleness visible instead of silent.
   cached_age="$(git -C "$repo_root" log -1 --format=%cr "refs/remotes/origin/$base_branch" 2>/dev/null || echo 'unknown age')"
-  log "WARN fetch failed (offline?); using cached origin/$base_branch (last commit: $cached_age) - this worktree may start behind the true remote tip"
+  log "WARN no fresh fetch; using cached origin/$base_branch (last commit: $cached_age) - this worktree may start behind the true remote tip"
   base_ref="origin/$base_branch"
 else
   log "WARN no origin/$base_branch, branching from local $base_branch"
@@ -432,14 +471,17 @@ fi
 
 # --- Pick a free branch name and worktree path -------------------------------
 worktrees_dir="$repo_root/.worktrees"
-if ! git -C "$repo_root" check-ignore -q .worktrees/ 2>/dev/null; then
+if ! git -C "$repo_root" check-ignore -q -- .worktrees/ 2>/dev/null; then
   log "WARN .worktrees/ is not gitignored, add it to .gitignore"
 fi
 base_path="$worktrees_dir/$slug"
 worktree_path="$base_path"
 branch="$slug"
 i=2
-while [[ -e "$worktree_path" ]] || git -C "$repo_root" show-ref --verify --quiet "refs/heads/${branch}"; do
+# -e is false for a DANGLING symlink, but `git worktree add` still aborts with
+# "already exists" on one - so the suffix loop would never advance and every
+# later request for that slug would fail the same way. -L catches those.
+while [[ -e "$worktree_path" || -L "$worktree_path" ]] || git -C "$repo_root" show-ref --verify --quiet "refs/heads/${branch}"; do
   worktree_path="${base_path}-${i}"
   branch="${slug}-${i}"
   i=$((i + 1))
@@ -450,11 +492,13 @@ done
 # behind: non-zero exit tells Claude "creation failed", so on-disk state has
 # to match. This trap removes the worktree + branch only on a failing exit.
 worktree_created=""
-# `-b` creates the branch before the checkout phase, so a checkout failure
-# (a failing smudge/LFS filter, for example) can leave the branch behind even
-# though no worktree exists. Track the name from before the attempt so the
-# trap can delete it either way; the name was proven free just above.
-branch_claimed="$branch"
+# Only a branch this invocation demonstrably created may be deleted on
+# failure. `-b` cannot establish that: it fails identically whether the name
+# was taken a moment earlier by a concurrent hook or by this attempt, so
+# cleanup keyed on "the ref exists now" would delete the other process's
+# branch. Claiming the ref up front with `git branch`, which fails when the
+# ref already exists, makes winning it the proof of ownership.
+branch_claimed=""
 cleanup_on_failure() {
   local code=$?
   [[ "$code" -eq 0 ]] && return 0
@@ -469,10 +513,26 @@ cleanup_on_failure() {
 }
 trap cleanup_on_failure EXIT
 
-log "creating worktree '$branch' at $worktree_path from $base_ref"
 # --no-track: without it the new branch tracks origin/<default>, so `git
 # status` compares against main and push.default=upstream can push to main.
-git -C "$repo_root" worktree add --no-track -b "$branch" "$worktree_path" "$base_ref" >&2
+# Losing the race here just means the name was taken between the scan above
+# and now; take the next suffix, exactly as the collision loop does.
+while :; do
+  if git -C "$repo_root" branch --no-track "$branch" "$base_ref" 2>/dev/null; then
+    branch_claimed="$branch"
+    break
+  fi
+  worktree_path="${base_path}-${i}"
+  branch="${slug}-${i}"
+  i=$((i + 1))
+  if (( i > 100 )); then
+    echo "ERROR: could not claim a free branch name for '$slug'" >&2
+    exit 1
+  fi
+done
+
+log "creating worktree '$branch' at $worktree_path from $base_ref"
+git -C "$repo_root" worktree add "$worktree_path" "$branch" >&2
 
 worktree_created=1
 
@@ -512,7 +572,7 @@ while IFS= read -r -d '' src; do
     log "    skip $rel (tracked in the fetched tree)"
     continue
   fi
-  if ! git -C "$worktree_path" check-ignore -q "$rel" 2>/dev/null; then
+  if ! git -C "$worktree_path" check-ignore -q -- "$rel" 2>/dev/null; then
     log "    skip $rel (not gitignored in the fetched tree)"
     continue
   fi
@@ -552,7 +612,7 @@ if [[ -f "$worktree_path/.worktreeinclude" ]]; then
     # --exclude-from makes ls-files match the include patterns, but says
     # nothing about .gitignore; a matched file that is not gitignored would
     # land as `??` dirt in every new worktree.
-    if ! git -C "$worktree_path" check-ignore -q "$rel" 2>/dev/null; then
+    if ! git -C "$worktree_path" check-ignore -q -- "$rel" 2>/dev/null; then
       log "    skip $rel (not gitignored in the fetched tree)"
       continue
     fi
