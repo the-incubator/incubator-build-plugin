@@ -142,12 +142,12 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --p
 2. **Confirm.** Deleting worktrees is destructive; confirm with AskUserQuestion before applying, showing the count and, when cheap to compute, the disk it frees.
    Never skip this confirmation.
 3. **Apply.** Run `--prune` (no `--dry-run`) and report the `PRUNED` lines.
-4. **Explain what was kept.** `KEEP` reasons are: uncommitted changes, no merged PR for the branch, local commits after the PR merged, active within the last hour, or detached HEAD.
-   Worktrees kept for "uncommitted changes" or "local commits after the PR merged" may hold real work; surface them for manual review, never force-delete them.
+4. **Explain what was kept.** `KEEP` reasons are: uncommitted changes, assume-unchanged/skip-worktree entries, no merged PR for the branch, local commits after the PR merged, active within the last hour, or detached HEAD.
+   Worktrees kept for "uncommitted changes", "assume-unchanged/skip-worktree entries", or "local commits after the PR merged" may hold real work; surface them for manual review, never force-delete them.
 
 ### Prune safety invariants (also enforced by the script)
 
-- A worktree is removed only when ALL hold: linked worktree on a branch, clean working tree (ignored files like node_modules do not count as dirty), a merged PR whose head branch matches, that PR's head commit equals the local branch tip, no process has its working directory inside the worktree (lsof check), and no recent git index activity (24 hours for automatic prune-on-create, 1 hour for on-demand prune, which is dry-run + human-confirmed).
+- A worktree is removed only when ALL hold: linked worktree on a branch, clean working tree (ignored files like node_modules do not count as dirty), no index entry marked assume-unchanged or skip-worktree (git stops stat-ing those, so an edit to one reports clean), a merged PR whose head branch matches, that PR's head commit equals the local branch tip, no process has its working directory inside the worktree (lsof check), and no recent git index activity (24 hours for automatic prune-on-create, 1 hour for on-demand prune, which is dry-run + human-confirmed).
 - The main checkout, detached HEADs, and the worktree the command runs from are never touched.
 - `git branch --merged` is useless under squash merges; PR state via `gh` is the source of truth.
 - Everything keys off `git worktree list`, so worktrees from older placement conventions (for example sibling directories) are covered too.

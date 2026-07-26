@@ -22,6 +22,8 @@
 #          HEADs are never touched)
 #        - its working tree is clean (no tracked changes, no untracked files;
 #          ignored files like node_modules do not count as dirty)
+#        - no index entry is marked assume-unchanged or skip-worktree, since
+#          git stops stat-ing those and an edit to one reports clean
 #        - a MERGED pull request exists whose head branch is this branch
 #        - the merged PR's head commit equals the local branch tip (nothing
 #          was committed locally after the PR merged)
@@ -210,6 +212,23 @@ sys.exit(0 if time.time() - os.path.getmtime(sys.argv[1]) < int(sys.argv[2]) els
   fi
   if [[ -n "$status_out" ]]; then
     [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (uncommitted changes)"
+    return 0
+  fi
+  # `git status` is blind to files marked assume-unchanged or skip-worktree:
+  # both tell git to trust the index and stop stat-ing the file, so an edited
+  # file reports clean and a --force removal would destroy work that was never
+  # committed and never shown. Those bits are rare and always set deliberately,
+  # so their mere presence means "this tree's contents are unverifiable" -- keep
+  # it rather than diff every flagged entry. `ls-files -v` lowercases the tag
+  # letter for assume-unchanged and prints `S` for skip-worktree; a listing that
+  # fails is unreadable index state, which keeps for the same reason as above.
+  local flagged_out
+  if ! flagged_out="$(git --no-optional-locks -C "$path" ls-files -v 2>/dev/null)"; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (could not read index flags)"
+    return 0
+  fi
+  if printf '%s\n' "$flagged_out" | grep -qE '^[a-zS] '; then
+    [[ "$mode" != "best-effort" ]] && echo "KEEP $path branch=$branch (assume-unchanged/skip-worktree entries hide their contents from git status)"
     return 0
   fi
   local pr
