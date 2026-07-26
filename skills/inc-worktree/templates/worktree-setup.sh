@@ -428,8 +428,17 @@ while IFS= read -r -d '' src; do
   # out at dest (a symlink would leave a permanent type-change), and an
   # untracked-but-not-ignored file would show as `?? .env` dirt in every
   # worktree's status, which also blocks pruning.
-  if ! git -C "$repo_root" check-ignore -q "$rel" 2>/dev/null; then
-    log "    skip $rel (not gitignored)"
+  #
+  # Both questions are asked of the FETCHED worktree, not the main checkout:
+  # this hook exists because local main goes stale, so the remote may already
+  # track a path that stale main still ignores. Judging by $repo_root there
+  # would clobber a tracked file in the new worktree with a local secret.
+  if git -C "$worktree_path" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+    log "    skip $rel (tracked in the fetched tree)"
+    continue
+  fi
+  if ! git -C "$worktree_path" check-ignore -q "$rel" 2>/dev/null; then
+    log "    skip $rel (not gitignored in the fetched tree)"
     continue
   fi
   if mkdir -p "$(dirname "$dest")" && ln -sfn "$src" "$dest"; then
@@ -452,7 +461,11 @@ fi
 # This hook replaces Claude Code's default worktree creator, which copies
 # files that BOTH match .worktreeinclude and are gitignored. Honor the same
 # contract: same intersection, and copies (not symlinks) as the default does.
-if [[ -f "$repo_root/.worktreeinclude" ]]; then
+#
+# The rules come from the FETCHED worktree (patterns and ignore state), while
+# the files themselves are enumerated in the main checkout, which is where
+# they live. A stale local main must not decide what the new worktree needs.
+if [[ -f "$worktree_path/.worktreeinclude" ]]; then
   log "copying .worktreeinclude matches"
   copied=0
   while IFS= read -r -d '' rel; do
@@ -460,8 +473,8 @@ if [[ -f "$repo_root/.worktreeinclude" ]]; then
     # --exclude-from makes ls-files match the include patterns, but says
     # nothing about .gitignore; a matched file that is not gitignored would
     # land as `??` dirt in every new worktree.
-    if ! git -C "$repo_root" check-ignore -q "$rel" 2>/dev/null; then
-      log "    skip $rel (not gitignored)"
+    if ! git -C "$worktree_path" check-ignore -q "$rel" 2>/dev/null; then
+      log "    skip $rel (not gitignored in the fetched tree)"
       continue
     fi
     dest="$worktree_path/$rel"
@@ -472,33 +485,50 @@ if [[ -f "$repo_root/.worktreeinclude" ]]; then
     else
       log "    WARN failed to copy $rel"
     fi
-  done < <(git -C "$repo_root" ls-files -z --others --ignored --exclude-from=.worktreeinclude 2>/dev/null)
+  done < <(git -C "$repo_root" ls-files -z --others --ignored \
+             --exclude-from="$worktree_path/.worktreeinclude" 2>/dev/null)
   if [[ "$copied" -eq 0 ]]; then
     log "    (no new files matched .worktreeinclude)"
   fi
 fi
 
 # --- Install dependencies (best-effort) --------------------------------------
+# Frozen/immutable modes only. A plain `install` can rewrite the tracked
+# lockfile (npm upgrading a v1 package-lock, pnpm normalizing, ...), which
+# leaves every new worktree dirty and permanently unprunable. Better to
+# install exactly what is committed, or fail and let the human decide.
+install_cmd=""
 install_deps() {
   if [[ -f "$worktree_path/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
-    log "running pnpm install"
-    pnpm --dir "$worktree_path" install >&2
+    install_cmd="pnpm install --frozen-lockfile"
+    log "running pnpm install --frozen-lockfile"
+    pnpm --dir "$worktree_path" install --frozen-lockfile >&2
   elif [[ -f "$worktree_path/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
-    log "running yarn install"
-    (cd "$worktree_path" && yarn install) >&2
+    # Yarn 1 spells it --frozen-lockfile; Berry spells it --immutable.
+    if [[ "$(yarn --version 2>/dev/null | cut -d. -f1)" == "1" ]]; then
+      install_cmd="yarn install --frozen-lockfile"
+    else
+      install_cmd="yarn install --immutable"
+    fi
+    log "running $install_cmd"
+    (cd "$worktree_path" && $install_cmd) >&2
   elif { [[ -f "$worktree_path/bun.lockb" ]] || [[ -f "$worktree_path/bun.lock" ]]; } && command -v bun >/dev/null 2>&1; then
-    log "running bun install"
-    (cd "$worktree_path" && bun install) >&2
+    install_cmd="bun install --frozen-lockfile"
+    log "running bun install --frozen-lockfile"
+    (cd "$worktree_path" && bun install --frozen-lockfile) >&2
   elif [[ -f "$worktree_path/package-lock.json" ]] && command -v npm >/dev/null 2>&1; then
-    log "running npm install"
-    npm --prefix "$worktree_path" install >&2
+    install_cmd="npm ci"
+    log "running npm ci"
+    npm --prefix "$worktree_path" ci >&2
   else
     log "no known lockfile (or package manager missing), skipping install"
     return 0
   fi
 }
 if ! install_deps; then
-  log "WARN dependency install failed - run it manually in the worktree"
+  log "WARN dependency install failed - the lockfile may be out of sync with package.json."
+  log "     The worktree is ready otherwise; finish it yourself with:"
+  log "       cd $worktree_path && ${install_cmd:-<your package manager> install}"
 fi
 
 # --- Repo-specific extras (best-effort) --------------------------------------
