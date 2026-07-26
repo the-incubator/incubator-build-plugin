@@ -1,6 +1,6 @@
 ---
 name: inc:review-feedback
-description: Review product feedback — pull a submission from the incubator collector (feedback left via the preview annotation tool) or analyze a local recording, transcribed LOCALLY with whisper.cpp (no API key, no per-clip cost, audio never leaves the machine). ALWAYS load when the user asks to review/pull/find feedback a reviewer submitted, passes an incubator feedback link (`.../f/<sessionId>`), names a reviewer ("get nick's feedback"), asks for the latest preview feedback on the current branch/project, posts a `riffrec-*.zip` or a bundle with `session.json` + `events.json` + `recording.webm` + `voice.webm`, posts a video/audio recording for product feedback, or asks how to capture and share sessions. Routes between setup, quick bug report, and extensive analysis.
+description: Review product feedback — pull a submission from the incubator collector (feedback left via the preview annotation tool) or analyze a local recording, transcribed LOCALLY with whisper.cpp (no API key, no per-clip cost, audio never leaves the machine). ALWAYS load when the user asks to review/pull/find feedback a reviewer submitted, passes an incubator feedback link (`.../f/<sessionId>`), names a reviewer ("get nick's feedback"), asks for the latest preview feedback on the current branch/project, posts a `riffrec-*.zip`, an `ibf-mobile-*.zip` (mobile DOM-recording bundle with `rrweb-events.json`), or a bundle with `session.json` + `events.json` + `recording.webm` + `voice.webm`, posts a video/audio recording for product feedback, or asks how to capture and share sessions. Routes between setup, quick bug report, and extensive analysis.
 argument-hint: "[a feedback link (.../f/<id>) / reviewer name / \"branch\", or a path to a riffrec-*.zip, video, audio, or notes file]"
 ---
 
@@ -39,8 +39,21 @@ Read the resolver's stdout, then continue:
 
 - `RESOLVED_ZIP=<path>` → feed that zip to the analyzer entrypoint below, exactly like a local file.
 - `RESOLVED_ANNOTATIONS=<path>` → the submission has **no recording**; there's nothing to transcribe. Summarize the click-comments in that JSON directly (each has `comment`, `element`, `pageUrl`, and element context) into the quick-bug or extensive artifact — skip transcription.
-- exit **2** (ambiguous) → the resolver printed candidate sessions and deliberately did **not** guess across distinct reviewers; show them and ask the user which `sessionId`, then re-run with it.
+- exit **2** (more than one match) → see "More than one submission" below.
 - exit **1** (no match) / exit **3** (auth or transport) → surface the message. For auth, the check is `node "<plugin root>/scripts/inc-build.mjs" feedback projects` (the CLI uses the plugin's install `credentials.json`); don't retry blindly.
+
+### More than one submission
+
+Whenever the resolver matches more than one submission (exit **2**), or the user is browsing with `--list`, it prints a **summarized list** instead of resolving: reviewer, project, status, when, how many comments, whether there's a recording, which pages, and the first few comments verbatim.
+
+**Show that list to the user and ask which one to review - never silently pick the top match.**
+Two submissions from the same reviewer are almost always **separate rounds** of feedback, not duplicates: the same name with a later timestamp means new comments, not a resend.
+Reproduce the list in your own reply (one short line per submission: reviewer, when, comment count, the gist) because the user can't see the tool output.
+
+If the user wants several, process them **one at a time, oldest first**, and label which round each artifact came from.
+When you finish one and others are still unreviewed, say so explicitly rather than treating the request as closed.
+
+Listing flags: `--limit <n>` (how many to summarize; default 10) and `--no-summary` (bare one-line-per-session table, no per-session fetch).
 
 The full query table, output contract, and exit codes live in `references/fetch-from-collector.md`.
 
@@ -50,7 +63,7 @@ Route to the matching reference based on the input. Read only that reference; do
 
 - **Setup** — user has no recording yet and asks how to install Riffrec, capture a session, or share feedback. Read `references/install-riffrec.md`.
 - **Quick bug report** — input is a short recording (under ~60 seconds), the user describes a single specific issue, or asks for "quick", "small", or "just transcribe". Read `references/quick-bug-report.md`. Emit one concise bug report; skip the full artifact set and the planning handoff.
-- **Extensive analysis** — input is a longer recording, contains multiple issues / requirements / workflow walkthroughs, or the user wants requirements or planning material. Read `references/extensive-analysis.md`. Always continue into the `inc:plan` skill.
+- **Extensive analysis** — input is a longer recording, contains multiple issues / requirements / workflow walkthroughs, or the user wants requirements or planning material. Read `references/extensive-analysis.md`. After synthesis, every item is triaged into one of six buckets - `change` / `try` / `discuss` / `respond` / `blocked` / `defer` (see `references/feedback-triage.md`) - and the user approves the table before anything executes. Always continue into the `inc:plan` skill.
 
 When the input is ambiguous (e.g., a zip arrived without context), inspect the recording length and event count before choosing. If still unclear, ask the user which path applies before running anything heavy.
 
@@ -68,7 +81,9 @@ All non-setup paths share the same analyzer:
 python3 "<plugin root>/skills/inc-review-feedback/scripts/analyze_riffrec_zip.py" /path/to/input
 ```
 
-Accepted inputs: a Riffrec `.zip`, an `.mp4` / `.mov` / `.webm` video, an `.m4a` / `.mp3` / `.wav` audio file, or a meeting-notes `.md`. Use `--output-dir <dir>` to control where artifacts land. In repos with `docs/brainstorms/`, the default is `docs/brainstorms/review-feedback/`. The quick path overrides the output dir to a temp location so nothing pollutes the repo.
+Accepted inputs: a Riffrec `.zip`, a mobile `ibf-mobile-*.zip` (see below), an `.mp4` / `.mov` / `.webm` video, an `.m4a` / `.mp3` / `.wav` audio file, or a meeting-notes `.md`. Use `--output-dir <dir>` to control where artifacts land. In repos with `docs/brainstorms/`, the default is `docs/brainstorms/review-feedback/`. The quick path overrides the output dir to a temp location so nothing pollutes the repo.
+
+**Mobile bundles (`ibf-mobile-*.zip`).** Reviewers on phones can't screen-record (no mobile browser implements screen capture), so the preview-feedback client records the walkthrough as a DOM event stream (`rrweb-events.json`) plus voice instead of screen pixels; `session.json` carries `format: "ibf-mobile-rrweb"`. The analyzer detects this and **renders `recording.webm` locally first** - a headless replay of the event stream, video-only like riffrec's own recording (the report pairs the bundle's separate voice track with it, so muxing it in would narrate twice) - then the normal pipeline (transcription, frames, report) runs unchanged. Rendering takes roughly the session's own length and needs `playwright` with Chromium (`npm i playwright && npx playwright install chromium`) and network access to `cdn.jsdelivr.net`; `ffmpeg` is optional but recommended (it trims the blank pre-playback head frame-accurately so the report's voice sync lines up). If a dependency is missing, the analyzer prints `RENDER_SKIPPED` with the fix plus the manual re-run command, and continues without video (transcription and events still work). DOM replay blind spots: canvas/WebGL, cross-origin iframes, and `<video>` content appear blank in the render.
 
 Every non-setup run writes **`report.html`** - the human-consumable surface for the session: synthesized requirement cards (filled by the reviewing agent between the `AGENT-SYNTHESIS` markers), the repaired recording with a requirement-tracking bar under the player, and the timestamped transcript. The analyzer prints its path as a `REPORT_HTML=<abs path>` line. After the path's synthesis is filled (see the reference), **open the report** in the harness's own in-app/preview browser when it has one, falling back to the OS default browser (`open` on macOS, `xdg-open` on Linux, `start` on Windows). Do not read `report.html` back into context - it links media by relative path and is meant to be viewed, not parsed.
 

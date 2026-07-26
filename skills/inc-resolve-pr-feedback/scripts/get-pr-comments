@@ -88,11 +88,22 @@ THREADS=$(echo "$THREAD_MAP_JSON" | jq -c 'if type == "object" then .threads els
 #   filter for unresolved + non-outdated, build review_threads.
 # - When THREADS is empty (degraded): synthesize one "thread" per top-level inline comment
 #   (in_reply_to_id == null), collect replies under it.
+# The four payloads go in as FILES, not --argjson arguments. On a long-lived PR
+# their combined size exceeds the OS argv limit (ARG_MAX) and jq dies with
+# "Argument list too long", which surfaces as an empty/invalid result. Files
+# have no such limit; --rawfile + fromjson keeps the program body unchanged.
+JQ_INPUT_DIR=$(mktemp -d)
+trap 'rm -rf "$JQ_INPUT_DIR"' EXIT
+printf '%s' "$PR_ISSUE_COMMENTS"  > "$JQ_INPUT_DIR/issue_comments.json"
+printf '%s' "$PR_REVIEW_COMMENTS" > "$JQ_INPUT_DIR/review_comments.json"
+printf '%s' "$PR_REVIEWS"         > "$JQ_INPUT_DIR/reviews.json"
+printf '%s' "$THREADS"            > "$JQ_INPUT_DIR/threads.json"
+
 jq -n \
-    --argjson issue_comments "$PR_ISSUE_COMMENTS" \
-    --argjson review_comments "$PR_REVIEW_COMMENTS" \
-    --argjson reviews "$PR_REVIEWS" \
-    --argjson threads "$THREADS" \
+    --rawfile issue_comments_raw "$JQ_INPUT_DIR/issue_comments.json" \
+    --rawfile review_comments_raw "$JQ_INPUT_DIR/review_comments.json" \
+    --rawfile reviews_raw "$JQ_INPUT_DIR/reviews.json" \
+    --rawfile threads_raw "$JQ_INPUT_DIR/threads.json" \
     --arg author "$PR_AUTHOR" \
     --argjson degraded "$DEGRADED" '
 def review_bot_logins:
@@ -100,6 +111,13 @@ def review_bot_logins:
    "copilot-pull-request-reviewer", "codecov"];
 
 def is_review_bot: . as $login | review_bot_logins | index($login) != null;
+
+# Rehydrate the file-passed payloads (see the --rawfile note above). An empty
+# file means the corresponding gh call produced nothing; treat it as empty.
+((if $issue_comments_raw == "" then "[]" else $issue_comments_raw end) | fromjson) as $issue_comments |
+((if $review_comments_raw == "" then "[]" else $review_comments_raw end) | fromjson) as $review_comments |
+((if $reviews_raw == "" then "[]" else $reviews_raw end) | fromjson) as $reviews |
+((if $threads_raw == "" then "[]" else $threads_raw end) | fromjson) as $threads |
 
 # Index REST inline comments by their GraphQL node_id for thread-map lookup.
 ($review_comments | map({key: .node_id, value: .}) | from_entries) as $by_node |

@@ -10,6 +10,7 @@ video frames when available, and CE-friendly markdown artifacts.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html as html_lib
 import json
 import os
@@ -184,6 +185,97 @@ def read_notes(path: Path) -> dict[str, Any]:
     return {"status": "ok", "text": text.strip(), "source": "meeting_notes"}
 
 
+# rrweb MouseInteraction subtypes that mark a deliberate reviewer action:
+# Click (2), DblClick (4), TouchStart (7).
+RRWEB_CLICK_TYPES = {2, 4, 7}
+
+# Voice filenames the mobile client can produce (container depends on the
+# engine: webm/opus on Chromium/Firefox, AAC in mp4 on iOS Safari).
+MOBILE_VOICE_FILES = ("voice.webm", "voice.m4a", "voice.ogg", "voice.mp4")
+
+
+def rrweb_interaction_events(raw_events: Any) -> list[dict[str, Any]]:
+    """Map rrweb incremental mouse/touch interactions onto the analyzer's event
+    shape ({"t": seconds, "type": "click"}), so mobile bundles get the same
+    click-anchored candidate moments as riffrec's own events.json."""
+    if not isinstance(raw_events, list) or not raw_events:
+        return []
+    first = raw_events[0] if isinstance(raw_events[0], dict) else {}
+    start_ts = first.get("timestamp") or 0
+    events: list[dict[str, Any]] = []
+    for event in raw_events:
+        if not isinstance(event, dict) or event.get("type") != 3:
+            continue
+        data = event.get("data") or {}
+        if data.get("source") == 2 and data.get("type") in RRWEB_CLICK_TYPES:
+            ts = event.get("timestamp") or start_ts
+            # Carry the rrweb mirror-node id as the element identity so
+            # distinct tap targets bucket separately in select_moments -
+            # without it every tap keys to one "unknown" bucket and any two
+            # taps read as "repeated clicks on the same target".
+            element = {"id": data["id"]} if data.get("id") is not None else {}
+            events.append({"t": max(0.0, (ts - start_ts) / 1000.0), "type": "click", "element": element})
+    return events
+
+
+def prepare_mobile_rrweb_source(raw_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """A mobile bundle: the walkthrough is a DOM event stream (rrweb) + voice,
+    not screen pixels - mobile browsers have no getDisplayMedia. Render
+    recording.webm locally from the events (headless replay + voice mux) so the
+    rest of the pipeline runs unchanged; if rendering isn't possible on this
+    machine, transcription and events still proceed without frames."""
+    raw_events = read_json(raw_dir / "rrweb-events.json", [])
+    try:
+        duration = float(manifest.get("durationMs") or 0) / 1000.0
+    except (TypeError, ValueError):
+        duration = 0.0
+    session = dict(manifest)
+    session.setdefault("url", "unknown")
+    session["started_at"] = manifest.get("startedAt", "unknown")
+    session["duration_seconds"] = round(duration, 3)
+
+    recording_path = raw_dir / "recording.webm"
+    if not recording_path.exists():
+        render_script = Path(__file__).resolve().parent / "render_rrweb_bundle.mjs"
+        render_command = ["node", str(render_script), str(raw_dir), "--out", str(recording_path)]
+        print("Mobile rrweb bundle: rendering recording.webm from the DOM event stream (takes about the session's length)...")
+        try:
+            render = subprocess.run(
+                render_command,
+                capture_output=True,
+                text=True,
+                timeout=max(300, int(duration * 3) + 120),
+            )
+            if render.returncode != 0:
+                print(f"RENDER_SKIPPED reason={compact_text(render.stderr or render.stdout, 300)}")
+                print("  Fix the dependency it names, then re-run: " + " ".join(render_command))
+        except (subprocess.TimeoutExpired, OSError) as err:
+            print(f"RENDER_SKIPPED reason={compact_text(str(err), 300)}")
+            print("  Re-run manually: " + " ".join(render_command))
+
+    # Basename only - voiceFile is bundle-controlled, and a traversal value
+    # like "../../private.wav" must never point transcription (which may
+    # upload the file to a remote backend) outside the extracted bundle. When
+    # the manifest omits or misnames it, probe the client's known voice names
+    # so a real track still gets transcribed.
+    declared_voice = Path(str(manifest.get("voiceFile") or "")).name
+    voice_candidates = [declared_voice] if declared_voice else []
+    voice_candidates += [c for c in MOBILE_VOICE_FILES if c != declared_voice]
+    voice_file = next((c for c in voice_candidates if (raw_dir / c).exists()), "voice.webm")
+    return {
+        "source_kind": "riffrec_zip",
+        "session": session,
+        "events": rrweb_interaction_events(raw_events),
+        "duration": duration,
+        # None when the render was skipped/failed - a truthy path to a missing
+        # file would suppress the report's voice-audio fallback player and
+        # trigger spurious remux warnings downstream.
+        "recording_path": recording_path if recording_path.exists() else None,
+        "transcription_path": raw_dir / voice_file,
+        "notes_transcript": None,
+    }
+
+
 def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     source_kind = classify_source(source_path)
@@ -191,6 +283,8 @@ def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
     if source_kind == "riffrec_zip":
         safe_extract(source_path, raw_dir)
         session = read_json(raw_dir / "session.json", {})
+        if session.get("format") == "ibf-mobile-rrweb":
+            return prepare_mobile_rrweb_source(raw_dir, session)
         events_payload = read_json(raw_dir / "events.json", {})
         events = events_payload.get("events", events_payload if isinstance(events_payload, list) else [])
         if not isinstance(events, list):
@@ -199,13 +293,19 @@ def prepare_source(source_path: Path, raw_dir: Path) -> dict[str, Any]:
             duration = float(session.get("duration_seconds") or events_payload.get("duration_seconds") or 0)
         except (TypeError, ValueError):
             duration = 0.0
+        # A zip may carry only one of the two media tracks (e.g. mic consent given
+        # but no screen share). A missing file must resolve to None here: downstream
+        # treats a non-None recording_path as "this is a video session" and would
+        # render no player at all instead of falling back to the voice track.
+        recording = raw_dir / "recording.webm"
+        voice = raw_dir / "voice.webm"
         return {
             "source_kind": source_kind,
             "session": session,
             "events": events,
             "duration": duration,
-            "recording_path": raw_dir / "recording.webm",
-            "transcription_path": raw_dir / "voice.webm",
+            "recording_path": recording if recording.exists() else None,
+            "transcription_path": voice if voice.exists() else None,
             "notes_transcript": None,
         }
 
@@ -910,6 +1010,7 @@ def write_requirements_kickoff(
     findings: list[dict[str, Any]],
     moments: list[dict[str, Any]],
     repo_root: Path,
+    analysis_id: str = "",
 ) -> None:
     title = topic.replace("-", " ").title()
     date = datetime.now(timezone.utc).date().isoformat()
@@ -1051,7 +1152,15 @@ def write_requirements_kickoff(
             "",
             "## Next Steps",
             "",
-            "-> Resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
+            "-> Triage every requirement into a bucket (change / try / discuss / respond / blocked / defer) and get the table approved as `triage.md`.",
+            f"   Rules: `{Path(__file__).resolve().parent.parent / 'references' / 'feedback-triage.md'}`",
+            (
+                f"   Stamp the approved `triage.md` with a first line of `Analysis: {analysis_id}`;"
+                " an approval carrying a different id belongs to a superseded analysis, so re-run the gate."
+                if analysis_id
+                else "   Stamp the approved `triage.md` with the `Analysis:` id printed by the analyzer."
+            ),
+            "-> Then resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n")
@@ -1520,6 +1629,13 @@ def write_html_report(
   .req-body dd {{ margin: 0; }}
   .req-body .quote {{ margin: 12px 0 0; padding: 8px 12px; border-left: 2px solid #2a3644; color: #b7c4d2; font-style: italic; font-size: 12.5px; }}
   .src {{ font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }}
+  .bucket {{ font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .05em; text-transform: uppercase; }}
+  .bucket-change  {{ background: #12321f; color: #7ee0a3; }}
+  .bucket-try     {{ background: #14263a; color: #6fb3ff; }}
+  .bucket-discuss {{ background: #2e2440; color: #c39bff; }}
+  .bucket-respond {{ background: #3a2d12; color: #ffca6b; }}
+  .bucket-blocked {{ background: #3a1a1a; color: #ff9a8a; }}
+  .bucket-defer   {{ background: #222b35; color: #8a97a6; }}
   .src-written {{ background: #12283a; color: #7db6ff; }}
   .src-spoken  {{ background: #2e2440; color: #c39bff; }}
   .src-both    {{ background: #12321f; color: #7ee0a3; }}
@@ -1598,6 +1714,16 @@ def write_html_report(
     Caveats the reviewer flagged get their own card (id req-caveat, resolved or
     unresolved per the reachability check). -->{pins_block}
     <!-- AGENT-SYNTHESIS-END -->
+    <!-- BUCKET-BADGE CONTRACT (deliberately OUTSIDE the AGENT-SYNTHESIS markers so it
+         survives the card fill - the triage step runs after synthesis and still needs it).
+         Added only once the triage table is approved; see references/feedback-triage.md.
+         Append one span.bucket bucket-<name> to each card's req-badges row, where <name>
+         is change|try|discuss|respond|blocked|defer, e.g.
+         <span class="bucket bucket-change">change</span>.
+         Non-code outcomes are delivered on the card body:
+         respond adds <dt>Answer</dt><dd>the written answer</dd>,
+         blocked adds <dt>Waiting on</dt><dd>missing input + named owner</dd>,
+         defer adds <dt>Queued</dt><dd>backlog pointer</dd>. -->
   </section>
 
   <section>
@@ -1700,6 +1826,90 @@ def write_html_report(
     output_path.write_text(html)
 
 
+def compute_analysis_id(source_path: Path, sidecar_paths: list[Path] | None = None) -> str:
+    """A short fingerprint of the input this analysis was produced from.
+
+    Deterministic per input: the same inputs always yield the same id, so a rerun
+    over unchanged input is recognizable as the *same* analysis, while edited or
+    different input produces a new one. The triage gate stamps this id into
+    `triage.md` so a resumed workflow can tell an approval that still matches the
+    evidence from one left over from a previous analysis.
+
+    The sidecar counts as input, not decoration: the reviewer's written pins become
+    first-class requirements, so editing `annotations.json` (or pointing
+    `--annotations` at a different file) changes what there is to triage even when
+    the recording is byte-identical. Hashing only the recording would leave the id
+    unchanged and silently preserve an approval that predates the new pins."""
+    digest = hashlib.sha256()
+
+    def absorb(path: Path, label: str) -> None:
+        digest.update(f"|{label}:{path.name}|".encode("utf-8", "replace"))
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            # Unreadable: fall back to size so the id is still stable per input.
+            try:
+                digest.update(str(path.stat().st_size).encode())
+            except OSError:
+                digest.update(b"unknown")
+
+    absorb(source_path, "source")
+    for sidecar in sorted(sidecar_paths or [], key=lambda p: p.name):
+        if sidecar.exists():
+            absorb(sidecar, "sidecar")
+    return digest.hexdigest()[:12]
+
+
+def reconcile_existing_triage(output_dir: Path, analysis_id: str) -> list[str]:
+    """Keep an approved `triage.md` from silently outliving the analysis it approved.
+
+    The analyzer overwrites the evidence and the report on every run, but `triage.md`
+    is written by the agent, not by us - so without this it survives untouched and a
+    resumed workflow can scope planning against buckets approved for different
+    evidence. A stamp mismatch supersedes the file (renamed, never deleted - it is
+    the user's approved work); a match keeps it but still warns, because the
+    regenerated report has lost its bucket badges."""
+    triage_path = output_dir / "triage.md"
+    if not triage_path.exists():
+        return []
+
+    head = ""
+    try:
+        head = triage_path.read_text(errors="replace")[:2000]
+    except OSError:
+        pass
+    match = re.search(r"^Analysis:\s*([0-9a-f]{6,})\s*$", head, re.MULTILINE)
+    existing_id = match.group(1) if match else None
+
+    if existing_id == analysis_id:
+        return [
+            f"NOTE: an approved triage.md for this same analysis ({analysis_id}) is already here.",
+            "      Its buckets still hold, but report.html was regenerated blank - there are no requirement",
+            "      cards left to badge. Re-synthesize the report first (extensive-analysis step 8b), then",
+            "      re-apply the bucket badges. Do not hand off the regenerated report as-is.",
+        ]
+
+    stamp = existing_id or "unstamped"
+    superseded = output_dir / f"triage.superseded-{stamp}.md"
+    counter = 2
+    while superseded.exists():
+        superseded = output_dir / f"triage.superseded-{stamp}-{counter}.md"
+        counter += 1
+    try:
+        triage_path.rename(superseded)
+    except OSError:
+        return [
+            f"WARNING: triage.md here was approved for a different analysis ({stamp}) and could not be moved.",
+            "         Do NOT reuse it - re-run the triage gate before planning.",
+        ]
+    return [
+        f"WARNING: triage.md here was approved for a different analysis ({stamp}), not this one ({analysis_id}).",
+        f"         Moved to {superseded.name}. Re-run the triage gate; do not plan from the superseded buckets.",
+    ]
+
+
 def main() -> int:
     args = parse_args()
     source_path = args.source_path.expanduser().resolve()
@@ -1709,6 +1919,13 @@ def main() -> int:
 
     output_dir = (args.output_dir or default_output_dir(source_path)).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_candidates: list[Path] = []
+    if args.annotations:
+        sidecar_candidates.append(args.annotations.expanduser().resolve())
+    else:
+        sidecar_candidates.append(source_path.parent / "annotations.json")
+    analysis_id = compute_analysis_id(source_path, sidecar_candidates)
+    triage_notices = reconcile_existing_triage(output_dir, analysis_id)
     raw_dir = output_dir / "raw"
     frames_dir = output_dir / "frames"
     source = prepare_source(source_path, raw_dir)
@@ -1758,7 +1975,7 @@ def main() -> int:
     write_problem_analysis(problem_analysis_md, transcript, moments, findings, annotations, repo_root)
     write_review_prompt(review_prompt_md, transcript, moments, repo_root)
     write_source_materials(source_materials_md, source_path, source_kind, session, transcript, moments, raw_dir, frames_dir, repo_root)
-    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root)
+    write_requirements_kickoff(kickoff_md, topic, session, findings, moments, repo_root, analysis_id)
 
     # Riffrec records screen and microphone as two separate cue-less webm streams;
     # repair both so the report's player gets reliable duration/seeking and audio.
@@ -1781,6 +1998,7 @@ def main() -> int:
     structured = {
         "source": str(source_path),
         "source_kind": source_kind,
+        "analysis_id": analysis_id,
         "output_dir": str(output_dir),
         "session": session,
         "event_counts": event_counts(events),
@@ -1817,7 +2035,14 @@ def main() -> int:
     print(f"STANDALONE_BUILD=python3 {Path(__file__).resolve().parent / 'build_standalone.py'} {output_dir}")
     print(f"Source materials: {display_path(source_materials_md, repo_root)}")
     print(f"Problem statements: {display_path(problem_analysis_md, repo_root)}")
-    print(f"Planning handoff: load inc:plan with {display_path(kickoff_md, repo_root)}")
+    triage_rules = Path(__file__).resolve().parent.parent / "references" / "feedback-triage.md"
+    print(f"ANALYSIS_ID={analysis_id}")
+    for notice in triage_notices:
+        print(notice)
+    print(f"Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer) and get the table approved as triage.md before planning.")
+    print(f"Triage rules: {triage_rules}")
+    print(f"  Stamp the approved triage.md with a first line of 'Analysis: {analysis_id}' so a later rerun can tell it apart from a stale approval.")
+    print(f"Planning handoff: after triage approval, load inc:plan with {display_path(kickoff_md, repo_root)} and triage.md")
     print("Planning should first confirm whether the captured requirements are complete and correctly grouped.")
     return 0
 
