@@ -1,0 +1,59 @@
+name: Routing evals
+
+# Behavioral gate for the beta→main release promotion (see RELEASING.md).
+# Runs the routing eval suite (evals/run-routing.mjs) headless: each fixture
+# prompt must invoke the expected skill. These cost real tokens and are
+# non-deterministic, so they run on promotion PRs into main (plus manual
+# dispatch and a weekly drift check) — not on every feature PR into beta.
+#
+# Auth (one secret required, subscription token preferred):
+#   CLAUDE_CODE_OAUTH_TOKEN — from `claude setup-token` (1-year validity).
+#     Billed to the Claude subscription, no API credits. Runs non-bare,
+#     which is fine: a fresh runner has no other plugins installed.
+#   ANTHROPIC_API_KEY — optional fallback; costs API credits and enables
+#     --bare mode. If both are set the API key wins the CLI's auth chain.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly drift check — model or CLI updates can shift routing without
+    # any commit to this repo.
+    - cron: "0 13 * * 1"
+
+jobs:
+  routing-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Require an auth secret
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::No auth secret set — routing evals cannot run. Preferred: run 'claude setup-token' locally and add the token as the CLAUDE_CODE_OAUTH_TOKEN repo secret (subscription-billed, no API credits). Alternative: ANTHROPIC_API_KEY."
+            exit 1
+          fi
+      - run: npm install --no-audit --no-fund
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Run routing evals
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node evals/run-routing.mjs --keep-logs --attempts 3
+      - name: Upload eval streams
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: routing-eval-streams
+          path: evals/.artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
