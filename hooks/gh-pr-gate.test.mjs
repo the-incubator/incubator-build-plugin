@@ -8,6 +8,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { looksLikePrCreate, isPrCreateTool } from "./gh-pr-gate.mjs";
 
 const BLOCK = [
@@ -59,4 +63,57 @@ test("matches MCP create_pull_request tool names by suffix", () => {
   assert.equal(isPrCreateTool("Bash"), false);
   assert.equal(isPrCreateTool("mcp__github__list_pull_requests"), false);
   assert.equal(isPrCreateTool(undefined), false);
+});
+
+function runGate(payload) {
+  const result = spawnSync(process.execPath, ["hooks/gh-pr-gate.mjs"], {
+    input: JSON.stringify(payload),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  return result.stdout ? JSON.parse(result.stdout) : null;
+}
+
+function prPayload(transcript_path) {
+  return {
+    tool_name: "Bash",
+    tool_input: { command: "gh pr create --title x" },
+    ...(transcript_path === undefined ? {} : { transcript_path }),
+  };
+}
+
+test("transcript-unavailable sessions are advisory, while available transcripts stay enforced", () => {
+  const missingPath = join(tmpdir(), `gh-pr-gate-missing-${Date.now()}`);
+  const transcriptDir = mkdtempSync(join(tmpdir(), "gh-pr-gate-"));
+  const transcriptPath = join(transcriptDir, "session.jsonl");
+
+  try {
+    assert.equal(runGate(prPayload()), null, "absent transcript_path should allow");
+    assert.equal(runGate(prPayload(missingPath)), null, "missing transcript file should allow");
+
+    writeFileSync(transcriptPath, "{}\n");
+    assert.equal(
+      runGate(prPayload(transcriptPath))?.hookSpecificOutput?.permissionDecision,
+      "deny",
+      "available transcript without skill evidence should deny",
+    );
+
+    writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              name: "Skill",
+              input: { skill: "inc-commit-push-pr" },
+            },
+          ],
+        },
+      })}\n`,
+    );
+    assert.equal(runGate(prPayload(transcriptPath)), null, "skill evidence should allow");
+  } finally {
+    rmSync(transcriptDir, { recursive: true, force: true });
+  }
 });
