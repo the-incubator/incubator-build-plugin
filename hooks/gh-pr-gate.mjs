@@ -1,10 +1,12 @@
 // PreToolUse hook — blocks PR creation unless the `inc-commit-push-pr`
-// skill has been activated in this session.
+// skill has been activated in this session when a transcript is available.
 //
 // Enforces the PR workflow at the tool layer: Claude must load the skill
 // (which extracts intent and writes a proper description) before it can open
 // a PR. The skill itself opens the PR once activated; this hook denies every
-// shortcut path that would skip it.
+// shortcut path that would skip it. Firstmate-managed sessions do not save a
+// transcript, so those sessions are intentionally advisory: without a
+// transcript the hook cannot prove whether the skill ran and allows the call.
 //
 // Channels gated (all of these were, or could be, used to route around the
 // `gh pr create` block):
@@ -115,6 +117,10 @@ async function skillActivated(transcriptPath) {
   return false;
 }
 
+function transcriptAvailable(transcriptPath) {
+  return Boolean(transcriptPath && existsSync(transcriptPath));
+}
+
 async function main() {
   const payload = await readStdinJson(500);
   if (!payload) return 0;
@@ -129,16 +135,19 @@ async function main() {
   }
   if (!triggered) return 0;
 
+  // Transcript-off sessions cannot provide the proof this gate relies on.
+  // Keep enforcement hard whenever the transcript exists; only the
+  // provably-unavailable case is allowed to proceed without skill evidence.
+  if (!transcriptAvailable(payload.transcript_path)) return 0;
   if (await skillActivated(payload.transcript_path)) return 0;
 
   deny(
-    `Opening a PR is blocked. This applies to every path — \`gh pr create\`, the REST API ` +
+    `Opening a PR is blocked because the \`inc-commit-push-pr\` skill was not found in the available session transcript. ` +
+      `This applies to every path — \`gh pr create\`, the REST API ` +
       `(\`gh api .../pulls\`, \`curl\`), GraphQL \`createPullRequest\` mutations, and MCP ` +
-      `\`create_pull_request\` tools — not just the CLI shortcut. Do not route around this. ` +
-      `Load the \`inc-commit-push-pr\` skill first (Skill tool, skill: "inc-commit-push-pr"); ` +
-      `it extracts the business intent, writes a value-first description, and opens the PR itself. ` +
-      `There is no in-session bypass — if a PR must skip the skill (e.g. an urgent hotfix), stop and ask ` +
-      `the user to open it themselves in a terminal outside this Claude session, where this gate does not run.`,
+      `\`create_pull_request\` tools — not just the CLI shortcut. Load the ` +
+      `\`inc-commit-push-pr\` skill first (Skill tool, skill: "inc-commit-push-pr"); ` +
+      `it extracts the business intent, writes a value-first description, and opens the PR itself.`,
   );
   return 0;
 }
