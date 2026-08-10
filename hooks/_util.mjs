@@ -17,11 +17,14 @@ const claudeDir = join(homedir(), ".claude");
 
 // Plugin version is sourced from the plugin's own manifest — stays accurate
 // across Claude Code's plugin updates without any installer involvement.
+// The beta channel deliberately omits `version` from plugin.json (so every
+// commit on the beta branch ships to beta users via its SHA); a readable
+// manifest without a version therefore means "beta", not an error.
 export const PLUGIN_VERSION = (() => {
   try {
     const here = fileURLToPath(new URL(".", import.meta.url));
     const manifestPath = join(here, "..", ".claude-plugin", "plugin.json");
-    return JSON.parse(readFileSync(manifestPath, "utf8")).version ?? "unknown";
+    return JSON.parse(readFileSync(manifestPath, "utf8")).version ?? "beta";
   } catch {
     return "unknown";
   }

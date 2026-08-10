@@ -4,15 +4,23 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CODEX_MARKETPLACE_ROOT="$(cd "$REPO_DIR/.." && pwd)"
 MARKETPLACE_NAME="incubator"
+BETA_MARKETPLACE_NAME="incubator-beta"
 PROD_SOURCE="the-incubator/incubator-build-plugin"
+BETA_SOURCE="the-incubator/incubator-build-plugin@beta"
 PLUGIN_NAME="incubator-build"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/toggle-local.sh [claude|codex] [local|prod]
+Usage: scripts/toggle-local.sh [claude|codex] [local|prod|beta]
 
-Defaults to Claude and toggles between local/prod. For Codex, this registers the
-marketplace; enable the plugin from the Codex app/plugin UI after adding it.
+Defaults to Claude and toggles between local/prod. Channels (see RELEASING.md):
+  prod   stable channel — main branch, marketplace "incubator"
+  beta   beta channel — beta branch, marketplace "incubator-beta"; every
+         merged PR ships here immediately (Claude only)
+  local  this working copy, for plugin development
+
+For Codex, this registers the marketplace; enable the plugin from the Codex
+app/plugin UI after adding it. The beta channel is Claude-only for now.
 EOF
 }
 
@@ -26,9 +34,14 @@ case "$PLATFORM" in
 esac
 
 case "$TARGET" in
-  ""|local|prod) ;;
-  *) echo "error: target must be 'local' or 'prod'" >&2; usage >&2; exit 1 ;;
+  ""|local|prod|beta) ;;
+  *) echo "error: target must be 'local', 'prod', or 'beta'" >&2; usage >&2; exit 1 ;;
 esac
+
+if [[ "$PLATFORM" == "codex" && "$TARGET" == "beta" ]]; then
+  echo "error: the beta channel is Claude-only for now (Codex loads skills from .codex-plugin without channel support)" >&2
+  exit 1
+fi
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -46,6 +59,10 @@ detect_claude_mode() {
   local known="$HOME/.claude/plugins/known_marketplaces.json"
   if [[ ! -f "$known" ]]; then
     echo "none"; return
+  fi
+  # Beta registers under its own marketplace name — check it first.
+  if [[ -n "$(jq -r --arg n "$BETA_MARKETPLACE_NAME" '.[$n] // empty' "$known")" ]]; then
+    echo "beta"; return
   fi
   local entry
   entry=$(jq -r --arg n "$MARKETPLACE_NAME" '.[$n] // empty' "$known")
@@ -102,13 +119,15 @@ show_plan() {
   echo
   echo "Plan:"
   if [[ "$platform" == "claude" ]]; then
-    echo "  1. claude plugin marketplace remove $MARKETPLACE_NAME"
-    if [[ "$target" == "local" ]]; then
-      echo "  2. claude plugin marketplace add $REPO_DIR"
-    else
-      echo "  2. claude plugin marketplace add $PROD_SOURCE"
-    fi
-    echo "  3. claude plugin install $PLUGIN_NAME@$MARKETPLACE_NAME"
+    echo "  1. claude plugin marketplace remove $MARKETPLACE_NAME + $BETA_MARKETPLACE_NAME (whichever exist)"
+    case "$target" in
+      local) echo "  2. claude plugin marketplace add $REPO_DIR"
+             echo "  3. claude plugin install $PLUGIN_NAME@$MARKETPLACE_NAME" ;;
+      prod)  echo "  2. claude plugin marketplace add $PROD_SOURCE"
+             echo "  3. claude plugin install $PLUGIN_NAME@$MARKETPLACE_NAME" ;;
+      beta)  echo "  2. claude plugin marketplace add $BETA_SOURCE"
+             echo "  3. claude plugin install $PLUGIN_NAME@$BETA_MARKETPLACE_NAME" ;;
+    esac
   else
     echo "  1. codex plugin marketplace remove $MARKETPLACE_NAME"
     if [[ "$target" == "local" ]]; then
@@ -123,13 +142,24 @@ show_plan() {
 
 swap_claude_to() {
   local target="$1"
-  claude plugin marketplace remove "$MARKETPLACE_NAME" || true
-  if [[ "$target" == "local" ]]; then
-    claude plugin marketplace add "$REPO_DIR"
-  else
-    claude plugin marketplace add "$PROD_SOURCE"
-  fi
-  claude plugin install "$PLUGIN_NAME@$MARKETPLACE_NAME"
+  # Remove both channel marketplaces so stable and beta never stack —
+  # two installs of the same plugin means duplicate skills and hooks.
+  claude plugin marketplace remove "$MARKETPLACE_NAME" 2>/dev/null || true
+  claude plugin marketplace remove "$BETA_MARKETPLACE_NAME" 2>/dev/null || true
+  case "$target" in
+    local)
+      claude plugin marketplace add "$REPO_DIR"
+      claude plugin install "$PLUGIN_NAME@$MARKETPLACE_NAME"
+      ;;
+    prod)
+      claude plugin marketplace add "$PROD_SOURCE"
+      claude plugin install "$PLUGIN_NAME@$MARKETPLACE_NAME"
+      ;;
+    beta)
+      claude plugin marketplace add "$BETA_SOURCE"
+      claude plugin install "$PLUGIN_NAME@$BETA_MARKETPLACE_NAME"
+      ;;
+  esac
   echo "done. restart Claude Code sessions to pick up the change."
 }
 
