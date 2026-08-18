@@ -10,19 +10,25 @@
 //   inc-build feedback get <sessionId>              # session + annotations
 //   inc-build feedback fetch <sessionId> [--out <dir>]
 //                                                       # download bundle + recording zip
+//   inc-build plan blocks                            # authoritative block catalog
+//   inc-build plan create --project <slug> --title <title> --plan <file> [--canvas <file>]
+//   inc-build plan get <planId> [--out <dir>]
+//   inc-build plan list [--project <slug>] [--status <status>]
+//   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
+//   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
 //
 // Auth: sends `Authorization: Bearer <apiKey>` from credentials.json. Errors are
 // surfaced (non-zero exit) rather than swallowed, unlike the telemetry hooks.
 
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const CREDS_PATH = join(homedir(), ".claude", "incubator", "credentials.json");
 
-const die = (m) => {
+const die = (m, code = 1) => {
   process.stderr.write(`inc-build: ${m}\n`);
-  process.exit(1);
+  process.exit(code);
 };
 
 function loadCreds() {
@@ -51,20 +57,29 @@ async function api(creds, method, path, { query, body } = {}) {
         .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
         .join("&")
     : "";
-  const res = await fetch(`${base}${path}${qs}`, {
-    method,
-    headers: {
-      authorization: `Bearer ${creds.apiKey}`,
-      ...(body ? { "content-type": "application/json" } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`${base}${path}${qs}`, {
+      method,
+      headers: {
+        authorization: `Bearer ${creds.apiKey}`,
+        ...(body ? { "content-type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    die(`${method} ${path} transport failed: ${err?.message ?? String(err)}`, 3);
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok || json.ok === false) {
-    die(`${method} ${path} failed (${res.status}): ${json.reason ?? "unknown"}`);
+    const code = res.status === 404 ? 1 : res.status === 409 ? 2 : res.status === 401 || res.status === 403 ? 3 : 1;
+    const detail = json.detail ?? json.message;
+    die(`${method} ${path} failed (${res.status}): ${json.reason ?? "unknown"}${detail ? ` - ${detail}` : ""}`, code);
   }
   return json;
 }
+
+const BOOLEAN_FLAGS = new Set(["rotate", "unconsumed"]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -72,10 +87,21 @@ function parseFlags(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--query") {
-      const [k, ...v] = (argv[++i] ?? "").split("=");
+      const query = argv[++i];
+      if (!query || query.startsWith("--")) die("--query requires k=v");
+      const [k, ...v] = query.split("=");
+      if (!k || !v.length) die("--query requires k=v");
       (flags.query ??= {})[k] = v.join("=");
     } else if (a.startsWith("--")) {
-      flags[a.slice(2)] = argv[++i];
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (BOOLEAN_FLAGS.has(key) && (!next || next.startsWith("--"))) {
+        flags[key] = true;
+      } else {
+        if (!next || next.startsWith("--")) die(`${a} requires a value`);
+        flags[key] = next;
+        i++;
+      }
     } else {
       rest.push(a);
     }
@@ -91,7 +117,35 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback fetch <sessionId> [--out <dir>]
   inc-build feedback projects
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
+  inc-build plan blocks
+  inc-build plan create --project <slug> --title <title> --plan <file> [--canvas <file>]
+                        [--brief <text>] [--visibility link|org]
+  inc-build plan get <planId> [--out <dir>]
+  inc-build plan list [--project <slug>] [--status <status>]
+  inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
+  inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
+  inc-build plan feedback <planId>       # Phase 3 stub
+  inc-build plan consume <planId>        # Phase 3 stub
 `;
+
+function readRequiredFile(path, flag) {
+  if (!path) die(`usage requires ${flag}`);
+  try {
+    return readFileSync(path, "utf8");
+  } catch (err) {
+    die(`cannot read ${flag} file ${path}: ${err?.message ?? String(err)}`);
+  }
+}
+
+function planFiles(flags) {
+  const files = { "plan.mdx": readRequiredFile(flags.plan, "--plan") };
+  if (flags.canvas) files["canvas.mdx"] = readRequiredFile(flags.canvas, "--canvas");
+  return files;
+}
+
+function phase3Stub(sub) {
+  die(`plan ${sub} is reserved for Phase 3; feedback and consume arrive with the reviewer feedback API`);
+}
 
 async function main() {
   const [cmd, sub, ...tail] = process.argv.slice(2);
@@ -100,6 +154,9 @@ async function main() {
     return;
   }
   const { flags, rest } = parseFlags(tail);
+  if (cmd === "plan" && (sub === "feedback" || sub === "consume")) {
+    phase3Stub(sub);
+  }
   const creds = loadCreds();
   const out = (o) => process.stdout.write(JSON.stringify(o, null, 2) + "\n");
 
@@ -189,7 +246,82 @@ async function main() {
     die("usage: feedback ( list | get <id> | fetch <id> | projects | mint-token )");
   }
 
-  die("usage: inc-build ( get <path> | feedback <list|get|fetch> )");
+  if (cmd === "plan") {
+    if (sub === "blocks") {
+      out(await api(creds, "GET", "/api/v1/plans/blocks"));
+      return;
+    }
+
+    if (sub === "create") {
+      if (!flags.project || !flags.title || !flags.plan) {
+        die("usage: plan create --project <slug> --title <title> --plan <file> [--canvas <file>]");
+      }
+      const body = {
+        project: flags.project,
+        title: flags.title,
+        files: planFiles(flags),
+      };
+      if (flags.brief) body.brief = flags.brief;
+      if (flags.visibility) body.visibility = flags.visibility;
+      const result = await api(creds, "POST", "/api/v1/plans", { body });
+      if (!result.url) die("POST /api/v1/plans returned no plan URL");
+      process.stderr.write(`planId: ${result.planId}\nrevision: ${result.revision}\nupdatedAt: ${result.updatedAt}\n`);
+      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
+      process.stdout.write(`${result.url}\n`);
+      return;
+    }
+
+    if (sub === "get") {
+      const id = rest[0];
+      if (!id) die("usage: plan get <planId> [--out <dir>]");
+      const result = await api(creds, "GET", `/api/v1/plans/${encodeURIComponent(id)}`);
+      if (!flags.out) {
+        out(result);
+        return;
+      }
+      mkdirSync(flags.out, { recursive: true });
+      const files = result.files ?? {};
+      for (const [name, source] of Object.entries(result.files ?? {})) {
+        writeFileSync(join(flags.out, name), source);
+      }
+      if (!("canvas.mdx" in files)) {
+        const canvasPath = join(flags.out, "canvas.mdx");
+        if (existsSync(canvasPath)) unlinkSync(canvasPath);
+      }
+      const plan = result.plan ?? {};
+      process.stderr.write(`planId: ${plan.planId ?? id}\nrevision: ${plan.revision ?? result.revision ?? "?"}\nupdatedAt: ${plan.updatedAt ?? result.updatedAt ?? "?"}\n`);
+      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
+      process.stdout.write(`wrote ${Object.keys(files).join(", ")} -> ${flags.out}/\n`);
+      return;
+    }
+
+    if (sub === "list") {
+      out(await api(creds, "GET", "/api/v1/plans", {
+        query: { project: flags.project, status: flags.status },
+      }));
+      return;
+    }
+
+    if (sub === "patch" || sub === "replace") {
+      const id = rest[0];
+      if (flags.ops) {
+        die("--ops is reserved for the Phase 3 PATCH API; use --plan/--canvas with the live M1 PUT endpoint");
+      }
+      if (!id || !flags.expect || !flags.plan) {
+        die(`usage: plan ${sub} <planId> --plan <file> [--canvas <file>] --expect <updatedAt>`);
+      }
+      // M1 has PUT source replacement only. Keep patch as an ergonomic alias until Phase 3 adds PATCH ops.
+      const result = await api(creds, "PUT", `/api/v1/plans/${encodeURIComponent(id)}/source`, {
+        body: { expectedUpdatedAt: flags.expect, files: planFiles(flags) },
+      });
+      out(result);
+      return;
+    }
+
+    die("usage: plan ( blocks | create | get | list | patch | replace | feedback | consume )");
+  }
+
+  die("usage: inc-build ( get <path> | feedback <list|get|fetch> | plan <subcommand> )");
 }
 
 main().catch((err) => die(err?.message ?? String(err)));

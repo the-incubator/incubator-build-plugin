@@ -112,6 +112,7 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 | `/inc:update-code` | `inc-update-code` | Pull latest main into the current branch; hands conflicts to git-merge-expert |
 | `/inc:setup-deploy` | `inc-setup-deploy` | Detect the deploy platform and write the config merge-pr/ship-it use to observe deploys |
 | `/inc:setup-feedback` | `inc-setup-feedback` | Wire the preview-feedback client into an app - mint a token, install the client, mount it at the app root so reviewers can annotate a deployed preview |
+| `/inc:visual-plan` | `inc-visual-plan` | Create and iterate a hosted visual plan from the live block catalog, with safe source replacement and a surfaced review URL |
 | `/inc:preview-url` | `inc-preview-url` | Public `*.trycloudflare.com` tunnel to a locally-running app - share or test from another device |
 | `/inc:team-lead-review` | `team-lead-review` | Product-acceptance PR review - did the author build what was actually requested, per spec/Slack/board task |
 
