@@ -6,13 +6,60 @@ allowed-tools: Read, Bash
 
 # Hosted visual plans
 
-Use this skill when a feature needs a reviewable plan with structured prose, diagrams, wireframes, or a human approval loop.
+Use this skill when a feature needs a reviewable plan with structured prose, decisions, diagrams, wireframes, or a human approval loop.
 Skip it for a trivial, one-line, fully specified change.
 Never pad a plan with filler or create a one-step plan.
 
 This skill is adapted from [BuilderIO/skills visual-plan](https://github.com/BuilderIO/skills/tree/main/skills/visual-plan), which is MIT licensed.
 The hosted REST workflow, M1 command names, and Incubator Build rules below are local adaptations of that workflow.
 The retained copyright and license text is in [NOTICE.md](NOTICE.md).
+
+## The plan voice
+
+A hosted plan is read by a reviewer deciding whether to approve the work, not by an engineer executing it.
+This is the same voice as a good PR body: intent first, evidence on demand.
+
+**Core principle.**
+The reviewer sees outcomes first: why the work matters, what they get when it ships, where it stands, and what still needs their call.
+Anything a reader could reconstruct by opening the repo — the file list, the code narration, the command sequence — is not the plan.
+It is supporting detail that lives behind a `Collapse` the reviewer opens on demand.
+Every hard rule below is a consequence of this principle; if a rule and the principle ever disagree, the principle wins.
+
+**Hard rules for the plan writer. Do not rationalize around these:**
+
+- **Lead with the outcome, never a file list.**
+  The main body opens on why and what-you-get, the way a PR body opens on `### Why?`.
+  A `FileTree`, `ImplementationMap`, `Diff`, or raw command list never sits in the spine of the plan.
+- **Frame every decision as an outcome, not an engineering artifact.**
+  Use the `Decision` block.
+  Write `question` as the choice in the reviewer's terms.
+  Write each option's `detail` as what happens if you pick it — the consequence the reviewer is actually weighing — not the code it implies.
+  Set `recommended` to your default and say why in that option's detail.
+- **Put implementation detail behind a `Collapse`.**
+  Files touched, exact snippets, command sequences, payloads, and the ordered build steps go inside a `Collapse` whose `title` names what is inside ("Files and build order", "Full migration SQL").
+  Give the reviewer the ability to dive deeper if they choose; never force it into the main read.
+- **Never narrate code changes in the body.**
+  No "updates the foo handler to bar".
+  State the outcome the change produces for the reviewer; the mechanism belongs in the `Collapse`.
+- **Wireframe only when a visual state is the decision.**
+  A `Wireframe` or `Screen` earns its place only when the reviewer must compare what they would see on screen.
+  When the call is about behavior, data, or sequencing rather than pixels, a `Table`, `Callout`, or `Decision` comparison carries it better than a mockup.
+  An anemic wireframe — device chrome around three labels — is worse than one clear sentence.
+  When you do wireframe, make it content-rich per [references/wireframe.md](references/wireframe.md).
+- **Make "done" checkable, not a vibe.**
+  Express success criteria as outcomes the reviewer can verify, in a `Checklist`, each paired with the focused command or check that proves it.
+- **One coherent feature per plan.**
+  Split independent features into separate plans, even when they share a repository.
+- **Never pad.**
+  No one-step plans, no filler prose, no restating the catalog.
+
+| Don't | Why |
+|---|---|
+| Open with a `FileTree` or step list | The reviewer wants the outcome first; files are detail for a `Collapse` |
+| Narrate code changes in the body | The reviewer reads a plan to decide, not to execute |
+| Phrase a decision as "use library X vs Y" | Frame it as the outcome each choice produces, so a non-author can weigh it |
+| Drop a wireframe when the call is not visual | An empty mockup adds chrome, not information; use a `Table` or `Decision` |
+| Bury the decision that needs a human at the bottom of a spec | Surface what needs their call where they will see it |
 
 ## Command setup
 
@@ -33,12 +80,7 @@ Ask short, adaptive discovery questions in chat before authoring when the codeba
 Skip questions that the repository, task, or existing product decisions already answer.
 Do not turn the chat into a questionnaire.
 
-Put the distilled conclusions in the plan's framing section:
-
-- Goal and expected outcome.
-- Audience and reviewer.
-- Constraints, non-goals, and known dependencies.
-- The decision or approval the plan is meant to support.
+Distill the conversation into the plan's framing: the goal and expected outcome, the audience and reviewer, the constraints and non-goals, and the decision or approval the plan is meant to support.
 
 Conversation is for discovery.
 The plan is the durable record of the conclusions.
@@ -46,7 +88,7 @@ The plan is the durable record of the conclusions.
 ## 2. Research before authoring
 
 Read the real files before drafting.
-Name existing symbols, routes, components, tests, and codebase patterns.
+Know the existing symbols, routes, components, tests, and codebase patterns the work touches, so the outcomes you promise are grounded and the detail you collapse is accurate.
 Planning is read-only.
 Do not edit product source while building the plan.
 
@@ -68,29 +110,28 @@ Create `plan.mdx` and, for UI work, an optional `canvas.mdx` in a temporary dire
 Use only blocks returned by the current `plan blocks` catalog.
 Keep block ids stable, agent-assigned, and unique across both files.
 
-Start `plan.mdx` with a clear framing section.
-Then use an explicit outline with constraints stated before implementation detail.
+Order the body the way a reviewer reads, not the way the code is built:
 
-Include:
+1. **Framing — outcome first.**
+   Open with why the work matters and what the reviewer gets when it ships.
+   State audience, constraints, non-goals, and the decision the plan supports.
+   A teammate who never saw the chat should get the point from the first block.
+2. **The calls that need a human.**
+   Put each open choice in a `Decision` block, phrased as outcomes with a recommended default.
+   Gather several smaller answers in one `QuestionForm` when the catalog exposes it.
+3. **Where it stands and what proves it done.**
+   Give measurable success criteria as a `Checklist`, each paired with a focused verification command.
+4. **Supporting detail, behind `Collapse` blocks.**
+   The curated file list, ordered build steps, exact snippets, payloads, and API contracts are opt-in.
+   `FileTree`, `ImplementationMap`, `Code`, `Diff`, `DataModel`, and `ApiEndpoint` live inside a `Collapse`, not in the spine.
 
-- A curated file list that points to existing implementation patterns.
-- Links to relevant external documentation.
-- Granular task titles.
-- Ordered implementation steps for each task.
-- Measurable success criteria and focused verification commands.
-- Risks, non-goals, and unresolved decisions.
-
-Use document blocks for the information they represent.
-Use diagrams for relationships, API blocks for endpoint contracts, file trees for scoped files, and code blocks for exact snippets.
-Keep the prose outcome-first and self-contained.
-
-For a UI or product plan, author the canvas first when the reviewer must compare visible states.
-Use one artboard per meaningful state.
-Use short annotations for product notes and keep implementation detail in `plan.mdx`.
-Read [references/canvas.md](references/canvas.md) before authoring or changing a canvas.
-
-For a document-only plan, omit `canvas.mdx`.
+Choose each document block for the meaning it carries, and keep the prose outcome-first and self-contained.
 Read [references/document-quality.md](references/document-quality.md) before authoring the document.
+
+Reach for a canvas only when the reviewer must compare visible states to make the call.
+Author the canvas first in that case, one artboard per meaningful state, with short annotations for product intent and the implementation detail kept in `plan.mdx`.
+Read [references/canvas.md](references/canvas.md) before authoring or changing a canvas.
+For a document-only plan, omit `canvas.mdx`.
 
 For any `Wireframe` or `Screen`, read [references/wireframe.md](references/wireframe.md) first.
 Use semantic HTML only.
@@ -111,9 +152,19 @@ Create the plan with the live source files:
 ```
 
 The command prints the hosted `/p/` URL to stdout.
-Surface that URL verbatim in chat.
+When the API returns a writable reviewer link, the command prints a second `reviewUrl:` line.
+Surface the `/p/` URL verbatim in chat, and the review URL when one is present.
 The URL is the deliverable for a CLI host.
 Do not replace it with a summary, a shortened link, or a path copied from memory.
+
+To mint or rotate a writable reviewer link on demand, read a fresh `updatedAt` (Step 5) and call:
+
+```bash
+"${INC_BUILD[@]}" plan share <planId> [--rotate] --expect <fresh-updated-at>
+```
+
+The command prints the plan `url` and the `reviewUrl:` line.
+Use `--rotate` to invalidate the previous review link and issue a new one.
 
 ## 5. Read and iterate safely
 
@@ -154,16 +205,16 @@ Until then, use a fresh read and a fenced full replacement for iteration.
 
 ## 6. Final check
 
-Confirm that the plan has:
+Confirm that the plan:
 
-- A framing section with the chat conclusions.
-- One coherent feature scope.
-- An explicit outline and constraints.
-- A curated, source-backed file list.
-- External documentation links where useful.
-- Granular tasks with steps and measurable success criteria.
-- Stable unique ids across all source files.
-- Semantic wireframe HTML with renderer-owned pixels.
-- A fresh read after the last write.
+- Opens on the outcome — why the work matters and what the reviewer gets — before any detail.
+- Covers one coherent feature scope.
+- States constraints and non-goals plainly.
+- Puts every call that needs a human in a `Decision` (or `QuestionForm`), phrased as outcomes with a recommended default.
+- Keeps the file list, build steps, snippets, and payloads behind `Collapse` blocks, not in the spine.
+- Uses a wireframe only where a visual state is the decision, and makes it content-rich when it does.
+- Gives measurable, checkable success criteria with focused verification commands.
+- Keeps stable, unique ids across all source files.
+- Has been re-read from a fresh `plan get` after the last write.
 
 Return the hosted `/p/` URL verbatim in the final chat response.

@@ -2,44 +2,57 @@
 
 This guidance is adapted from [BuilderIO/skills visual-plan document guidance](https://github.com/BuilderIO/skills/tree/main/skills/visual-plan), which is MIT licensed.
 
-## Framing
+The plan voice is intent-driven: the reviewer sees outcomes first and opts into detail.
+See "The plan voice" in SKILL.md for the core principle and hard rules; this file expands them section by section.
 
-Start with the outcome.
-State the goal, audience, constraints, non-goals, and approval decision in the framing section.
-These are the distilled conclusions from the pre-interview in chat.
+## Framing — outcome first
 
-Use an explicit outline.
-State constraints before the implementation tasks.
-Make the plan readable by a teammate who did not see the chat.
+Open on the outcome, the way a PR body opens on `### Why?`.
+State why the work matters and what the reviewer gets when it ships before anything else.
+Then state the audience, the constraints, the non-goals, and the approval decision the plan supports.
 
-## Grounding
+These are the distilled conclusions from the discovery chat.
+Make the framing readable by a teammate who never saw the conversation.
+Do not open with a file list, a step list, or a code narration — those are detail, and detail comes later and on demand.
 
-Point to real files, symbols, routes, schemas, and tests.
-Build a curated file list from existing codebase patterns.
-Link external references when they affect implementation or acceptance.
+## Decisions as outcomes
+
+Put every call that needs a human in a `Decision` block, not in prose the reviewer has to mine for.
+Phrase the `question` as the choice in the reviewer's terms, not the engineering framing.
+Phrase each option's `detail` as the consequence of choosing it — what the reviewer, the user, or the system gets or loses — not the code that option implies.
+Set `recommended` to your default and use its detail to say why.
+Use one `QuestionForm` to gather several smaller answers when the block exists in the live catalog; reserve `Decision` for a call that changes the plan.
+Never silently resolve a product decision inside implementation detail.
+
+## Grounding — accurate, not exhaustive
+
+The outcomes you promise must be grounded in the real code: real files, symbols, routes, schemas, and tests.
+That grounding shows up as accurate claims in the body and an accurate curated file list in a `Collapse`, not as a file dump in the spine.
+Link external references when they affect the implementation or the acceptance decision.
 Avoid broad file dumps and guessed paths.
 
-## Tasks
+## Detail behind collapses
 
-Give every task a clear title.
-Write ordered implementation steps that explain what changes and what existing pattern is reused.
-Add measurable success criteria.
-Name the focused test, typecheck, build, or browser check that proves each criterion.
-List risks and non-goals instead of hiding them in vague language.
+Everything a reader could reconstruct by opening the repo is supporting detail, and supporting detail lives behind a `Collapse` the reviewer opens on demand.
+The curated file list, the ordered build steps, exact snippets, payloads, and API contracts go inside a `Collapse` whose `title` names what is inside.
+`FileTree`, `ImplementationMap`, `Code`, `Diff`, `DataModel`, and `ApiEndpoint` belong here, not in the main read.
+Give the reviewer the ability to dive deeper if they choose; never force the mechanism into the outcome-level read.
+
+## Success as checkable outcomes
+
+Express success criteria as outcomes the reviewer can verify, in a `Checklist`.
+Pair each with the focused test, typecheck, build, or browser check that proves it.
+State risks and non-goals plainly instead of hiding them in vague language.
 
 ## Living plan
 
 Treat the hosted plan as a living document.
 Refine the source as new evidence or reviewer comments arrive.
-Keep stable ids so feedback remains addressable.
+Keep stable ids so feedback and decisions remain addressable.
 Use one plan per coherent feature and split unrelated work into separate plans.
-
-Put unresolved judgment calls in one bottom `QuestionForm` when that block exists in the live catalog.
-Include a recommended default and the impact of each choice.
-Do not silently resolve a product decision in implementation prose.
 
 ## Final review
 
 Read the persisted plan after the last write.
-Check that the outline is complete, the file list is curated, tasks are granular, and success criteria are measurable.
-Check that any canvas or wireframe follows its reference guidance.
+Check that it opens on the outcome, that every human call is a `Decision` phrased as outcomes, that files and steps sit behind `Collapse` blocks, and that success criteria are measurable.
+Check that any canvas or wireframe follows its reference guidance and earns its place.
