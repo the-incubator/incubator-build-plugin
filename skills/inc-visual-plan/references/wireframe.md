@@ -3,6 +3,19 @@
 This guidance is adapted from [BuilderIO/skills visual-plan wireframe guidance](https://github.com/BuilderIO/skills/tree/main/skills/visual-plan), which is MIT licensed.
 It is narrowed to the hosted Incubator Build block catalog.
 
+## Whether to wireframe at all
+
+A wireframe is a tool for one job: letting the reviewer compare visible screen states to make a call.
+Reach for it only when the decision is about what the user would see.
+
+- If the reviewer must weigh two on-screen states against each other — a default versus an error, a before versus an after, a new layout versus the current one — a `Wireframe` or `Screen` carries the decision.
+- If the call is about behavior, data shape, sequencing, or a trade-off with no visual difference, do not wireframe.
+  A `Table`, `Callout`, or `Decision` comparison states it more directly and the reviewer reads it faster.
+- An anemic wireframe — device chrome around three labels and an empty panel — is worse than one clear sentence.
+  If you cannot fill the screen with a real product state, the wireframe is not the right block.
+
+When a wireframe does earn its place, make it content-rich per the sections below.
+
 ## Renderer-owned pixels
 
 Write the user's information architecture, labels, hierarchy, and interaction states.

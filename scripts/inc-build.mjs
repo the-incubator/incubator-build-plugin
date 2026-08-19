@@ -16,6 +16,7 @@
 //   inc-build plan list [--project <slug>] [--status <status>]
 //   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
 //   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
+//   inc-build plan share <planId> [--rotate] --expect <updatedAt>
 //
 // Auth: sends `Authorization: Bearer <apiKey>` from credentials.json. Errors are
 // surfaced (non-zero exit) rather than swallowed, unlike the telemetry hooks.
@@ -124,6 +125,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build plan list [--project <slug>] [--status <status>]
   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
+  inc-build plan share <planId> [--rotate] --expect <updatedAt>
   inc-build plan feedback <planId>       # Phase 3 stub
   inc-build plan consume <planId>        # Phase 3 stub
 `;
@@ -268,6 +270,25 @@ async function main() {
       process.stderr.write(`planId: ${result.planId}\nrevision: ${result.revision}\nupdatedAt: ${result.updatedAt}\n`);
       if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
       process.stdout.write(`${result.url}\n`);
+      // The API adds a writable reviewer link once share is provisioned; surface it
+      // when present so the skill need not make a second `plan share` call to get one.
+      if (result.reviewUrl) process.stdout.write(`reviewUrl: ${result.reviewUrl}\n`);
+      return;
+    }
+
+    if (sub === "share") {
+      const id = rest[0];
+      if (!id || !flags.expect) {
+        die("usage: plan share <planId> [--rotate] --expect <updatedAt>");
+      }
+      const body = { expectedUpdatedAt: flags.expect };
+      if (flags.rotate) body.rotate = true;
+      const result = await api(creds, "POST", `/api/v1/plans/${encodeURIComponent(id)}/share`, { body });
+      if (!result.url && !result.reviewUrl) die("POST /api/v1/plans/:id/share returned no url or reviewUrl");
+      process.stderr.write(`planId: ${result.planId ?? id}\nrevision: ${result.revision ?? "?"}\nupdatedAt: ${result.updatedAt ?? "?"}\n`);
+      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
+      if (result.url) process.stdout.write(`${result.url}\n`);
+      if (result.reviewUrl) process.stdout.write(`reviewUrl: ${result.reviewUrl}\n`);
       return;
     }
 
@@ -318,7 +339,7 @@ async function main() {
       return;
     }
 
-    die("usage: plan ( blocks | create | get | list | patch | replace | feedback | consume )");
+    die("usage: plan ( blocks | create | get | list | patch | replace | share | feedback | consume )");
   }
 
   die("usage: inc-build ( get <path> | feedback <list|get|fetch> | plan <subcommand> )");
