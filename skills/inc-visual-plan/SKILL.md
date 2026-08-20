@@ -206,15 +206,7 @@ The live M1 API stores source files as a complete replacement.
 Both `plan patch` and `plan replace` therefore send the full current file set to `PUT .../source`.
 Never send a partial file set.
 
-Obtain a fresh `updatedAt` from `plan get` immediately before a write:
-
-```bash
-"${INC_BUILD[@]}" plan replace <planId> \
-  --plan /tmp/<dir>/plan.mdx \
-  [--canvas /tmp/<dir>/canvas.mdx] \
-  --expect <fresh-updated-at>
-```
-
+Obtain a fresh `updatedAt` from `plan get` immediately before the single replacement write below.
 Keep `REVIEW_URL` from the create or share response in the authoring session when one exists.
 Use it only when the replacement response has no URL.
 The command below is the only replacement invocation.
