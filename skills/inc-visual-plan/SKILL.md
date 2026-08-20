@@ -162,13 +162,18 @@ Do not replace it with a summary, a shortened link, or a path copied from memory
 After the create response exists, open the writable reviewer URL when present, otherwise open the hosted `/p/` URL:
 
 ```bash
+CANVAS_ARGS=()
+if [ -f /tmp/<dir>/canvas.mdx ]; then
+  CANVAS_ARGS=(--canvas /tmp/<dir>/canvas.mdx)
+fi
 CREATE_OUTPUT="$("${INC_BUILD[@]}" plan create \
   --project <project-slug> \
   --title "<plan title>" \
-  --plan /tmp/<dir>/plan.mdx)"
+  --plan /tmp/<dir>/plan.mdx \
+  "${CANVAS_ARGS[@]}")"
 printf '%s\n' "$CREATE_OUTPUT"
 REVIEW_URL="$(printf '%s\n' "$CREATE_OUTPUT" | awk '
-  /^reviewUrl: / { review = substr($0, 11) }
+  /^reviewUrl: / { sub(/^reviewUrl: /, ""); review = $0 }
   END { print review }
 ')"
 PLAN_URL="$(printf '%s\n' "$CREATE_OUTPUT" | awk '/^https?:\/\// { plan = $0 } END { print plan }')"
@@ -225,9 +230,13 @@ Keep `REVIEW_URL` from the create or share response in the authoring session whe
 After a successful replacement, print the response and open that writable URL when present, otherwise the replacement response's `reviewUrl`, then its `url`:
 
 ```bash
+CANVAS_ARGS=()
+if [ -f /tmp/<dir>/canvas.mdx ]; then
+  CANVAS_ARGS=(--canvas /tmp/<dir>/canvas.mdx)
+fi
 REPLACE_OUTPUT="$("${INC_BUILD[@]}" plan replace <planId> \
   --plan /tmp/<dir>/plan.mdx \
-  [--canvas /tmp/<dir>/canvas.mdx] \
+  "${CANVAS_ARGS[@]}" \
   --expect <fresh-updated-at>)"
 printf '%s\n' "$REPLACE_OUTPUT"
 REPLACEMENT_URL="$(printf '%s' "$REPLACE_OUTPUT" | node --input-type=module -e '
