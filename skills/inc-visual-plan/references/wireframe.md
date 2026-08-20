@@ -22,15 +22,43 @@ Write the user's information architecture, labels, hierarchy, and interaction st
 Do not design the CSS pixels in the plan source.
 
 - Use semantic elements such as `header`, `nav`, `main`, `section`, `form`, `label`, `button`, and `footer`.
-- Do not use inline colors, font sizes, spacing, dimensions, shadows, or arbitrary visual styles.
+- Bare semantic HTML renders flat in the hosted renderer.
+  Every wireframe must use catalog helper classes for visual hierarchy: `wf-card` for panels, `wf-box` for items or bubbles, `wf-pill` or `wf-chip` for status, `wf-muted` for secondary text, and `accent` for primary actions.
+  Use inline `display: flex` or `display: grid` with `gap` for layout.
+- Do not use inline colors, font sizes, dimensions, shadows, or arbitrary visual styles.
 - Do not add `<style>`, `<script>`, `<html>`, `<head>`, or `<body>` tags.
 - Do not use host framework classes or invented design-system classes.
 - Use only tokens, helper classes, and icon names returned by the current `inc-build plan blocks` call.
 - Use `data-icon="name"` markers for icons when the catalog supports the name.
 - Put text in the markup so the reviewer can inspect the real state.
 
-The renderer owns surface width, frame chrome, typography, spacing, colors, and the sketch or clean treatment.
+The renderer owns surface width, frame chrome, typography, default spacing, colors, and the sketch or clean treatment.
+Use inline flex or grid `gap` only for the wireframe's content layout.
 Choose the catalog surface that matches the state: `browser`, `desktop`, `mobile`, `popover`, or `panel`.
+
+Good structure versus flat structure:
+
+```html
+<!-- Good: helper classes create hierarchy and flex/grid with gap creates layout. -->
+<section class="wf-card" style="display:flex; flex-direction:column; gap:12px">
+  <header style="display:flex; align-items:center; justify-content:space-between; gap:8px">
+    <h2>Inbox</h2>
+    <span class="wf-pill wf-muted">3 unread</span>
+  </header>
+  <div class="wf-box" style="display:flex; align-items:center; gap:8px">
+    <span class="wf-chip">Priority</span>
+    <span class="wf-muted">No new messages</span>
+    <button class="accent">Compose</button>
+  </div>
+</section>
+
+<!-- Bad: semantic tags alone render as a flat block. -->
+<section>
+  <h2>Inbox</h2>
+  <p>3 unread</p>
+  <button>Compose</button>
+</section>
+```
 
 ## Content bar
 

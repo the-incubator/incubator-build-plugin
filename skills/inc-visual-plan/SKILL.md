@@ -117,7 +117,8 @@ Order the body the way a reviewer reads, not the way the code is built:
    State audience, constraints, non-goals, and the decision the plan supports.
    A teammate who never saw the chat should get the point from the first block.
 2. **The calls that need a human.**
-   Put each open choice in a `Decision` block, phrased as outcomes with a recommended default.
+   Put all open choices in one unified `Decision` list or container when that serves the review, or use individual `Decision` blocks when it does not.
+   Phrase each choice as an outcome with a recommended default.
    Gather several smaller answers in one `QuestionForm` when the catalog exposes it.
 3. **Where it stands and what proves it done.**
    Give measurable success criteria as a `Checklist`, each paired with a focused verification command.
@@ -135,7 +136,8 @@ For a document-only plan, omit `canvas.mdx`.
 
 For any `Wireframe` or `Screen`, read [references/wireframe.md](references/wireframe.md) first.
 Use semantic HTML only.
-Do not put colors, font sizes, spacing, dimensions, or other visual pixels in inline HTML styles.
+Do not put colors, font sizes, dimensions, or other visual pixels in inline HTML styles.
+For wireframes, inline flex or grid layout with `gap` is allowed when required by [references/wireframe.md](references/wireframe.md).
 The renderer owns those pixels.
 Use only the renderer's catalog tokens, helper classes, surfaces, and icon markers.
 
@@ -157,6 +159,32 @@ Surface the `/p/` URL verbatim in chat, and the review URL when one is present.
 The URL is the deliverable for a CLI host.
 Do not replace it with a summary, a shortened link, or a path copied from memory.
 
+After the create response exists, open the writable reviewer URL when present, otherwise open the hosted `/p/` URL:
+
+```bash
+CREATE_OUTPUT="$("${INC_BUILD[@]}" plan create \
+  --project <project-slug> \
+  --title "<plan title>" \
+  --plan /tmp/<dir>/plan.mdx)"
+printf '%s\n' "$CREATE_OUTPUT"
+REVIEW_URL="$(printf '%s\n' "$CREATE_OUTPUT" | awk '
+  /^reviewUrl: / { review = substr($0, 11) }
+  END { print review }
+')"
+PLAN_URL="$(printf '%s\n' "$CREATE_OUTPUT" | awk '/^https?:\/\// { plan = $0 } END { print plan }')"
+OPEN_URL="${REVIEW_URL:-$PLAN_URL}"
+if [ -n "$OPEN_URL" ]; then
+  "${INC_BUILD[@]}" plan open "$OPEN_URL"
+fi
+```
+
+The `printf` keeps both hosted links visible in chat.
+The `plan open` command first checks for a live, enabled cmux browser using the same socket gate as `cmux-browser`.
+It never calls cmux outside that gate.
+There is no stable Claude Desktop or ChatGPT Desktop browser signal or navigation command to detect here, so do not guess either host.
+When no reliable in-app browser is available, `plan open` runs `open -a "Google Chrome" <url>` on macOS and `xdg-open <url>` elsewhere.
+If the browser launch fails, keep the printed URL and report the launcher error.
+
 To mint or rotate a writable reviewer link on demand, read a fresh `updatedAt` (Step 5) and call:
 
 ```bash
@@ -165,6 +193,8 @@ To mint or rotate a writable reviewer link on demand, read a fresh `updatedAt` (
 
 The command prints the plan `url` and the `reviewUrl:` line.
 Use `--rotate` to invalidate the previous review link and issue a new one.
+
+When `plan share` is used during authoring, apply the same launch rule to its output: choose `reviewUrl` first, then `url`, print the selected link verbatim, and run `"${INC_BUILD[@]}" plan open "$OPEN_URL"`.
 
 ## 5. Read and iterate safely
 
@@ -190,6 +220,32 @@ Obtain a fresh `updatedAt` from `plan get` immediately before a write:
   [--canvas /tmp/<dir>/canvas.mdx] \
   --expect <fresh-updated-at>
 ```
+
+Keep `REVIEW_URL` from the create or share response in the authoring session when one exists.
+After a successful replacement, print the response and open that writable URL when present, otherwise the replacement response's `reviewUrl`, then its `url`:
+
+```bash
+REPLACE_OUTPUT="$("${INC_BUILD[@]}" plan replace <planId> \
+  --plan /tmp/<dir>/plan.mdx \
+  [--canvas /tmp/<dir>/canvas.mdx] \
+  --expect <fresh-updated-at>)"
+printf '%s\n' "$REPLACE_OUTPUT"
+REPLACEMENT_URL="$(printf '%s' "$REPLACE_OUTPUT" | node --input-type=module -e '
+  let input = "";
+  process.stdin.on("data", chunk => input += chunk);
+  process.stdin.on("end", () => {
+    const result = JSON.parse(input);
+    process.stdout.write(result.reviewUrl ?? result.url ?? "");
+  });
+')"
+OPEN_URL="${REVIEW_URL:-$REPLACEMENT_URL}"
+if [ -n "$OPEN_URL" ]; then
+  printf '%s\n' "$OPEN_URL"
+  "${INC_BUILD[@]}" plan open "$OPEN_URL"
+fi
+```
+
+The explicit `printf` keeps the selected URL visible even when the replacement response is JSON.
 
 After every successful write, call `plan get` again.
 Compare the persisted source, block ids, block count, and canvas states with the intended result.
