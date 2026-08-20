@@ -17,10 +17,12 @@
 //   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
 //   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
 //   inc-build plan share <planId> [--rotate] --expect <updatedAt>
+//   inc-build plan open <url>
 //
 // Auth: sends `Authorization: Bearer <apiKey>` from credentials.json. Errors are
 // surfaced (non-zero exit) rather than swallowed, unlike the telemetry hooks.
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -126,6 +128,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
   inc-build plan share <planId> [--rotate] --expect <updatedAt>
+  inc-build plan open <url>
   inc-build plan feedback <planId>       # Phase 3 stub
   inc-build plan consume <planId>        # Phase 3 stub
 `;
@@ -149,6 +152,52 @@ function phase3Stub(sub) {
   die(`plan ${sub} is reserved for Phase 3; feedback and consume arrive with the reviewer feedback API`);
 }
 
+function runCommand(command, args) {
+  return spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function commandError(result) {
+  return result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
+}
+
+function openPlanUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    die("plan open requires a valid http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    die("plan open requires an http(s) URL");
+  }
+
+  // Match cmux-browser's gate: command present, live browser socket, and enabled panel.
+  // Do not call cmux unless this complete check passes.
+  const cmuxStatus = runCommand("cmux", ["browser-status"]);
+  const liveCmux = cmuxStatus.status === 0 && (cmuxStatus.stdout ?? "").trim() !== "disabled";
+  if (liveCmux) {
+    const opened = runCommand("cmux", ["browser", "open", url]);
+    if (opened.stdout) process.stdout.write(opened.stdout);
+    if (opened.stderr) process.stderr.write(opened.stderr);
+    if (opened.status !== 0) die(`cmux browser open failed: ${commandError(opened)}`);
+    process.stderr.write(`opened plan in cmux browser: ${url}\n`);
+    return;
+  }
+
+  // Claude and ChatGPT desktop do not expose a stable, host-independent browser
+  // signal or navigation command. Do not infer either host from process names or env.
+  const launcher = process.platform === "darwin" ? "open" : "xdg-open";
+  const args = process.platform === "darwin" ? ["-a", "Google Chrome", url] : [url];
+  const opened = runCommand(launcher, args);
+  if (opened.stdout) process.stdout.write(opened.stdout);
+  if (opened.stderr) process.stderr.write(opened.stderr);
+  if (opened.status !== 0) die(`${launcher} failed: ${commandError(opened)}`);
+  process.stderr.write(`opened plan in ${process.platform === "darwin" ? "Google Chrome" : launcher}: ${url}\n`);
+}
+
 async function main() {
   const [cmd, sub, ...tail] = process.argv.slice(2);
   if (!cmd || cmd === "-h" || cmd === "--help") {
@@ -158,6 +207,12 @@ async function main() {
   const { flags, rest } = parseFlags(tail);
   if (cmd === "plan" && (sub === "feedback" || sub === "consume")) {
     phase3Stub(sub);
+  }
+  if (cmd === "plan" && sub === "open") {
+    const url = rest[0];
+    if (!url) die("usage: plan open <url>");
+    openPlanUrl(url);
+    return;
   }
   const creds = loadCreds();
   const out = (o) => process.stdout.write(JSON.stringify(o, null, 2) + "\n");
@@ -339,7 +394,7 @@ async function main() {
       return;
     }
 
-    die("usage: plan ( blocks | create | get | list | patch | replace | share | feedback | consume )");
+    die("usage: plan ( blocks | create | get | list | patch | replace | share | open | feedback | consume )");
   }
 
   die("usage: inc-build ( get <path> | feedback <list|get|fetch> | plan <subcommand> )");

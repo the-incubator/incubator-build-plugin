@@ -8,6 +8,10 @@ See "The plan voice" in SKILL.md for the core principle and hard rules; this fil
 ## Framing — outcome first
 
 Open on the outcome, the way a PR body opens on `### Why?`.
+Do not re-title the plan inside the framing block.
+The hosted page already renders the plan title as its h1, so a leading `#` heading duplicates it.
+Use `##` for top-level sections.
+The renderer demotes `###` to h4 and flattens the hierarchy.
 State why the work matters and what the reviewer gets when it ships before anything else.
 Then state the audience, the constraints, the non-goals, and the approval decision the plan supports.
 
@@ -17,7 +21,8 @@ Do not open with a file list, a step list, or a code narration — those are det
 
 ## Decisions as outcomes
 
-Put every call that needs a human in a `Decision` block, not in prose the reviewer has to mine for.
+Put every call that needs a human in one unified decisions list when that single container serves the reviewer's scan, not in prose the reviewer has to mine for.
+Do not scatter separate `Decision` blocks through the document when a unified list serves.
 Phrase the `question` as the choice in the reviewer's terms, not the engineering framing.
 Phrase each option's `detail` as the consequence of choosing it — what the reviewer, the user, or the system gets or loses — not the code that option implies.
 Set `recommended` to your default and use its detail to say why.
@@ -38,6 +43,19 @@ The curated file list, the ordered build steps, exact snippets, payloads, and AP
 `FileTree`, `ImplementationMap`, `Code`, `Diff`, `DataModel`, and `ApiEndpoint` belong here, not in the main read.
 Give the reviewer the ability to dive deeper if they choose; never force the mechanism into the outcome-level read.
 
+## ImplementationMap steps
+
+Use short, verb-led headlines for `ImplementationMap` step titles.
+Keep each title to 3-6 words, such as `Build the broker`.
+Put the implementation detail in the step's `note` field as subtext.
+Never pack multiple details into a comma-separated title.
+
+Good versus bad:
+
+| Good | Bad |
+| --- | --- |
+| `title="Build the broker"`<br>`note="Route jobs through the shared queue and expose retry state."` | `title="Broker, queue, retries, metrics, and tests"` |
+
 ## Success as checkable outcomes
 
 Express success criteria as outcomes the reviewer can verify, in a `Checklist`.
@@ -54,5 +72,5 @@ Use one plan per coherent feature and split unrelated work into separate plans.
 ## Final review
 
 Read the persisted plan after the last write.
-Check that it opens on the outcome, that every human call is a `Decision` phrased as outcomes, that files and steps sit behind `Collapse` blocks, and that success criteria are measurable.
+Check that it opens on the outcome, that human calls use one unified decisions list when it serves the review, that files and steps sit behind `Collapse` blocks, and that success criteria are measurable.
 Check that any canvas or wireframe follows its reference guidance and earns its place.
