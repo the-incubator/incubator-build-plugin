@@ -143,23 +143,12 @@ Use only the renderer's catalog tokens, helper classes, surfaces, and icon marke
 
 ## 4. Create and surface the deliverable
 
-Create the plan with the live source files:
-
-```bash
-"${INC_BUILD[@]}" plan create \
-  --project <project-slug> \
-  --title "<plan title>" \
-  --plan /tmp/<dir>/plan.mdx \
-  [--canvas /tmp/<dir>/canvas.mdx]
-```
-
-The command prints the hosted `/p/` URL to stdout.
-When the API returns a writable reviewer link, the command prints a second `reviewUrl:` line.
-Surface the `/p/` URL verbatim in chat, and the review URL when one is present.
+Create and capture the plan once with the live source files.
+The command below is the only create invocation.
+It prints the hosted `/p/` URL to stdout and, when available, a second `reviewUrl:` line.
+Surface both URLs verbatim in chat.
 The URL is the deliverable for a CLI host.
 Do not replace it with a summary, a shortened link, or a path copied from memory.
-
-After the create response exists, open the writable reviewer URL when present, otherwise open the hosted `/p/` URL:
 
 ```bash
 CANVAS_ARGS=()
@@ -227,7 +216,9 @@ Obtain a fresh `updatedAt` from `plan get` immediately before a write:
 ```
 
 Keep `REVIEW_URL` from the create or share response in the authoring session when one exists.
-After a successful replacement, print the response and open that writable URL when present, otherwise the replacement response's `reviewUrl`, then its `url`:
+Use it only when the replacement response has no URL.
+The command below is the only replacement invocation.
+After a successful replacement, print the response and open its `reviewUrl`, then its `url`, then the retained `REVIEW_URL`:
 
 ```bash
 CANVAS_ARGS=()
@@ -247,7 +238,7 @@ REPLACEMENT_URL="$(printf '%s' "$REPLACE_OUTPUT" | node --input-type=module -e '
     process.stdout.write(result.reviewUrl ?? result.url ?? "");
   });
 ')"
-OPEN_URL="${REVIEW_URL:-$REPLACEMENT_URL}"
+OPEN_URL="${REPLACEMENT_URL:-$REVIEW_URL}"
 if [ -n "$OPEN_URL" ]; then
   printf '%s\n' "$OPEN_URL"
   "${INC_BUILD[@]}" plan open "$OPEN_URL"
