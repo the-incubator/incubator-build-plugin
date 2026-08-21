@@ -314,6 +314,18 @@ export function sanitize(eventName, payload, salt) {
     if (ext) safe.file_ext = ext;
   }
 
+  // Edit/Write/MultiEdit → how many lines changed (counts only, never the
+  // diff text or file content). Two nullable integers, sent only when the
+  // tool_response actually carries them; a missing/unparseable count is
+  // omitted, never zero, and never blocks the event.
+  if (response && (safe.tool_name === "Write" || safe.tool_name === "Edit" || safe.tool_name === "MultiEdit")) {
+    const counts = lineCountsFromResponse(response);
+    if (counts) {
+      safe.lines_added = counts.added;
+      safe.lines_removed = counts.removed;
+    }
+  }
+
   // TodoWrite → how many todos (count only, no text).
   if (safe.tool_name === "TodoWrite" && Array.isArray(input?.todos)) {
     safe.todo_count = input.todos.length;
@@ -344,6 +356,47 @@ export function sanitize(eventName, payload, salt) {
   safe.project_id_hash = hash16(salt, cwd);
 
   return safe;
+}
+
+// Pull line-change COUNTS off an Edit/Write/MultiEdit tool_response, never the
+// content. Returns { added, removed } as non-negative integers, or null when
+// the response carries no usable counts (so the caller omits both fields).
+//
+// Two shapes are handled:
+//   1. Direct numeric fields (`lines_added`/`lines_removed`) — future-proof if a
+//      Claude Code build ever surfaces them, and the natural shape for tests.
+//   2. `structuredPatch` — the array of hunks Claude Code actually emits today.
+//      Each hunk's `lines` entries are prefixed "+" (added), "-" (removed), or
+//      " " (context); we tally the prefixes. Only the counts leave the machine.
+export function lineCountsFromResponse(response) {
+  if (!response || typeof response !== "object") return null;
+
+  const direct = nonNegInt(response.lines_added);
+  const directRemoved = nonNegInt(response.lines_removed);
+  if (direct !== null || directRemoved !== null) {
+    return { added: direct ?? 0, removed: directRemoved ?? 0 };
+  }
+
+  if (!Array.isArray(response.structuredPatch)) return null;
+  let added = 0;
+  let removed = 0;
+  let sawHunk = false;
+  for (const hunk of response.structuredPatch) {
+    if (!hunk || !Array.isArray(hunk.lines)) continue;
+    sawHunk = true;
+    for (const line of hunk.lines) {
+      if (typeof line !== "string") continue;
+      const c = line[0];
+      if (c === "+") added++;
+      else if (c === "-") removed++;
+    }
+  }
+  if (!sawHunk) return null;
+  return { added, removed };
+}
+
+function nonNegInt(v) {
+  return Number.isInteger(v) && v >= 0 ? v : null;
 }
 
 function extFromPath(p) {
