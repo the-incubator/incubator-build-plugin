@@ -32,8 +32,31 @@ test("lineCountsFromResponse prefers direct numeric fields when present", () => 
   assert.deepEqual(lineCountsFromResponse(r), { added: 5, removed: 2 });
 });
 
-test("lineCountsFromResponse treats a lone direct field as the other being 0", () => {
-  assert.deepEqual(lineCountsFromResponse({ lines_added: 4 }), { added: 4, removed: 0 });
+test("lineCountsFromResponse keeps a lone direct field absent, never invents 0", () => {
+  // "absent stays absent" — only lines_added was supplied, so lines_removed
+  // must stay null, not become a fabricated 0.
+  assert.deepEqual(lineCountsFromResponse({ lines_added: 4 }), { added: 4, removed: null });
+  assert.deepEqual(lineCountsFromResponse({ lines_removed: 2 }), { added: null, removed: 2 });
+});
+
+test("lineCountsFromResponse counts a created file's content as additions", () => {
+  // Write of a new file: create shape carries `content`, no structuredPatch.
+  assert.deepEqual(
+    lineCountsFromResponse({ type: "create", content: "one\ntwo\nthree\n" }),
+    { added: 3, removed: 0 },
+  );
+  // No trailing newline counts the same.
+  assert.deepEqual(
+    lineCountsFromResponse({ type: "create", content: "a\nb" }),
+    { added: 2, removed: 0 },
+  );
+  // Empty new file → zero additions, still a real count.
+  assert.deepEqual(
+    lineCountsFromResponse({ type: "create", content: "" }),
+    { added: 0, removed: 0 },
+  );
+  // A non-create response with content but no patch stays unusable.
+  assert.equal(lineCountsFromResponse({ type: "update", content: "a\nb" }), null);
 });
 
 test("lineCountsFromResponse returns null when there is nothing to count", () => {
@@ -78,6 +101,26 @@ test("sanitize emits line counts for Write and MultiEdit", () => {
   }, SALT);
   assert.equal(multi.lines_added, 10);
   assert.equal(multi.lines_removed, 4);
+});
+
+test("sanitize emits only the present field for a lone direct count", () => {
+  const out = sanitize("PostToolUse", {
+    tool_name: "Edit",
+    tool_input: { file_path: "/repo/x.ts" },
+    tool_response: { lines_added: 7 },
+  }, SALT);
+  assert.equal(out.lines_added, 7);
+  assert.equal("lines_removed" in out, false);
+});
+
+test("sanitize counts a new-file Write with no structuredPatch", () => {
+  const out = sanitize("PostToolUse", {
+    tool_name: "Write",
+    tool_input: { file_path: "/repo/brand-new.ts" },
+    tool_response: { type: "create", content: "export const a = 1;\nexport const b = 2;\n" },
+  }, SALT);
+  assert.equal(out.lines_added, 2);
+  assert.equal(out.lines_removed, 0);
 });
 
 test("sanitize omits line counts when the response carries none (absent stays absent)", () => {

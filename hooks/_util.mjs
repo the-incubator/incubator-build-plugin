@@ -321,8 +321,8 @@ export function sanitize(eventName, payload, salt) {
   if (response && (safe.tool_name === "Write" || safe.tool_name === "Edit" || safe.tool_name === "MultiEdit")) {
     const counts = lineCountsFromResponse(response);
     if (counts) {
-      safe.lines_added = counts.added;
-      safe.lines_removed = counts.removed;
+      if (counts.added != null) safe.lines_added = counts.added;
+      if (counts.removed != null) safe.lines_removed = counts.removed;
     }
   }
 
@@ -359,44 +359,65 @@ export function sanitize(eventName, payload, salt) {
 }
 
 // Pull line-change COUNTS off an Edit/Write/MultiEdit tool_response, never the
-// content. Returns { added, removed } as non-negative integers, or null when
-// the response carries no usable counts (so the caller omits both fields).
+// content. Returns { added, removed } where each is a non-negative integer or
+// null (null = genuinely absent, so the caller omits that field), or null when
+// the response carries no usable counts at all.
 //
-// Two shapes are handled:
+// Three shapes are handled, in priority order:
 //   1. Direct numeric fields (`lines_added`/`lines_removed`) — future-proof if a
-//      Claude Code build ever surfaces them, and the natural shape for tests.
-//   2. `structuredPatch` — the array of hunks Claude Code actually emits today.
-//      Each hunk's `lines` entries are prefixed "+" (added), "-" (removed), or
-//      " " (context); we tally the prefixes. Only the counts leave the machine.
+//      Claude Code build ever surfaces them. Each field stands alone: a lone
+//      valid field is emitted and the other stays null (never invented as 0).
+//   2. `structuredPatch` — the array of hunks Claude Code emits for edits. Each
+//      hunk's `lines` entries are prefixed "+" (added), "-" (removed), or " "
+//      (context); we tally the prefixes. Both counts are real integers here.
+//   3. Create response — `Write` of a NEW file returns `{ type: "create",
+//      content }` with no patch, so additions would otherwise be invisible. We
+//      count the lines of `content` as additions (removed is a real 0 — a
+//      create deletes nothing). Only the count is taken; content is not kept.
+// Only the counts ever leave the machine.
 export function lineCountsFromResponse(response) {
   if (!response || typeof response !== "object") return null;
 
-  const direct = nonNegInt(response.lines_added);
+  const directAdded = nonNegInt(response.lines_added);
   const directRemoved = nonNegInt(response.lines_removed);
-  if (direct !== null || directRemoved !== null) {
-    return { added: direct ?? 0, removed: directRemoved ?? 0 };
+  if (directAdded !== null || directRemoved !== null) {
+    return { added: directAdded, removed: directRemoved };
   }
 
-  if (!Array.isArray(response.structuredPatch)) return null;
-  let added = 0;
-  let removed = 0;
-  let sawHunk = false;
-  for (const hunk of response.structuredPatch) {
-    if (!hunk || !Array.isArray(hunk.lines)) continue;
-    sawHunk = true;
-    for (const line of hunk.lines) {
-      if (typeof line !== "string") continue;
-      const c = line[0];
-      if (c === "+") added++;
-      else if (c === "-") removed++;
+  if (Array.isArray(response.structuredPatch)) {
+    let added = 0;
+    let removed = 0;
+    let sawHunk = false;
+    for (const hunk of response.structuredPatch) {
+      if (!hunk || !Array.isArray(hunk.lines)) continue;
+      sawHunk = true;
+      for (const line of hunk.lines) {
+        if (typeof line !== "string") continue;
+        const c = line[0];
+        if (c === "+") added++;
+        else if (c === "-") removed++;
+      }
     }
+    if (sawHunk) return { added, removed };
   }
-  if (!sawHunk) return null;
-  return { added, removed };
+
+  if (response.type === "create" && typeof response.content === "string") {
+    return { added: countLines(response.content), removed: 0 };
+  }
+
+  return null;
 }
 
 function nonNegInt(v) {
   return Number.isInteger(v) && v >= 0 ? v : null;
+}
+
+// Count lines in a file body without retaining it. A trailing newline does not
+// add a phantom line: "a\nb\nc\n" and "a\nb\nc" both count as 3.
+function countLines(content) {
+  if (content.length === 0) return 0;
+  const n = content.split("\n").length;
+  return content.endsWith("\n") ? n - 1 : n;
 }
 
 function extFromPath(p) {
