@@ -494,6 +494,17 @@ fi
 # for one this PR deleted.
 DB_MERGE_BASE=$(git merge-base "origin/$DEFAULT_BRANCH" "$EVAL_HEAD" 2>/dev/null || echo "")
 
+# Detection reads EVAL_HEAD, but the drift command EXECUTES in the working tree.
+# If EVAL_HEAD is a fetched SHA that differs from the local checkout, running the
+# local (stale) checker could vouch for the wrong schema. EVAL_STALE turns the
+# execution into an unverifiable block below (detection stays correct regardless).
+LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+EVAL_STALE=0
+if [ "$EVAL_HEAD" != "HEAD" ]; then
+  EVAL_RESOLVED=$(git rev-parse "$EVAL_HEAD^{commit}" 2>/dev/null || echo "")
+  [ -n "$EVAL_RESOLVED" ] && [ -n "$LOCAL_HEAD" ] && [ "$EVAL_RESOLVED" != "$LOCAL_HEAD" ] && EVAL_STALE=1
+fi
+
 # What EVAL_HEAD changes vs the merge base (three-dot: the diff that will actually
 # be merged) - not a two-dot working-tree-vs-tip diff, which would also pick up
 # schema commits main gained after divergence and read them as this PR's.
@@ -612,10 +623,28 @@ EOF
 fi
 AFFECTED_PKGS=$(printf '%s\n' "$AFFECTED_PKGS" | awk 'NF && !seen[$0]++')
 
-# Note when the PR changes the checker's own code (runs with the ambient DATABASE_URL).
+# Note when the PR changes the checker's own code (runs with the ambient
+# DATABASE_URL). Two signals: (a) a changed file whose path looks like the
+# checker, and (b) the more reliable one - an affected package's db:check-drift
+# script VALUE differs between the merge base and EVAL_HEAD (an in-place
+# entrypoint change a path heuristic can't see).
 CHECK_CODE_CHANGED=0
 git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null \
   | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
+drift_script_val() {  # $1 = package dir ("." = root), $2 = git ref
+  local rel="$1/package.json"; rel="${rel#./}"
+  git show "$2:$rel" 2>/dev/null | jq -r '(.scripts // {})["db:check-drift"] // ""' 2>/dev/null
+}
+if [ "$CHECK_CODE_CHANGED" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    bv=$(drift_script_val "$pkg" "${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}")
+    hv=$(drift_script_val "$pkg" "$EVAL_HEAD")
+    [ "$bv" != "$hv" ] && { CHECK_CODE_CHANGED=1; break; }
+  done <<EOF
+$AFFECTED_PKGS
+EOF
+fi
 
 if [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
   # The merge-base diff could not be computed (shallow clone, missing
@@ -641,6 +670,11 @@ elif [ -z "$AFFECTED_PKGS" ]; then
     echo "GATE4_DRIFT: skip"
     echo "  REASON=no db:check-drift script covers the changed schema files"
   fi
+elif [ "$EVAL_STALE" = "1" ]; then
+  # A check would run, but the local tree doesn't match the commit that merges.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the local checkout ($LOCAL_HEAD) is behind the PR head ($EVAL_HEAD) that will merge; the drift check runs in the working tree and would evaluate stale code. Pull the PR head (git pull) and re-run so the check evaluates what actually merges."
+  GATE4_BLOCKED=1
 else
   # Run the drift check in EVERY affected workspace; the worst result wins. A
   # single passing workspace must not vouch for a second whose database drifts.
@@ -664,8 +698,11 @@ else
     fi
     RUNCMD="$PM_CMD"; [ -n "$reldir" ] && RUNCMD="cd $(printf '%q' "$reldir") && $PM_CMD"
     OUT=$(run_bounded 120 bash -c "$RUNCMD" 2>&1); RC=$?
-    [ "$RC" = "124" ] && OUT="$OUT
-drift check timed out after 120s (database likely unreachable)"
+    # 124 = ordinary timeout; 137 = KILLed (our SIGKILL escalation for a
+    # TERM-resistant client, or OOM). Both mean the 120s deadline was hit - label
+    # them so the message isn't a blank generic 'unverifiable'.
+    if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then OUT="$OUT
+drift check exceeded its 120s deadline and was terminated (database likely unreachable)"; fi
     if [ "$RC" = "0" ]; then
       DETAIL="$DETAIL  PKG[$pkg]: pass
 "

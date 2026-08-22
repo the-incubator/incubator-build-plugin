@@ -505,6 +505,46 @@ check_drift_out "base-added check is not tamper (no false block)" "GATE4_DRIFT: 
 check_drift "base-added check -> no gate4 block" "VERDICT" "gate4-drift"
 rm -rf "$REPO/apps" "$REPO/package.json"
 
+# --- Gate 4 round-5: stale-checkout exec guard, rc137 timeout, entrypoint change
+# rc 137 (SIGKILL after the deadline) is reported as a timeout, not a blank result.
+reset_case; RUNNER=run_drift; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'exit 137'
+check_drift_out "rc137 -> unverifiable" "GATE4_DRIFT: unverifiable"
+check_drift_out "rc137 -> named as deadline" "exceeded its 120s deadline"
+rm -f "$REPO/package.json"
+
+# Entrypoint change: the db:check-drift VALUE differs between merge base and head
+# -> the security NOTE fires even though no checker-named file path changed.
+fresh_from_root feat-entrypoint
+printf '{"scripts":{"db:check-drift":"tsx old-checker.ts"}}' > "$REPO/package.json"
+git -C "$REPO" add package.json 2>/dev/null; git -C "$REPO" commit -q -m "base checker"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+printf '{"scripts":{"db:check-drift":"tsx NEW-checker.ts"}}' > "$REPO/package.json"   # entrypoint changed in place
+mkdir -p "$REPO/drizzle"; printf 'x\n' > "$REPO/drizzle/schema.ts"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "change checker entrypoint + schema"
+reset_case; RUNNER=run_drift; DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "entrypoint value change -> security NOTE" "NOTE=this PR modifies the drift check's own code"
+rm -f "$REPO/package.json"; rm -rf "$REPO/drizzle"
+
+# Stale-checkout execution guard: EVAL_HEAD (fetched PR head) has schema + a check,
+# but the local checkout is behind it -> block rather than run the stale checker.
+fresh_from_root feat-stale
+git -C "$REPO" checkout -q -b tmp-stalehead
+mkdir -p "$REPO/drizzle"; printf 'x\n' > "$REPO/drizzle/schema.ts"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "PR head: schema + check"
+A=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" checkout -q feat-stale            # local HEAD is behind A
+git -C "$REPO" clean -fdq 2>/dev/null
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse feat-stale)"
+reset_case; RUNNER=run_drift_real
+printf '%s' '[{"number":1,"head":{"ref":"feat-stale"}}]' > "$FIX/pulls_list.json"
+printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"'"$A"'"},"user":{"login":"author"}}' > "$FIX/pull.json"
+check_drift_out "stale checkout vs fetched head -> BLOCK" "GATE4_DRIFT: unverifiable"
+check_drift_out "stale checkout -> names the cause" "is behind the PR head"
+
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"
 echo "merge-gates.test.sh: $PASS passed, $FAIL failed"
