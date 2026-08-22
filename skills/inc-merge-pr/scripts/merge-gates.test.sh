@@ -53,7 +53,11 @@ mkenv()    { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$WORK/envcheck";    chmo
 reset_case() {
   FIX="$WORK/fix"; rm -rf "$FIX"; mkdir -p "$FIX"
   printf '%s' '[{"number":1,"head":{"ref":"feature/x"}}]'                 > "$FIX/pulls_list.json"
-  printf '%s' '{"draft":false,"mergeable_state":"clean","head":{"sha":"abc"},"user":{"login":"author"}}' > "$FIX/pull.json"
+  # head.sha = the real current HEAD so EVAL_HEAD resolves (== local HEAD) rather
+  # than tripping the "PR head SHA not present locally" fail-safe. Cases that need
+  # a distinct fetched head set head.sha to a real other commit explicitly.
+  RHEAD=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo abc)
+  printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"login":"author"}}' "$RHEAD" > "$FIX/pull.json"
   printf '%s' '{"check_runs":[{"name":"build","status":"completed","conclusion":"success"}]}' > "$FIX/checkruns.json"
   printf '%s' '[]'                                                         > "$FIX/comments.json"
   mkfresh  'echo "DEFAULT=main"; echo "BEHIND=0"; echo "AHEAD=0"'          # no overlap
@@ -63,6 +67,7 @@ reset_case() {
   rm -f "$REPO/deploy.md"   # no window rule by default -> just deploy
   unset GH_FAIL MERGE_GATES_SIGNALS_OVERRIDE
   RUNNER=run_drift   # default drift runner; real-git cases opt into run_drift_real
+  ASSUME_CLEAN=1     # harness writes untracked fixtures; the dirty-tree test sets 0
   DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
@@ -74,6 +79,7 @@ run() {
     GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
     MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
     MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
+    MERGE_GATES_ASSUME_CLEAN="${ASSUME_CLEAN:-1}" \
     bash "$TARGET" 2>/dev/null )
 }
 
@@ -244,6 +250,7 @@ run_drift() {  # override-driven: $DB_OVR is the changed-DB-schema list
     MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
     MERGE_GATES_DRIFT_CMD_OVERRIDE="${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" \
     MERGE_GATES_DB_SCHEMA_OVERRIDE="$DB_OVR" \
+    MERGE_GATES_ASSUME_CLEAN="${ASSUME_CLEAN:-1}" \
     bash "$TARGET" 2>/dev/null )
 }
 run_drift_real() {  # real git: no DB/CMD/SIGNALS override; optional $PMBIN on PATH
@@ -253,6 +260,7 @@ run_drift_real() {  # real git: no DB/CMD/SIGNALS override; optional $PMBIN on P
     MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
     GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
     MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
+    MERGE_GATES_ASSUME_CLEAN="${ASSUME_CLEAN:-1}" \
     bash "$TARGET" 2>/dev/null )
 }
 # assert VERDICT line; $2 want, $3 must-not; RUNNER selects run_drift|run_drift_real
@@ -358,6 +366,9 @@ DB_OVR="scripts/check-db-drift.ts drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRI
 git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
 mkdir -p "$REPO/scripts"; printf '// drift checker\n' > "$REPO/scripts/check-db-drift.ts"
 git -C "$REPO" add scripts/check-db-drift.ts 2>/dev/null; git -C "$REPO" commit -q -m "edit drift checker"
+# We committed after reset_case, so refresh the fixture PR head SHA to match local
+# HEAD (otherwise EVAL_HEAD would trail local HEAD and trip the stale-checkout guard).
+printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"login":"author"}}' "$(git -C "$REPO" rev-parse HEAD)" > "$FIX/pull.json"
 check_drift_out "checker-code change -> security NOTE" "NOTE=this PR modifies the drift check's own code"
 rm -f "$REPO/package.json"
 
@@ -544,6 +555,40 @@ printf '%s' '[{"number":1,"head":{"ref":"feat-stale"}}]' > "$FIX/pulls_list.json
 printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"'"$A"'"},"user":{"login":"author"}}' > "$FIX/pull.json"
 check_drift_out "stale checkout vs fetched head -> BLOCK" "GATE4_DRIFT: unverifiable"
 check_drift_out "stale checkout -> names the cause" "is behind the PR head"
+
+# --- Gate 4 round-6: unresolvable head SHA, dirty tree, evaluated-head emission
+# (These run on feature/x so the stubbed PR resolves and HEAD_SHA is populated.)
+
+# GitHub reports a PR head SHA not present locally (fetch failed) -> fail-safe
+# block rather than silently evaluating a different local commit.
+git -C "$REPO" checkout -q -f feature/x 2>/dev/null; git -C "$REPO" clean -fdq 2>/dev/null
+reset_case; RUNNER=run_drift; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+printf '%s' '{"draft":false,"mergeable_state":"clean","head":{"sha":"0000000000000000000000000000000000000000"},"user":{"login":"author"}}' > "$FIX/pull.json"
+check_drift_out "unresolvable PR head SHA -> BLOCK" "GATE4_DRIFT: unverifiable"
+check_drift_out "unresolvable PR head SHA -> named cause" "not present locally"
+rm -f "$REPO/package.json"
+
+# The evaluated head SHA is emitted so the merge step can pin to it.
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "emits GATE4_EVAL_HEAD for merge pinning" "GATE4_EVAL_HEAD:"
+rm -f "$REPO/package.json"
+
+# Dirty working tree at the right commit: an untracked schema file makes the check
+# evaluate code that isn't the committed PR head -> block (ASSUME_CLEAN off).
+git -C "$REPO" checkout -q -f feature/x 2>/dev/null
+git -C "$REPO" clean -fdq 2>/dev/null
+mkdir -p "$REPO/drizzle"; printf 'export const t=1;\n' > "$REPO/drizzle/schema.ts"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "committed schema + check"
+reset_case; RUNNER=run_drift; ASSUME_CLEAN=0
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"login":"author"}}' "$(git -C "$REPO" rev-parse HEAD)" > "$FIX/pull.json"
+printf 'CREATE TABLE dirty (id int);\n' > "$REPO/drizzle/uncommitted.sql"   # untracked, dirty
+check_drift_out "dirty working tree -> BLOCK" "GATE4_DRIFT: unverifiable"
+check_drift_out "dirty working tree -> named cause" "uncommitted or untracked changes"
+git -C "$REPO" clean -fdq 2>/dev/null; rm -f "$REPO/package.json"; rm -rf "$REPO/drizzle"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"

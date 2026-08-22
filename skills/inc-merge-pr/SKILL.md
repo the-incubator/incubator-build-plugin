@@ -197,6 +197,8 @@ Read the `GATE4_DRIFT:` line from the gates block. Per-workspace results appear 
   - The check ran but couldn't reach a database - no `DATABASE_URL`, connection refused, or the 120s timeout fired (enforced with a `SIGTERM`→`SIGKILL` escalation so a client that ignores `TERM` can't outlast it). Per its documented contract the check **refuses to run rather than vouch for a database the deploy never uses**.
   - The package manager isn't installed, or the check crashed for an operational reason (missing dependency, script error) that ran **no** schema comparison - so it is deliberately *not* called drift, and the remediation does not tell you to mutate production.
   - The merge-base diff couldn't be computed (shallow clone, missing `origin/<default>`) in a repo that gates on drift - the file set is undetermined, so the gate blocks rather than assume "no schema changed".
+  - The PR head SHA GitHub reports isn't present locally (a fetch failed) - Gate 4 can't evaluate the commit that will merge, so it blocks rather than silently check a different local commit. Fetch the PR head and re-run.
+  - The local checkout is **behind** the PR head that will merge, or the working tree has **uncommitted/untracked** changes to schema or an affected package - either way the check would run against code that isn't what merges. Pull the PR head / commit or stash, then re-run.
   - **Gate tamper:** a changed schema file's *nearest* owning package defined `db:check-drift` at the **merge base** but no longer does at the PR head - a schema PR trying to delete the very gate meant to evaluate it. This holds even when a broader ancestor package (e.g. the repo root) still defines a check: an unrelated ancestor guard can't vouch for a workspace that deleted its own. (Comparing at the merge base, not the base tip, means a check the *default branch* added after divergence is not mistaken for one this PR removed.) Restore the check (or split the removal into its own non-schema PR) and re-run.
 
   > **Gate 4 BLOCK - drift check could not run.** This repo gates schema changes on a live drift check, but I couldn't get a trustworthy result from here:
@@ -315,13 +317,13 @@ MERGE: <GO | BLOCK - gate(s) N, M>
 
 If `MERGE: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
 
-If `MERGE: GO`, squash-merge the PR into `main`. Use the `PR_NUMBER` from the gates block's `GATE2_HEALTH:` section rather than re-querying.
+If `MERGE: GO`, squash-merge the PR into `main`. Use the `PR_NUMBER` from the gates block's `GATE2_HEALTH:` section rather than re-querying, and **pin the merge to the exact commit the gates evaluated** with `--match-head-commit` using the `GATE4_EVAL_HEAD:` SHA from the gates block. Between the gate pass and this command a new commit could be pushed to the PR branch; without the pin, `gh pr merge` would merge that newer, **unchecked** head. The flag makes GitHub refuse the merge if the head moved - re-run `/inc:merge-pr-5` if it does.
 
 ```bash
-gh pr merge "$PR_NUMBER" --squash --delete-branch
+gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$GATE4_EVAL_HEAD"
 ```
 
-`--delete-branch` removes the remote branch as part of the merge call and then, on the local side, checks out the repo's default branch, pulls, and deletes the local feature ref - so by the time this command returns successfully the working tree is on `main` (or whatever the repo's default branch is) with fresh upstream state. If the user has told you their repo convention is `--merge` or `--rebase`, use that strategy instead of `--squash`; `--delete-branch` rides along the same way.
+(If the gates block reported `GATE4_EVAL_HEAD: unknown` - a repo/edge where the SHA couldn't be resolved - drop the flag but re-read the gates immediately before merging.) `--delete-branch` removes the remote branch as part of the merge call and then, on the local side, checks out the repo's default branch, pulls, and deletes the local feature ref - so by the time this command returns successfully the working tree is on `main` (or whatever the repo's default branch is) with fresh upstream state. If the user has told you their repo convention is `--merge` or `--rebase`, use that strategy instead of `--squash`; `--delete-branch` and `--match-head-commit` ride along the same way.
 
 After the merge returns success, confirm the working tree is on the default branch:
 

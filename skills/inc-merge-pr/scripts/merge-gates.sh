@@ -36,6 +36,8 @@
 #     invocation for Gate 4 with an arbitrary command (drive the gate from a stub)
 #   MERGE_GATES_DB_SCHEMA_OVERRIDE  - inject the changed DB-schema file list for
 #     Gate 4 instead of computing it from the merge-base diff
+#   MERGE_GATES_ASSUME_CLEAN=1  - skip Gate 4's dirty-working-tree guard (the test
+#     harness writes untracked package.json fixtures on purpose)
 #   MERGE_GATES_FRESHNESS_BIN / MERGE_GATES_THREADCACHE_BIN / MERGE_GATES_ENVCHECK_BIN
 #   plus stubbing `gh` / `git` on PATH - drive the gate logic from fixtures.
 
@@ -485,9 +487,17 @@ DB_SCHEMA_RE='(^|/)(migrations?|drizzle|prisma)(/|$)|\.sql(\.ts)?$|(^|/)schema\.
 # teammate pushed after the local checkout) must not be what Gate 4 diffs. Use the
 # PR head SHA from Gate 2 when it is present locally (pre-flight freshness fetched
 # origin/<pr-branch>); otherwise fall back to local HEAD.
-EVAL_HEAD=HEAD
-if [ -n "${HEAD_SHA:-}" ] && git rev-parse -q --verify "$HEAD_SHA^{commit}" >/dev/null 2>&1; then
-  EVAL_HEAD="$HEAD_SHA"
+EVAL_HEAD=HEAD; EVAL_HEAD_MISSING=0
+if [ -n "${HEAD_SHA:-}" ]; then
+  if git rev-parse -q --verify "$HEAD_SHA^{commit}" >/dev/null 2>&1; then
+    EVAL_HEAD="$HEAD_SHA"
+  else
+    # GitHub reported a PR head SHA that isn't in the local repo - a fetch failed
+    # (branch-freshness suppresses fetch errors) while the gh API calls succeeded.
+    # Do NOT silently fall back to local HEAD: the merge targets that remote SHA,
+    # so evaluating a different local commit is unsound. Fail-safe below.
+    EVAL_HEAD_MISSING=1
+  fi
 fi
 # The merge base of that head against the default branch - used for tamper
 # ownership so a check the DEFAULT branch ADDED after divergence isn't mistaken
@@ -530,11 +540,15 @@ fi
 # decide whether an unavailable diff must fail-safe (a drift-gated repo) or stay a
 # no-op (a repo with no check at all).
 repo_exposes_drift() {
-  local pj
-  { echo "package.json"; git ls-files '*package.json' 2>/dev/null | grep -v node_modules; } \
+  # Capture into a var, don't end on `| grep -q`: a trailing grep -q closes the
+  # pipe on first match, SIGPIPE-ing the upstream `while`, and under `pipefail`
+  # that makes this function flakily return non-zero even when a check exists.
+  local pj found=""
+  found=$({ echo "package.json"; git ls-files '*package.json' 2>/dev/null | grep -v node_modules; } \
     | sed 's#^\./##' | awk 'NF && !seen[$0]++' | while IFS= read -r pj; do
       [ -f "$pj" ] && jq -e '(.scripts // {}) | has("db:check-drift")' "$pj" >/dev/null 2>&1 && { echo yes; break; }
-    done | grep -q yes
+    done)
+  [ -n "$found" ]
 }
 
 # Nearest ancestor package dir ("." == repo root) whose package.json defines
@@ -599,10 +613,11 @@ proper_ancestor() {
 # catches the "no HEAD owner at all, base had one" case.
 AFFECTED_PKGS=""; TAMPER=0
 if [ -n "$CHANGED_DB_SCHEMA" ]; then
-  # Head owner reads the working tree when EVAL_HEAD is the local HEAD (the normal
-  # case, and what the tests drive); when EVAL_HEAD is a distinct fetched SHA, read
-  # ownership from that tree so detection and evaluation stay consistent.
-  HO_REF=""; [ "$EVAL_HEAD" != "HEAD" ] && HO_REF="$EVAL_HEAD"
+  # Head owner reads the WORKING TREE in the normal case (EVAL_HEAD resolves to the
+  # local checkout - that's what executes). Only when the checkout is stale
+  # (EVAL_STALE, a distinct fetched SHA) read ownership from that commit's tree, so
+  # a check present only there is still found and routed to the stale-block below.
+  HO_REF=""; [ "$EVAL_STALE" = "1" ] && HO_REF="$EVAL_HEAD"
   # Base owner is compared at the MERGE BASE, not the base tip: a check the default
   # branch added AFTER divergence must not read as one this PR deleted.
   BO_REF="${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}"
@@ -646,7 +661,41 @@ $AFFECTED_PKGS
 EOF
 fi
 
-if [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
+# Dirty working tree at the right commit: EVAL_STALE compares commits only, but
+# the check EXECUTES working-tree files. An uncommitted/untracked edit to a
+# DB-schema file or an affected package makes the result reflect code that isn't
+# what merges. Scope to schema/affected paths so unrelated local dirt doesn't
+# block. Test hook: MERGE_GATES_ASSUME_CLEAN=1 skips this (the harness writes
+# untracked fixtures on purpose).
+WORKTREE_DIRTY=0
+if [ "${MERGE_GATES_ASSUME_CLEAN:-0}" != "1" ] && [ "$EVAL_STALE" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
+  DIRTY=$(git status --porcelain 2>/dev/null)
+  if [ -n "$DIRTY" ]; then
+    printf '%s\n' "$DIRTY" | grep -qiE "$DB_SCHEMA_RE" && WORKTREE_DIRTY=1
+    if [ "$WORKTREE_DIRTY" = "0" ]; then
+      while IFS= read -r pkg; do
+        [ -n "$pkg" ] || continue
+        if [ "$pkg" = "." ]; then WORKTREE_DIRTY=1; break; fi
+        printf '%s\n' "$DIRTY" | grep -qE "(^|[ >])$pkg/" && { WORKTREE_DIRTY=1; break; }
+      done <<EOF
+$AFFECTED_PKGS
+EOF
+    fi
+  fi
+fi
+
+# Surface the exact commit Gate 4 evaluated so the merge step can pin to it
+# (gh pr merge --match-head-commit) and never merge an unchecked newer push.
+EVAL_SHA=$(git rev-parse "$EVAL_HEAD" 2>/dev/null || echo "")
+echo "GATE4_EVAL_HEAD: ${EVAL_SHA:-unknown}"
+
+if [ "$EVAL_HEAD_MISSING" = "1" ] && repo_exposes_drift; then
+  # We don't have the commit that will merge; the diff we computed used a
+  # different local commit and cannot be trusted.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the PR head SHA ${HEAD_SHA:-} reported by GitHub is not present locally (a fetch likely failed); Gate 4 cannot evaluate the commit that will merge. Fetch the PR head and re-run."
+  GATE4_BLOCKED=1
+elif [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
   # The merge-base diff could not be computed (shallow clone, missing
   # origin/<default>). Fail-safe only when this repo actually gates on drift -
   # otherwise the gate stays a clean no-op as it would for any non-drift repo.
@@ -674,6 +723,12 @@ elif [ "$EVAL_STALE" = "1" ]; then
   # A check would run, but the local tree doesn't match the commit that merges.
   echo "GATE4_DRIFT: unverifiable"
   echo "  REASON=the local checkout ($LOCAL_HEAD) is behind the PR head ($EVAL_HEAD) that will merge; the drift check runs in the working tree and would evaluate stale code. Pull the PR head (git pull) and re-run so the check evaluates what actually merges."
+  GATE4_BLOCKED=1
+elif [ "$WORKTREE_DIRTY" = "1" ]; then
+  # Right commit, but uncommitted/untracked schema or checker edits would be what
+  # the check runs against - not the committed code that merges.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the working tree has uncommitted or untracked changes to schema or an affected package; the drift check runs those files, not the committed PR head that merges. Commit or stash them and re-run."
   GATE4_BLOCKED=1
 else
   # Run the drift check in EVERY affected workspace; the worst result wins. A
