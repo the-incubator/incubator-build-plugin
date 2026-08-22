@@ -62,6 +62,7 @@ reset_case() {
   git -C "$REPO" remote set-url origin git@github.com:acme/widgets.git 2>/dev/null
   rm -f "$REPO/deploy.md"   # no window rule by default -> just deploy
   unset GH_FAIL MERGE_GATES_SIGNALS_OVERRIDE
+  RUNNER=run_drift   # default drift runner; real-git cases opt into run_drift_real
   DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
@@ -388,6 +389,67 @@ git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse m
 git -C "$REPO" checkout -q feat-nochange
 reset_case; RUNNER=run_drift_real
 check_drift_out "post-divergence main schema not attributed to PR" "REASON=no database schema files changed in this PR"
+
+# --- Gate 4 round-3: tamper edges, nested classifier, diff fail-safe ----------
+# These mutate git heavily; each starts from the repo's root commit (clean of
+# earlier tests' commits) so package.json/schema state is fully controlled.
+fresh_from_root() {  # $1 = branch name; clean branch off the init commit, origin/main = init
+  local root; root=$(git -C "$REPO" rev-list --max-parents=0 HEAD | tail -1)
+  git -C "$REPO" checkout -q -f "$root" 2>/dev/null
+  git -C "$REPO" clean -fdq 2>/dev/null
+  git -C "$REPO" checkout -q -B "$1" 2>/dev/null
+  git -C "$REPO" update-ref refs/remotes/origin/main "$root"
+}
+
+# Basic tamper: base branch has the only check; this PR removes it while changing
+# schema, and no ancestor covers it -> hard block, not a silent skip.
+fresh_from_root feat-tamper1
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+git -C "$REPO" add package.json 2>/dev/null; git -C "$REPO" commit -q -m "base has check"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" rm -q package.json 2>/dev/null; git -C "$REPO" commit -q -m "remove check"
+reset_case; RUNNER=run_drift; DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
+check_drift "removed sole check -> BLOCK" "gate4-drift"
+check_drift_out "removed sole check -> tamper" "cannot be removed by the same PR"
+
+# Ancestor-fallback tamper: the workspace deletes its OWN check but the repo root
+# still defines one. The root check must NOT authorize the change - the workspace
+# lost its guard, so the file's base owner (workspace) is more specific than its
+# head owner (root) -> tamper, even though root's check passes.
+fresh_from_root feat-tamper2
+mkdir -p "$REPO/apps/web"; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/web/package.json"
+git -C "$REPO" add apps/web/package.json 2>/dev/null; git -C "$REPO" commit -q -m "base workspace check"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+printf '{"scripts":{"build":"tsc"}}' > "$REPO/apps/web/package.json"      # workspace drops its check
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"     # only the root now has one
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "workspace drops check, root keeps one"
+reset_case; RUNNER=run_drift; DB_OVR="apps/web/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift "ancestor-fallback tamper -> BLOCK" "gate4-drift"
+check_drift_out "ancestor-fallback -> gate tamper despite root check" "gate tamper"
+
+# Nested db/schema/ tree (src/db/schema/users.ts) is recognized as DB schema.
+fresh_from_root feat-nested
+mkdir -p "$REPO/src/db/schema"; printf 'export const users = 1;\n' > "$REPO/src/db/schema/users.ts"
+git -C "$REPO" add src/db/schema/users.ts 2>/dev/null; git -C "$REPO" commit -q -m "nested db schema"
+reset_case; RUNNER=run_drift_real; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
+check_drift_out "nested db/schema tree is DB schema (engages)" "REASON=no db:check-drift script covers the changed schema files"
+
+# Diff fail-safe: the merge-base diff cannot be computed (origin/<default> gone).
+# With a check present the gate must BLOCK (unverifiable), not skip to GO.
+fresh_from_root feat-nodiff
+git -C "$REPO" update-ref -d refs/remotes/origin/main 2>/dev/null   # base ref gone -> diff fails
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+git -C "$REPO" add package.json 2>/dev/null
+reset_case; RUNNER=run_drift_real
+check_drift_out "uncomputable diff + check present -> BLOCK" "GATE4_DRIFT: unverifiable"
+check_drift_out "uncomputable diff -> names the cause" "could not compute the merge-base schema diff"
+
+# Same, but no check anywhere -> stays a clean no-op (skip), not a spurious block.
+git -C "$REPO" rm -q --cached package.json 2>/dev/null; rm -f "$REPO/package.json"
+git -C "$REPO" update-ref -d refs/remotes/origin/main 2>/dev/null
+reset_case; RUNNER=run_drift_real
+check_drift_out "uncomputable diff + no check -> skip" "nothing gates on it"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"

@@ -59,18 +59,22 @@ ENVCHECK_BIN="${MERGE_GATES_ENVCHECK_BIN:-$SCRIPT_DIR/check-env-vars.sh}"
 # Returns the command's exit code, or 124 if the deadline fired (matching timeout).
 run_bounded() {
   local secs="$1"; shift
-  if command -v timeout >/dev/null 2>&1; then timeout "$secs" "$@"; return $?; fi
-  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$secs" "$@"; return $?; fi
+  # -k 5: if TERM is caught/ignored, follow with KILL 5s later (a resistant DB
+  # client must not survive the deadline). Same escalation in the bash fallback.
+  if command -v timeout >/dev/null 2>&1; then timeout -k 5 "$secs" "$@"; return $?; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout -k 5 "$secs" "$@"; return $?; fi
   local had_m=0; case "$-" in *m*) had_m=1;; esac
   set -m
+  local fired; fired=$(mktemp)
   "$@" & local cmd_pid=$!
-  { sleep "$secs"; kill -TERM -"$cmd_pid" 2>/dev/null; } >/dev/null 2>&1 & local wd_pid=$!
+  # On deadline: mark fired, TERM the whole group, then KILL 5s later if TERM was
+  # caught/ignored. The marker (not "is the watchdog still alive?") tells us it
+  # fired, since the watchdog now lingers during the KILL grace period.
+  { sleep "$secs"; echo 1 > "$fired"; kill -TERM -"$cmd_pid" 2>/dev/null; sleep 5; kill -KILL -"$cmd_pid" 2>/dev/null; } >/dev/null 2>&1 & local wd_pid=$!
   wait "$cmd_pid" 2>/dev/null; local rc=$?
-  if kill -0 "$wd_pid" 2>/dev/null; then
-    kill -TERM "$wd_pid" 2>/dev/null; wait "$wd_pid" 2>/dev/null   # finished early; reap watchdog
-  else
-    rc=124                                                          # watchdog fired -> timed out
-  fi
+  [ -s "$fired" ] && rc=124                              # deadline fired -> timed out
+  kill -KILL "$wd_pid" 2>/dev/null; wait "$wd_pid" 2>/dev/null   # stop any pending KILL grace
+  rm -f "$fired"
   [ "$had_m" = "0" ] && set +m
   return $rc
 }
@@ -465,12 +469,40 @@ echo "  DIFFSTAT=${DIFFSTAT:-none}"
 # so firing it on a non-DB "schema" file would be a false block. Restrict to real
 # DB-schema conventions: drizzle/prisma/migrations trees, *.sql / *.sql.ts,
 # schema.prisma / schema.sql, and db/-scoped schema modules.
-DB_SCHEMA_RE='(^|/)(migrations?|drizzle|prisma)(/|$)|\.sql(\.ts)?$|(^|/)schema\.(prisma|sql)$|(^|/)db/[^/]*schema[^/]*\.(ts|js|mjs|cjs|sql)$'
+# `db/schema.ts` (single file) and nested `db/schema/**` trees (src/db/schema/
+# users.ts is a common Drizzle layout) both count; a bare `src/schema/*.ts`
+# validation module does not.
+DB_SCHEMA_RE='(^|/)(migrations?|drizzle|prisma)(/|$)|\.sql(\.ts)?$|(^|/)schema\.(prisma|sql)$|(^|/)db/[^/]*schema[^/]*\.(ts|js|mjs|cjs|sql)$|(^|/)db/schema/.*\.(ts|js|mjs|cjs|sql)$'
 
 # What THIS branch changes vs the merge base (three-dot: the diff that will
 # actually be merged) - not a two-dot working-tree-vs-tip diff, which would also
 # pick up schema commits main gained after divergence and read them as this PR's.
-CHANGED_DB_SCHEMA="${MERGE_GATES_DB_SCHEMA_OVERRIDE-$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" 2>/dev/null | grep -iE "$DB_SCHEMA_RE" || true)}"
+# Capture the git exit status separately: `... 2>/dev/null | grep ... || true`
+# would turn a diff that could not be computed (shallow clone, missing
+# origin/<default>) into an empty file set and a false "no schema changed" skip.
+# DB_DIFF_UNAVAILABLE drives a fail-safe block below when a check is present.
+DB_DIFF_UNAVAILABLE=0
+if [ -n "${MERGE_GATES_DB_SCHEMA_OVERRIDE+x}" ]; then
+  CHANGED_DB_SCHEMA="$MERGE_GATES_DB_SCHEMA_OVERRIDE"
+else
+  DB_DIFF_RAW=$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" 2>/dev/null); DB_DIFF_RC=$?
+  if [ "$DB_DIFF_RC" -ne 0 ]; then
+    DB_DIFF_UNAVAILABLE=1; CHANGED_DB_SCHEMA=""
+  else
+    CHANGED_DB_SCHEMA=$(printf '%s\n' "$DB_DIFF_RAW" | grep -iE "$DB_SCHEMA_RE" || true)
+  fi
+fi
+
+# Does the repo expose a db:check-drift script anywhere (HEAD tree)? Used to
+# decide whether an unavailable diff must fail-safe (a drift-gated repo) or stay a
+# no-op (a repo with no check at all).
+repo_exposes_drift() {
+  local pj
+  { echo "package.json"; git ls-files '*package.json' 2>/dev/null | grep -v node_modules; } \
+    | sed 's#^\./##' | awk 'NF && !seen[$0]++' | while IFS= read -r pj; do
+      [ -f "$pj" ] && jq -e '(.scripts // {}) | has("db:check-drift")' "$pj" >/dev/null 2>&1 && { echo yes; break; }
+    done | grep -q yes
+}
 
 # Nearest ancestor package dir ("." == repo root) whose package.json defines
 # db:check-drift. $1 = file path, $2 = git ref ("" == working tree).
@@ -513,17 +545,30 @@ looks_like_drift() {
   printf '%s' "$1" | grep -qiE 'drift detected|schema drift|is missing (a |an )?(column|table|index|constraint|foreign key|enum|sequence|view|type)|missing (column|table|index|constraint|foreign key)|differs from|out of sync|not in sync'
 }
 
+# Is $1 a proper ancestor dir of $2? ("." is an ancestor of everything.)
+proper_ancestor() {
+  [ "$1" != "$2" ] || return 1
+  [ "$1" = "." ] && return 0
+  case "$2" in "$1"/*) return 0;; *) return 1;; esac
+}
+
 # Map each changed DB-schema file to the workspace package that owns its drift
-# check. Collect the affected packages (dedup); flag TAMPER if a changed schema
-# file's owning package DROPPED a check the base branch had.
+# check. Collect the affected packages (dedup). Flag TAMPER whenever a file's
+# BASE owner is more specific than its HEAD owner - i.e. this PR removed the
+# nearest check and any coverage now comes only from a broader ancestor package,
+# which cannot vouch for the workspace whose own guard was deleted. This also
+# catches the "no HEAD owner at all, base had one" case.
 AFFECTED_PKGS=""; TAMPER=0
 if [ -n "$CHANGED_DB_SCHEMA" ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if owner=$(nearest_drift_pkg "$f" ""); then
-      AFFECTED_PKGS="$AFFECTED_PKGS
-$owner"
-    elif nearest_drift_pkg "$f" "origin/$DEFAULT_BRANCH" >/dev/null 2>&1; then
+    ho=$(nearest_drift_pkg "$f" "")                        # head owner (empty if none)
+    bo=$(nearest_drift_pkg "$f" "origin/$DEFAULT_BRANCH")  # base owner (empty if none)
+    [ -n "$ho" ] && AFFECTED_PKGS="$AFFECTED_PKGS
+$ho"
+    # Base had a nearer owner that HEAD no longer has -> the workspace deleted its
+    # own guard (whether or not a broader ancestor still covers it).
+    if [ -n "$bo" ] && { [ -z "$ho" ] || proper_ancestor "$ho" "$bo"; }; then
       TAMPER=1
     fi
   done <<EOF
@@ -537,7 +582,19 @@ CHECK_CODE_CHANGED=0
 git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" 2>/dev/null \
   | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
 
-if [ -z "$CHANGED_DB_SCHEMA" ]; then
+if [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
+  # The merge-base diff could not be computed (shallow clone, missing
+  # origin/<default>). Fail-safe only when this repo actually gates on drift -
+  # otherwise the gate stays a clean no-op as it would for any non-drift repo.
+  if repo_exposes_drift; then
+    echo "GATE4_DRIFT: unverifiable"
+    echo "  REASON=could not compute the merge-base schema diff (shallow clone or origin/$DEFAULT_BRANCH unavailable); cannot tell whether this PR changes schema, and this repo gates on db:check-drift"
+    GATE4_BLOCKED=1
+  else
+    echo "GATE4_DRIFT: skip"
+    echo "  REASON=no db:check-drift script in the repo (schema diff unavailable, but nothing gates on it)"
+  fi
+elif [ -z "$CHANGED_DB_SCHEMA" ]; then
   echo "GATE4_DRIFT: skip"
   echo "  REASON=no database schema files changed in this PR"
 elif [ -z "$AFFECTED_PKGS" ]; then
