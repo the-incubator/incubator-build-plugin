@@ -225,14 +225,16 @@ check "real .sql diff -> schema signal -> risk-confirm" "gate3-risk-confirm"
 check_out "real schema signal emitted" "SIGNALS=schema"
 
 # --- Gate 4: schema drift ------------------------------------------------
-# The drift gate only engages when the repo exposes a `db:check-drift` script
-# AND the diff touches schema. It runs the repo's own read-only check; a stub
-# is injected via MERGE_GATES_DRIFT_CMD_OVERRIDE so no real DB is needed.
+# Gate 4 engages only when the repo exposes a `db:check-drift` script AND the PR
+# changes a DATABASE schema file. Two test hooks keep it hermetic:
+#   MERGE_GATES_DB_SCHEMA_OVERRIDE (via $DB_OVR) injects the changed DB-schema
+#     file list; MERGE_GATES_DRIFT_CMD_OVERRIDE injects the per-package check cmd.
+# Real-git variants (run_drift_real) exercise the classifier + merge-base diff.
 
-# Helper: point the drift override at a stub with a given exit + output.
 mkdrift() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$WORK/drift"; chmod +x "$WORK/drift"; }
-run_drift() {
-  ( cd "$REPO" && PATH="$BIN:$PATH" \
+DB_OVR=""
+run_drift() {  # override-driven: $DB_OVR is the changed-DB-schema list
+  ( cd "$REPO" && PATH="${PMBIN:+$PMBIN:}$BIN:$PATH" \
     MERGE_GATES_FRESHNESS_BIN="$WORK/freshness" \
     MERGE_GATES_THREADCACHE_BIN="$WORK/threadcache" \
     MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
@@ -240,121 +242,152 @@ run_drift() {
     MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
     MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
     MERGE_GATES_DRIFT_CMD_OVERRIDE="${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" \
+    MERGE_GATES_DB_SCHEMA_OVERRIDE="$DB_OVR" \
     bash "$TARGET" 2>/dev/null )
 }
-check_drift() {  # name, want-substring-in-VERDICT, [must-not]
-  local name="$1" want="$2" mustnot="${3:-}" got
-  got=$(run_drift | grep '^VERDICT:' || echo "<no verdict>")
-  if ! printf '%s' "$got" | grep -qF "$want"; then
-    FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"; echo "    got: $got"; return
-  fi
-  if [ -n "$mustnot" ] && printf '%s' "$got" | grep -qF "$mustnot"; then
-    FAIL=$((FAIL+1)); echo "FAIL - $name (must-not matched '$mustnot')"; echo "    got: $got"; return
-  fi
-  PASS=$((PASS+1))
+run_drift_real() {  # real git: no DB/CMD/SIGNALS override; optional $PMBIN on PATH
+  ( cd "$REPO" && PATH="${PMBIN:+$PMBIN:}$BIN:$PATH" \
+    MERGE_GATES_FRESHNESS_BIN="$WORK/freshness" \
+    MERGE_GATES_THREADCACHE_BIN="$WORK/threadcache" \
+    MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
+    GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
+    MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
+    bash "$TARGET" 2>/dev/null )
 }
-check_drift_out() {  # name, want-substring-anywhere
-  local name="$1" want="$2" out
-  out=$(run_drift)   # capture fully first; a `run | grep -q` pipe would SIGPIPE
-                     # the script and pipefail would then mask a real match.
-  if printf '%s\n' "$out" | grep -qF "$want"; then PASS=$((PASS+1))
-  else FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"
-    echo "    got GATE4 lines: $(printf '%s\n' "$out" | grep 'GATE4_DRIFT' | tr '\n' ' ')"; fi
-}
+# assert VERDICT line; $2 want, $3 must-not; RUNNER selects run_drift|run_drift_real
+check_drift() { local n="$1" w="$2" mn="${3:-}" r="${RUNNER:-run_drift}" got
+  got=$($r | grep '^VERDICT:' || echo "<no verdict>")
+  if ! printf '%s' "$got" | grep -qF "$w"; then FAIL=$((FAIL+1)); echo "FAIL - $n"; echo "    want: $w"; echo "    got: $got"; return; fi
+  if [ -n "$mn" ] && printf '%s' "$got" | grep -qF "$mn"; then FAIL=$((FAIL+1)); echo "FAIL - $n (must-not '$mn')"; echo "    got: $got"; return; fi
+  PASS=$((PASS+1)); }
+check_drift_out() { local n="$1" w="$2" r="${RUNNER:-run_drift}" out
+  out=$($r)   # capture fully; a `run | grep -q` pipe would SIGPIPE + pipefail-mask a match
+  if printf '%s\n' "$out" | grep -qF "$w"; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); echo "FAIL - $n"; echo "    want: $w"; echo "    GATE4: $(printf '%s\n' "$out" | grep -E 'GATE4_DRIFT|PKG\[|REASON=|NOTE=' | tr '\n' ' ')"; fi; }
 
-# Common no-op: a non-schema PR (no `schema` signal) never runs the check, even
-# in a repo that exposes one. Clean skip, overall GO.
-reset_case; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
-printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"; MERGE_GATES_SIGNALS_OVERRIDE="none"
-check_drift_out "non-schema PR -> GATE4 skip (no schema)" "REASON=no schema files changed in this diff"
-check_drift "non-schema PR -> GO" "VERDICT: GO"
+# No DB-schema file changed -> clean no-op even with a check present. GO.
+reset_case; unset MERGE_GATES_DRIFT_CMD_OVERRIDE; DB_OVR=""; MERGE_GATES_SIGNALS_OVERRIDE="none"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+check_drift_out "no DB-schema change -> skip" "REASON=no database schema files changed in this PR"
+check_drift "no DB-schema change -> GO" "VERDICT: GO"
 rm -f "$REPO/package.json"
 
-# Schema PR in a repo with NO drift check anywhere (root or workspace, this
-# branch or base) -> clean skip, no gate4 block. (Still NEEDS_DECISION via the
-# generic gate3 schema risk-confirm, which is separate from Gate 4.)
+# DB-schema changed but no check covers it -> clean skip (no gate4 block).
 reset_case; unset MERGE_GATES_DRIFT_CMD_OVERRIDE; rm -f "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"
-check_drift_out "schema PR, no check -> skip" "REASON=no db:check-drift script in any package.json"
-check_drift "schema PR, no check -> no gate4 block" "gate3-risk-confirm" "gate4-drift"
+DB_OVR="apps/web/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check_drift_out "DB-schema, no check -> skip" "REASON=no db:check-drift script covers the changed schema files"
+check_drift "DB-schema, no check -> no gate4 block" "VERDICT: GO" "gate4-drift"
 
-# Root package.json defines the check + schema signal + check passes -> GATE4
-# pass (no drift block; the schema PR is still gate3-risk-confirm).
+# Root check + DB-schema + pass -> GATE4 pass, GO (SIGNALS forced low to isolate).
 reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
-check_drift_out "schema + check passes -> GATE4 pass" "GATE4_DRIFT: pass"
-check_drift "schema + check passes -> no drift block" "gate3-risk-confirm" "gate4-drift"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "check passes -> GATE4 pass" "GATE4_DRIFT: pass"
+check_drift "check passes -> GO" "VERDICT: GO" "gate4-drift"
 rm -f "$REPO/package.json"
 
-# Real drift (production missing a column) -> hard BLOCK with gate4-drift, and
-# the check's own output passes through verbatim.
+# Real drift -> hard BLOCK, output passed through per-package.
 reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
-mkdrift 'echo "Schema drift detected: production is missing column \"plans.plan_id\""; echo "Run db:push against prod, then re-run."; exit 1'
-check_drift "real drift -> BLOCK" "BLOCK" "NEEDS_DECISION"
-check_drift "real drift -> gate4-drift reason" "gate4-drift"
-check_drift_out "real drift -> classified as drift" "GATE4_DRIFT: drift"
-check_drift_out "real drift -> output passed through" 'DRIFT| Schema drift detected'
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'echo "Schema drift detected: production is missing column \"plans.plan_id\""; exit 1'
+check_drift "real drift -> BLOCK" "gate4-drift"
+check_drift_out "real drift -> classified drift" "GATE4_DRIFT: drift"
+check_drift_out "real drift -> output passthrough" 'DRIFT[.]| Schema drift detected'
 rm -f "$REPO/package.json"
 
-# Check cannot run (no DATABASE_URL) -> hard BLOCK, classified unverifiable
-# (honest degraded behavior, not a silent pass).
+# Missing DATABASE_URL -> unverifiable (not silent pass, not false drift).
 reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
 mkdrift 'echo "DATABASE_URL is not set; refuses to run"; exit 1'
-check_drift "missing creds -> BLOCK not GO" "BLOCK" "GO"
-check_drift "missing creds -> gate4-drift reason" "gate4-drift"
-check_drift_out "missing creds -> classified unverifiable" "GATE4_DRIFT: unverifiable"
+check_drift "missing creds -> BLOCK" "gate4-drift"
+check_drift_out "missing creds -> unverifiable" "GATE4_DRIFT: unverifiable"
 rm -f "$REPO/package.json"
 
-# An operational crash (not a drift report) is unverifiable, NOT confirmed drift
-# -> so the remediation never tells the user to push schema to prod off a failure
-# that ran no comparison.
+# Operational crash (not a drift report) -> unverifiable, never confirmed drift.
 reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
-mkdrift 'echo "Error: Cannot find module '"'"'tsx'"'"'"; exit 1'
-check_drift "script crash -> BLOCK" "gate4-drift"
-check_drift_out "script crash -> unverifiable not drift" "GATE4_DRIFT: unverifiable"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'echo "Error: Cannot find module tsx"; exit 1'
+check_drift_out "crash -> unverifiable not drift" "GATE4_DRIFT: unverifiable"
 rm -f "$REPO/package.json"
 
-# Package manager binary missing -> unverifiable block, not misclassified as drift.
+# Package manager binary missing -> unverifiable block.
 reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="definitely-not-a-real-pm-bin-xyz run db:check-drift"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="definitely-not-a-real-pm-bin-xyz run db:check-drift"
 check_drift "missing PM binary -> BLOCK" "gate4-drift"
 check_drift_out "missing PM binary -> unverifiable" "GATE4_DRIFT: unverifiable"
 rm -f "$REPO/package.json"
 
-# Monorepo: the check lives in a workspace package (apps/web/package.json), NOT
-# the repo root. Discovery must find it and run from that directory. This is the
-# incubator-build-app layout the gate exists for - a root-only lookup would skip.
+# Monorepo: check lives in a workspace package (apps/web), discovered by walking
+# up from the changed schema file, and run from that dir.
+reset_case; rm -f "$REPO/package.json"; mkdir -p "$REPO/apps/web"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/web/package.json"
+DB_OVR="apps/web/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "monorepo workspace -> discovered + PKG named" "PKG[apps/web]: pass"
+rm -rf "$REPO/apps"
+
+# Multi-workspace: two independently-deployed packages each with a check, both
+# schemas changed. A pass in one must NOT vouch for the other -> worst wins.
 reset_case; rm -f "$REPO/package.json"
-mkdir -p "$REPO/apps/web"; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/web/package.json"
-git -C "$REPO" add apps/web/package.json 2>/dev/null
-MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
-check_drift_out "monorepo workspace check -> discovered" "GATE4_DRIFT: pass"
-check_drift_out "monorepo workspace check -> PKG named" "PKG=apps/web"
-git -C "$REPO" reset -q 2>/dev/null; rm -rf "$REPO/apps"
+mkdir -p "$REPO/apps/good" "$REPO/apps/bad"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/good/package.json"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/bad/package.json"
+DB_OVR="$(printf 'apps/good/drizzle/schema.ts\napps/bad/drizzle/schema.ts')"
+MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'case "$PWD" in *bad*) echo "Schema drift detected"; exit 1;; *) exit 0;; esac'
+check_drift "multi-workspace, one drifts -> BLOCK" "gate4-drift"
+check_drift_out "multi-workspace -> good passes" "PKG[apps/good]: pass"
+check_drift_out "multi-workspace -> bad drifts" "PKG[apps/bad]: drift"
+check_drift_out "multi-workspace -> worst wins (drift)" "GATE4_DRIFT: drift"
+rm -rf "$REPO/apps"
 
-# `.sql.ts` schema files (Drizzle convention) fire the schema signal - a plain
-# `\.sql$` would miss them. Exercises the real classifier (no SIGNALS override).
-reset_case; unset MERGE_GATES_SIGNALS_OVERRIDE MERGE_GATES_DRIFT_CMD_OVERRIDE
+# Per-package PM: a workspace with its own yarn.lock (no root lockfile) must run
+# under yarn, not fall through to npm. A yarn stub on PATH proves the selection.
+reset_case; unset MERGE_GATES_DRIFT_CMD_OVERRIDE; rm -f "$REPO/package.json"
+mkdir -p "$REPO/apps/api" "$WORK/pmbin"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/api/package.json"
+: > "$REPO/apps/api/yarn.lock"
+printf '#!/usr/bin/env bash\necho "YARN_SELECTED for $*"; exit 1\n' > "$WORK/pmbin/yarn"; chmod +x "$WORK/pmbin/yarn"
+DB_OVR="apps/api/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; PMBIN="$WORK/pmbin"; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
+check_drift_out "per-package PM picks yarn from workspace lockfile" "YARN_SELECTED for run db:check-drift"
+unset PMBIN; rm -rf "$REPO/apps" "$WORK/pmbin"
+
+# Security NOTE: when the PR modifies the checker's own code, surface a review note.
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="scripts/check-db-drift.ts drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+# Give the merge-base diff a checker-file change so CHECK_CODE_CHANGED fires.
 git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
-mkdir -p "$REPO/db"; printf 'export const users = pgTable("users", {});\n' > "$REPO/db/users.sql.ts"
-git -C "$REPO" add db/users.sql.ts 2>/dev/null; git -C "$REPO" commit -q -m "add users.sql.ts"
-check_drift_out "*.sql.ts fires schema signal" "SIGNALS=schema"
+mkdir -p "$REPO/scripts"; printf '// drift checker\n' > "$REPO/scripts/check-db-drift.ts"
+git -C "$REPO" add scripts/check-db-drift.ts 2>/dev/null; git -C "$REPO" commit -q -m "edit drift checker"
+check_drift_out "checker-code change -> security NOTE" "NOTE=this PR modifies the drift check's own code"
+rm -f "$REPO/package.json"
 
-# Tamper: base branch defines the check but this PR's tree removed it while
-# changing schema -> hard block, never a silent skip (a schema PR must not be
-# able to delete the gate meant to evaluate it).
-reset_case; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
+# --- Real-git classifier + merge-base (fresh branches to avoid earlier commits) ---
+# GraphQL / validation "schema" files are NOT database schema -> Gate 4 skips.
+git -C "$REPO" checkout -q -B feat-graphql main
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
+printf 'type User { id: ID! }\n' > "$REPO/schema.graphql"
+git -C "$REPO" add schema.graphql 2>/dev/null; git -C "$REPO" commit -q -m "add graphql schema"
+reset_case; RUNNER=run_drift_real
+check_drift_out "graphql schema is not DB schema -> skip" "REASON=no database schema files changed in this PR"
+
+# A Drizzle schema file IS database schema -> Gate 4 engages (here: no check -> skip-for-no-check, proving it got past the classifier).
+git -C "$REPO" checkout -q -B feat-drizzle main
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
+mkdir -p "$REPO/drizzle"; printf 'export const t = 1;\n' > "$REPO/drizzle/schema.ts"
+git -C "$REPO" add drizzle/schema.ts 2>/dev/null; git -C "$REPO" commit -q -m "add drizzle schema"
+reset_case; RUNNER=run_drift_real
+check_drift_out "drizzle schema engages classifier" "REASON=no db:check-drift script covers the changed schema files"
+rm -rf "$REPO/drizzle"
+
+# Merge-base scope: a schema commit main gained AFTER divergence must not be
+# attributed to this PR (three-dot diff, not two-dot working-tree-vs-tip).
+git -C "$REPO" checkout -q -B feat-nochange main            # branch has no schema change
 git -C "$REPO" checkout -q main
-printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
-git -C "$REPO" add package.json 2>/dev/null; git -C "$REPO" commit -q -m "base has drift check"
+printf 'CREATE TABLE late (id int);\n' > "$REPO/late.sql"    # schema lands on main after divergence
+git -C "$REPO" add late.sql 2>/dev/null; git -C "$REPO" commit -q -m "late schema on main"
 git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse main)"
-git -C "$REPO" checkout -q feature/x; rm -f "$REPO/package.json"
-MERGE_GATES_SIGNALS_OVERRIDE="schema"
-check_drift "gate self-deletion -> BLOCK" "gate4-drift"
-check_drift_out "gate self-deletion -> unverifiable tamper" "the drift gate cannot be removed by the same PR"
+git -C "$REPO" checkout -q feat-nochange
+reset_case; RUNNER=run_drift_real
+check_drift_out "post-divergence main schema not attributed to PR" "REASON=no database schema files changed in this PR"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"
