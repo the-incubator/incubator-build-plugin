@@ -3,7 +3,8 @@
 # single structured verdict block.
 #
 # Replaces ~12 separate model-mediated Bash calls (freshness, env vars, the four
-# Gate 2 sub-checks, Gate 3 signals) with one call the orchestrator reads once.
+# Gate 2 sub-checks, the conditional Gate 4 schema-drift check, Gate 3 signals)
+# with one call the orchestrator reads once.
 # The script does the deterministic work; the SKILL.md keeps only the branches
 # that need judgment (env-var paste confirmation, unresolved-thread handling,
 # evaluating a configured deploy-window rule against the clock). Deploy-observation
@@ -31,6 +32,14 @@
 #   MERGE_GATES_DOW_OVERRIDE / MERGE_GATES_HOUR_OVERRIDE  - inject day/hour
 #   MERGE_GATES_SIGNALS_OVERRIDE  - inject the Gate 3 risk signals ("none" or a
 #     space-separated list) instead of computing them from the diff
+#   MERGE_GATES_DRIFT_CMD_OVERRIDE  - replace the detected `<pm> run db:check-drift`
+#     invocation for Gate 4 with an arbitrary command (drive the gate from a stub)
+#   MERGE_GATES_DB_SCHEMA_OVERRIDE  - inject the changed DB-schema file list for
+#     Gate 4 instead of computing it from the merge-base diff
+#   MERGE_GATES_ASSUME_CLEAN=1  - skip Gate 4's dirty-working-tree guard (the test
+#     harness writes untracked package.json fixtures on purpose)
+#   MERGE_GATES_GATE4_BUDGET_SECS  - override the global wall-clock budget shared
+#     across per-workspace drift checks (default 420; 0 forces the deadline path)
 #   MERGE_GATES_FRESHNESS_BIN / MERGE_GATES_THREADCACHE_BIN / MERGE_GATES_ENVCHECK_BIN
 #   plus stubbing `gh` / `git` on PATH - drive the gate logic from fixtures.
 
@@ -46,12 +55,55 @@ FRESHNESS_BIN="${MERGE_GATES_FRESHNESS_BIN:-$SHARED/branch-freshness}"
 THREADCACHE_BIN="${MERGE_GATES_THREADCACHE_BIN:-$SHARED/gh-thread-cache}"
 ENVCHECK_BIN="${MERGE_GATES_ENVCHECK_BIN:-$SCRIPT_DIR/check-env-vars.sh}"
 
+# run_bounded SECS CMD... - run a command under a wall-clock limit, portably.
+# Prefers coreutils `timeout`/`gtimeout`; on stock macOS (neither installed) it
+# falls back to a bash watchdog that puts the command in its own process group
+# (`set -m`) and SIGTERMs the whole group - so an unreachable-DB drift check that
+# spawns a grandchild client can't outlive the deadline and wedge the gate pass.
+# Returns the command's exit code, or 124 if the deadline fired (matching timeout).
+run_bounded() {
+  local secs="$1"; shift
+  # -k 5: if TERM is caught/ignored, follow with KILL 5s later (a resistant DB
+  # client must not survive the deadline). Same escalation in the bash fallback.
+  if command -v timeout >/dev/null 2>&1; then timeout -k 5 "$secs" "$@"; return $?; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout -k 5 "$secs" "$@"; return $?; fi
+  local had_m=0; case "$-" in *m*) had_m=1;; esac
+  set -m
+  local fired; fired=$(mktemp)
+  "$@" & local cmd_pid=$!
+  # On deadline: mark fired, TERM the whole group, then KILL 5s later if TERM was
+  # caught/ignored. The marker (not "is the watchdog still alive?") tells us it
+  # fired, since the watchdog now lingers during the KILL grace period.
+  { sleep "$secs"; echo 1 > "$fired"; kill -TERM -"$cmd_pid" 2>/dev/null; sleep 5; kill -KILL -"$cmd_pid" 2>/dev/null; } >/dev/null 2>&1 & local wd_pid=$!
+  wait "$cmd_pid" 2>/dev/null; local rc=$?
+  [ -s "$fired" ] && rc=124                              # deadline fired -> timed out
+  # KILL the ENTIRE process group before returning. When the leader exits on TERM
+  # but a DB-client descendant ignores it, that descendant would otherwise keep
+  # the command-substitution output pipe open and hang the caller past both
+  # deadlines. Signalling the group (-cmd_pid, valid while any member lives)
+  # reaps it now rather than cancelling the watchdog and hoping.
+  kill -KILL -"$cmd_pid" 2>/dev/null
+  kill -KILL "$wd_pid" 2>/dev/null; wait "$wd_pid" 2>/dev/null   # reap the watchdog itself
+  rm -f "$fired"
+  [ "$had_m" = "0" ] && set +m
+  return $rc
+}
+
+# Normalize to the repository root so every relative path (package.json,
+# deploy.md, `git status`, schema paths) resolves the same way regardless of the
+# subdirectory `/inc:merge-pr-5` was invoked from. Git reports repo-root-relative
+# paths, so the working-tree lookups must run from the root too. The plugin-helper
+# paths above are absolute and unaffected.
+MG_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+[ -n "$MG_TOPLEVEL" ] && cd "$MG_TOPLEVEL" 2>/dev/null || true
+
 echo "=== MERGE GATES ==="
 
 # Per-gate blocked flags drive the verdict. 1 = this gate blocks the merge.
 PREFLIGHT_BLOCKED=0   # default-branch, path overlap, or freshness error
 GATE1_BLOCKED=0       # new env vars, or env-check could not run
 GATE2_BLOCKED=0       # draft / CI / threads / mergeable / could not verify
+GATE4_BLOCKED=0       # schema drift vs production, or drift check could not run
 OVERLAP=""
 
 # ---------------------------------------------------------------------------
@@ -330,8 +382,13 @@ esac
 # Risk signals (always collected; consumed by the orchestrator on a closed window).
 SIGNALS=""
 [ "$ENV_STATUS" = "warn" ] && SIGNALS="$SIGNALS env"
-git diff --name-only "origin/$DEFAULT_BRANCH" 2>/dev/null \
-  | grep -iqE '(^|/)(schema|migrations?|drizzle|prisma)(/|\.|$)|\.sql$' && SIGNALS="$SIGNALS schema"
+# Schema-touching files in this diff. `.sql.ts` is included because Drizzle
+# projects name schema files like `users.sql.ts` (the repo's own
+# inc-commit-push-pr SKILL calls this out as the most common drift case), and a
+# plain `\.sql$` alone would miss them. This list is reused by Gate 4 below.
+CHANGED_SCHEMA=$(git diff --name-only "origin/$DEFAULT_BRANCH" 2>/dev/null \
+  | grep -iE '(^|/)(schema|migrations?|drizzle|prisma)(/|\.|$)|\.sql(\.ts)?$' || true)
+[ -n "$CHANGED_SCHEMA" ] && SIGNALS="$SIGNALS schema"
 git diff "origin/$DEFAULT_BRANCH" 2>/dev/null \
   | grep -iqE 'backfill|sync[_-]?job|seed|populate|one[-_ ]time|migration[_-]?script' && SIGNALS="$SIGNALS backfill"
 DIFFSTAT=$(git diff --stat "origin/$DEFAULT_BRANCH" 2>/dev/null | tail -1)
@@ -366,6 +423,420 @@ echo "  SIGNALS=$SIGNALS"
 echo "  DIFFSTAT=${DIFFSTAT:-none}"
 
 # ---------------------------------------------------------------------------
+# Gate 4: schema drift vs production (conditional; hard block on drift)
+# ---------------------------------------------------------------------------
+# Generic across projects: this gate only engages when the target repo actually
+# exposes a drift check - a `db:check-drift` script in a package.json (the
+# convention the incubator-build-app guard established) - AND this PR changes a
+# DATABASE schema file. A schema change must never squash-merge while
+# production's database still lacks it, so we run the repo's own read-only drift
+# check here, at the merge decision, not only at build/deploy.
+#
+# The DB-schema classifier is deliberately narrower than the gate-3 `schema` risk
+# word: a hard, credential-requiring gate must not fire on non-database "schema"
+# files (schema.graphql, a validation-schema module). Any repo without the
+# script, or any PR that changes no DB-schema file, is a clean no-op
+# (GATE4_DRIFT: skip) - non-schema PRs cannot introduce drift, and forcing every
+# merge to reach a live database would block unrelated work in credential-less
+# environments for no safety gain.
+#
+# Diff scope: files are taken from the three-dot merge-base diff (what will
+# actually be merged), so a schema commit main gained after divergence is not
+# misread as this PR's change.
+#
+# Monorepo-aware: the script often lives in the schema-owning workspace package
+# (e.g. apps/web/package.json), not the repo root. Each changed DB-schema file is
+# mapped to the nearest package that owns its check, and EVERY affected workspace
+# is run (worst result wins) - a passing workspace must not vouch for a second
+# whose database drifts. The package manager is resolved per package (nearest
+# lockfile / packageManager field), not assumed from a shared root lockfile.
+# Tamper-aware: if a changed schema file's owning package DROPPED a check the base
+# branch had, that is a schema PR deleting its own gate - hard block, never a
+# silent skip.
+#
+# The check runs the repo's own command, so it needs whatever DATABASE_URL that
+# command needs, pointed at whatever database that environment provides - this
+# gate confirms the schema matches THAT database, and cannot itself prove the
+# connection targets production (see the SKILL.md caveat). Per its documented
+# contract the check refuses to run (non-zero) rather than checking a database
+# the deploy never uses - so a merge environment that lacks the credentials fails
+# loudly (GATE4_DRIFT: unverifiable) instead of passing silently. Real drift and
+# any unrunnable/ambiguous outcome are both hard blocks; only the message
+# differs, and only an output that positively reads as a drift report is worded
+# as confirmed drift (so an operational crash never tells the user to mutate
+# production). Read-only: the check never writes to the database.
+#
+# SECURITY NOTE: this gate is the one gate that executes the repo's OWN code
+# (the db:check-drift script) with whatever DATABASE_URL the merge environment
+# carries. Running an unmerged PR's checker/schema against a production
+# connection is a real trust boundary - a maintainer merging an untrusted
+# contributor's schema PR should review the check-script and schema changes
+# before trusting the result. We surface a NOTE when the PR modifies the
+# checker's own code; the SKILL.md security note documents the posture. We do not
+# re-architect the check into isolated CI here: this skill is a local,
+# maintainer-run merge tool and by design runs the repo's own commands.
+#
+# Test hooks: MERGE_GATES_DRIFT_CMD_OVERRIDE replaces the detected package-manager
+# invocation with an arbitrary command (run once per affected package, in that
+# package's directory); MERGE_GATES_DB_SCHEMA_OVERRIDE injects the changed
+# DB-schema file list instead of computing it from the diff.
+
+# Database-schema classifier - deliberately NARROWER than the gate-3 `schema`
+# risk word, which also matches non-database files (schema.graphql, a
+# src/schema/*.ts validation module). Gate 4 is a hard, credential-requiring gate,
+# so firing it on a non-DB "schema" file would be a false block. Restrict to real
+# DB-schema conventions: drizzle/prisma/migrations trees, *.sql / *.sql.ts,
+# schema.prisma / schema.sql, and db/-scoped schema modules.
+# `db/schema.ts` (single file) and nested `db/schema/**` trees (src/db/schema/
+# users.ts is a common Drizzle layout) both count; a bare `src/schema/*.ts`
+# validation module does not.
+DB_SCHEMA_RE='(^|/)(migrations?|drizzle|prisma)(/|$)|\.sql(\.ts)?$|(^|/)schema\.(prisma|sql)$|(^|/)db/[^/]*schema[^/]*\.(ts|js|mjs|cjs|sql)$|(^|/)db/schema/.*\.(ts|js|mjs|cjs|sql)$'
+
+# Evaluate the commit that will ACTUALLY merge. Gate 2 verified the fetched PR
+# head SHA and `gh pr merge` merges that remote ref, so a stale local HEAD (a
+# teammate pushed after the local checkout) must not be what Gate 4 diffs. Use the
+# PR head SHA from Gate 2 when it is present locally (pre-flight freshness fetched
+# origin/<pr-branch>); otherwise fall back to local HEAD.
+EVAL_HEAD=HEAD; EVAL_HEAD_MISSING=0
+if [ -n "${HEAD_SHA:-}" ]; then
+  if git rev-parse -q --verify "$HEAD_SHA^{commit}" >/dev/null 2>&1; then
+    EVAL_HEAD="$HEAD_SHA"
+  else
+    # GitHub reported a PR head SHA that isn't in the local repo - a fetch failed
+    # (branch-freshness suppresses fetch errors) while the gh API calls succeeded.
+    # Do NOT silently fall back to local HEAD: the merge targets that remote SHA,
+    # so evaluating a different local commit is unsound. Fail-safe below.
+    EVAL_HEAD_MISSING=1
+  fi
+fi
+# The merge base of that head against the default branch - used for tamper
+# ownership so a check the DEFAULT branch ADDED after divergence isn't mistaken
+# for one this PR deleted.
+DB_MERGE_BASE=$(git merge-base "origin/$DEFAULT_BRANCH" "$EVAL_HEAD" 2>/dev/null || echo "")
+
+# Detection reads EVAL_HEAD, but the drift command EXECUTES in the working tree.
+# If EVAL_HEAD is a fetched SHA that differs from the local checkout, running the
+# local (stale) checker could vouch for the wrong schema. EVAL_STALE turns the
+# execution into an unverifiable block below (detection stays correct regardless).
+LOCAL_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+EVAL_STALE=0
+if [ "$EVAL_HEAD" != "HEAD" ]; then
+  EVAL_RESOLVED=$(git rev-parse "$EVAL_HEAD^{commit}" 2>/dev/null || echo "")
+  [ -n "$EVAL_RESOLVED" ] && [ -n "$LOCAL_HEAD" ] && [ "$EVAL_RESOLVED" != "$LOCAL_HEAD" ] && EVAL_STALE=1
+fi
+
+# What EVAL_HEAD changes vs the merge base (three-dot: the diff that will actually
+# be merged) - not a two-dot working-tree-vs-tip diff, which would also pick up
+# schema commits main gained after divergence and read them as this PR's.
+# `--no-renames` so a schema file renamed OUT of a recognized tree (e.g.
+# drizzle/schema.ts -> archive/schema.ts.bak) still surfaces the old DB path as a
+# deletion, engaging the gate. Capture the git exit status separately: a
+# `... 2>/dev/null | grep ... || true` would turn a diff that could not be
+# computed (shallow clone, missing origin/<default>) into an empty file set and a
+# false "no schema changed" skip. DB_DIFF_UNAVAILABLE drives a fail-safe block.
+DB_DIFF_UNAVAILABLE=0
+if [ -n "${MERGE_GATES_DB_SCHEMA_OVERRIDE+x}" ]; then
+  CHANGED_DB_SCHEMA="$MERGE_GATES_DB_SCHEMA_OVERRIDE"
+else
+  DB_DIFF_RAW=$(git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null); DB_DIFF_RC=$?
+  if [ "$DB_DIFF_RC" -ne 0 ]; then
+    DB_DIFF_UNAVAILABLE=1; CHANGED_DB_SCHEMA=""
+  else
+    CHANGED_DB_SCHEMA=$(printf '%s\n' "$DB_DIFF_RAW" | grep -iE "$DB_SCHEMA_RE" || true)
+  fi
+fi
+
+# Does the repo expose a db:check-drift script anywhere (HEAD tree)? Used to
+# decide whether an unavailable diff must fail-safe (a drift-gated repo) or stay a
+# no-op (a repo with no check at all).
+repo_exposes_drift() {
+  # Capture into a var, don't end on `| grep -q`: a trailing grep -q closes the
+  # pipe on first match, SIGPIPE-ing the upstream `while`, and under `pipefail`
+  # that makes this function flakily return non-zero even when a check exists.
+  # Scan the working tree AND the EVAL_HEAD / merge-base trees: when the diff is
+  # unavailable the fetched head that will merge may introduce db:check-drift even
+  # though the (possibly stale) working tree has none, so a working-tree-only look
+  # would wrongly report "no gate" and skip.
+  local pj found=""
+  found=$({ echo "package.json"; git ls-files '*package.json' 2>/dev/null | grep -v node_modules; } \
+    | sed 's#^\./##' | awk 'NF && !seen[$0]++' | while IFS= read -r pj; do
+      [ -f "$pj" ] && jq -e '(.scripts // {}) | has("db:check-drift")' "$pj" >/dev/null 2>&1 && { echo yes; break; }
+    done)
+  if [ -z "$found" ]; then
+    local ref
+    for ref in "$EVAL_HEAD" "${DB_MERGE_BASE:-}"; do
+      [ -n "$ref" ] || continue
+      found=$(git ls-tree -r "$ref" --name-only 2>/dev/null | grep -E '(^|/)package\.json$' | grep -v node_modules \
+        | while IFS= read -r pj; do
+          git show "$ref:$pj" 2>/dev/null | jq -e '(.scripts // {}) | has("db:check-drift")' >/dev/null 2>&1 && { echo yes; break; }
+        done)
+      [ -n "$found" ] && break
+    done
+  fi
+  [ -n "$found" ]
+}
+
+# Nearest ancestor package dir ("." == repo root) whose package.json defines
+# db:check-drift. $1 = file path, $2 = git ref ("" == working tree).
+nearest_drift_pkg() {
+  local d ref="$2" rel nd; d=$(dirname "$1")
+  while :; do
+    rel="$d/package.json"; rel="${rel#./}"
+    if [ -z "$ref" ]; then
+      [ -f "$rel" ] && jq -e '(.scripts // {}) | has("db:check-drift")' "$rel" >/dev/null 2>&1 && { echo "$d"; return 0; }
+    else
+      git show "$ref:$rel" 2>/dev/null | jq -e '(.scripts // {}) | has("db:check-drift")' >/dev/null 2>&1 && { echo "$d"; return 0; }
+    fi
+    [ "$d" = "." ] && break
+    nd=$(dirname "$d"); [ "$nd" = "$d" ] && break; d="$nd"
+  done
+  return 1
+}
+
+# Package manager for a given package dir: nearest lockfile / packageManager field
+# walking up from the package - a workspace may carry its own, distinct from root.
+detect_pm_for() {
+  local d="${1:-.}" pm nd
+  while :; do
+    if [ -f "$d/pnpm-lock.yaml" ]; then echo pnpm; return; fi
+    if [ -f "$d/yarn.lock" ]; then echo yarn; return; fi
+    if [ -f "$d/bun.lockb" ] || [ -f "$d/bun.lock" ]; then echo bun; return; fi
+    if [ -f "$d/package-lock.json" ]; then echo npm; return; fi
+    if [ -f "$d/package.json" ]; then
+      pm=$(jq -r '.packageManager // empty' "$d/package.json" 2>/dev/null | sed -E 's/@.*//')
+      case "$pm" in pnpm|yarn|bun|npm) echo "$pm"; return;; esac
+    fi
+    [ "$d" = "." ] && break
+    nd=$(dirname "$d"); [ "$nd" = "$d" ] && break; d="$nd"
+  done
+  echo npm
+}
+
+# Does an output positively read as a drift report (vs an operational failure)?
+# Guard against negated ("No schema drift detected") and error-context ("Schema
+# drift check failed: DATABASE_URL is not set") phrasings that contain the drift
+# keywords but describe the opposite or a failure - misreading those would tell
+# the user to push schema to production off a run that found nothing / never ran.
+looks_like_drift() {
+  local o="$1"
+  printf '%s' "$o" | grep -qiE 'no (schema )?drift|drift check (failed|error|could not|errored)|(failed|unable|could not) to (run|connect|check|introspect)|error:' && return 1
+  printf '%s' "$o" | grep -qiE 'drift detected|is missing (a |an )?(column|table|index|constraint|foreign key|enum|sequence|view|type)|missing (column|table|index|constraint|foreign key)|differs from (schema|the schema|expected)|out of sync|not in sync'
+}
+
+# Is $1 a proper ancestor dir of $2? ("." is an ancestor of everything.)
+proper_ancestor() {
+  [ "$1" != "$2" ] || return 1
+  [ "$1" = "." ] && return 0
+  case "$2" in "$1"/*) return 0;; *) return 1;; esac
+}
+
+# Map each changed DB-schema file to the workspace package that owns its drift
+# check. Collect the affected packages (dedup). Flag TAMPER whenever a file's
+# BASE owner is more specific than its HEAD owner - i.e. this PR removed the
+# nearest check and any coverage now comes only from a broader ancestor package,
+# which cannot vouch for the workspace whose own guard was deleted. This also
+# catches the "no HEAD owner at all, base had one" case.
+AFFECTED_PKGS=""; TAMPER=0
+if [ -n "$CHANGED_DB_SCHEMA" ]; then
+  # Head owner reads the WORKING TREE in the normal case (EVAL_HEAD resolves to the
+  # local checkout - that's what executes). Only when the checkout is stale
+  # (EVAL_STALE, a distinct fetched SHA) read ownership from that commit's tree, so
+  # a check present only there is still found and routed to the stale-block below.
+  HO_REF=""; [ "$EVAL_STALE" = "1" ] && HO_REF="$EVAL_HEAD"
+  # Base owner is compared at the MERGE BASE, not the base tip: a check the default
+  # branch added AFTER divergence must not read as one this PR deleted.
+  BO_REF="${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    ho=$(nearest_drift_pkg "$f" "$HO_REF")   # head owner (empty if none)
+    bo=$(nearest_drift_pkg "$f" "$BO_REF")   # merge-base owner (empty if none)
+    [ -n "$ho" ] && AFFECTED_PKGS="$AFFECTED_PKGS
+$ho"
+    # Tamper only when the schema file itself STILL EXISTS at the head: a file that
+    # was deleted (e.g. an entire workspace directory renamed, so --no-renames
+    # lists the old path as a deletion) carries no live dependency, and the moved
+    # schema's new path gets its own owner check. Deciding tamper on a vanished
+    # path would make legitimate workspace moves unmergeable. A schema file that
+    # persists while its nearest check was removed is the real gate-deletion case.
+    f_at_head=0
+    if [ -z "$HO_REF" ]; then [ -f "$f" ] && f_at_head=1
+    else git cat-file -e "$EVAL_HEAD:$f" 2>/dev/null && f_at_head=1; fi
+    # A nearer owner existed at the merge base that HEAD no longer has -> this PR
+    # deleted the workspace's own guard (even if a broader ancestor still covers it).
+    if [ "$f_at_head" = "1" ] && [ -n "$bo" ] && { [ -z "$ho" ] || proper_ancestor "$ho" "$bo"; }; then
+      TAMPER=1
+    fi
+  done <<EOF
+$CHANGED_DB_SCHEMA
+EOF
+fi
+AFFECTED_PKGS=$(printf '%s\n' "$AFFECTED_PKGS" | awk 'NF && !seen[$0]++')
+
+# Note when the PR changes the checker's own code (runs with the ambient
+# DATABASE_URL). Two signals: (a) a changed file whose path looks like the
+# checker, and (b) the more reliable one - an affected package's db:check-drift
+# script VALUE differs between the merge base and EVAL_HEAD (an in-place
+# entrypoint change a path heuristic can't see).
+CHECK_CODE_CHANGED=0
+CHANGED_ALL=$(git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null || true)
+printf '%s\n' "$CHANGED_ALL" | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
+drift_script_val() {  # $1 = package dir ("." = root), $2 = git ref
+  local rel="$1/package.json"; rel="${rel#./}"
+  git show "$2:$rel" 2>/dev/null | jq -r '(.scripts // {})["db:check-drift"] // ""' 2>/dev/null
+}
+if [ "$CHECK_CODE_CHANGED" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    bv=$(drift_script_val "$pkg" "${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}")
+    hv=$(drift_script_val "$pkg" "$EVAL_HEAD")
+    # (a) the entrypoint command itself changed, or (b) a stable entrypoint whose
+    # own script file the PR edits (value unchanged, filename lacks the keywords):
+    # resolve the script path(s) the command runs and check if they were touched.
+    if [ "$bv" != "$hv" ]; then CHECK_CODE_CHANGED=1; break; fi
+    reld="$pkg"; [ "$reld" = "." ] && reld=""
+    for tok in $hv; do
+      case "$tok" in
+        *.ts|*.js|*.mjs|*.cjs)
+          f="$tok"; [ -n "$reld" ] && f="$reld/$tok"; f=${f#./}
+          printf '%s\n' "$CHANGED_ALL" | grep -qxF "$f" && { CHECK_CODE_CHANGED=1; break; } ;;
+      esac
+    done
+    [ "$CHECK_CODE_CHANGED" = "1" ] && break
+  done <<EOF
+$AFFECTED_PKGS
+EOF
+fi
+
+# Dirty working tree at the right commit: EVAL_STALE compares commits only, but
+# the check EXECUTES working-tree files. Any uncommitted/untracked change makes
+# the result reflect code that isn't what merges - and scoping to schema/affected
+# paths is unsound because a checker can import shared code from anywhere in the
+# repo (e.g. apps/api's script running ../../scripts/check-drift.js). So require
+# the WHOLE tree clean while the gate runs. Test hook: MERGE_GATES_ASSUME_CLEAN=1
+# skips this (the harness writes untracked fixtures on purpose).
+WORKTREE_DIRTY=0
+if [ "${MERGE_GATES_ASSUME_CLEAN:-0}" != "1" ] && [ "$EVAL_STALE" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
+  [ -n "$(git status --porcelain 2>/dev/null)" ] && WORKTREE_DIRTY=1
+fi
+
+# Surface the exact commit Gate 4 evaluated so the merge step can pin to it
+# (gh pr merge --match-head-commit) and never merge an unchecked newer push.
+EVAL_SHA=$(git rev-parse "$EVAL_HEAD" 2>/dev/null || echo "")
+echo "GATE4_EVAL_HEAD: ${EVAL_SHA:-unknown}"
+
+if [ "$EVAL_HEAD_MISSING" = "1" ]; then
+  # We don't have the commit that will merge; the diff we computed used a
+  # different local commit and cannot be trusted. Block UNCONDITIONALLY (not gated
+  # on the local tree exposing a check): the unavailable head could itself
+  # introduce both a schema change and the db:check-drift script, which the older
+  # local tree can't reveal. A failed fetch behind a resolvable API SHA is a real
+  # inconsistency worth surfacing regardless.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the PR head SHA ${HEAD_SHA:-} reported by GitHub is not present locally (a fetch likely failed); Gate 4 cannot evaluate the commit that will merge. Fetch the PR head and re-run."
+  GATE4_BLOCKED=1
+elif [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
+  # The merge-base diff could not be computed (shallow clone, missing
+  # origin/<default>). Fail-safe only when this repo actually gates on drift -
+  # otherwise the gate stays a clean no-op as it would for any non-drift repo.
+  if repo_exposes_drift; then
+    echo "GATE4_DRIFT: unverifiable"
+    echo "  REASON=could not compute the merge-base schema diff (shallow clone or origin/$DEFAULT_BRANCH unavailable); cannot tell whether this PR changes schema, and this repo gates on db:check-drift"
+    GATE4_BLOCKED=1
+  else
+    echo "GATE4_DRIFT: skip"
+    echo "  REASON=no db:check-drift script in the repo (schema diff unavailable, but nothing gates on it)"
+  fi
+elif [ -z "$CHANGED_DB_SCHEMA" ]; then
+  echo "GATE4_DRIFT: skip"
+  echo "  REASON=no database schema files changed in this PR"
+elif [ -z "$AFFECTED_PKGS" ]; then
+  if [ "$TAMPER" = "1" ]; then
+    echo "GATE4_DRIFT: unverifiable"
+    echo "  REASON=base branch defines db:check-drift for the changed schema but this PR's tree no longer does; the drift gate cannot be removed by the same PR it should evaluate"
+    GATE4_BLOCKED=1
+  else
+    echo "GATE4_DRIFT: skip"
+    echo "  REASON=no db:check-drift script covers the changed schema files"
+  fi
+elif [ "$EVAL_STALE" = "1" ]; then
+  # A check would run, but the local tree doesn't match the commit that merges.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the local checkout ($LOCAL_HEAD) is behind the PR head ($EVAL_HEAD) that will merge; the drift check runs in the working tree and would evaluate stale code. Pull the PR head (git pull) and re-run so the check evaluates what actually merges."
+  GATE4_BLOCKED=1
+elif [ "$WORKTREE_DIRTY" = "1" ]; then
+  # Right commit, but the check runs the working tree - any uncommitted/untracked
+  # change (a checker can import shared code from anywhere) means it evaluates
+  # code that isn't the committed PR head that merges.
+  echo "GATE4_DRIFT: unverifiable"
+  echo "  REASON=the working tree is not clean (uncommitted or untracked changes); the drift check runs the working tree, so it must exactly match the committed PR head. Commit or stash all changes and re-run."
+  GATE4_BLOCKED=1
+else
+  # Run the drift check in EVERY affected workspace; the worst result wins. A
+  # single passing workspace must not vouch for a second whose database drifts.
+  WORST="pass"; DETAIL=""
+  if [ "$TAMPER" = "1" ]; then WORST="unverifiable"; GATE4_BLOCKED=1
+    DETAIL="  REASON=a changed schema file lost the db:check-drift its base branch had (gate tamper)
+"; fi
+  # Global wall-clock budget shared across ALL affected workspaces. Six hung
+  # 120s checks would run ~12 min and exceed the harness's 10-min Bash cap,
+  # killing the whole gates run before it emits a verdict. Cap the total at ~7 min
+  # (each check still gets at most 120s, but never more than the budget left); a
+  # workspace reached after the budget is exhausted is a `unverifiable` block.
+  MG_GATE4_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + ${MERGE_GATES_GATE4_BUDGET_SECS:-420} ))
+  while IFS= read -r pkg; do
+    [ -n "$pkg" ] || continue
+    reldir="$pkg"; [ "$reldir" = "." ] && reldir=""
+    NOW=$(date +%s 2>/dev/null || echo 0); REMAIN=$(( MG_GATE4_DEADLINE - NOW ))
+    if [ "$REMAIN" -le 0 ]; then
+      DETAIL="$DETAIL  PKG[$pkg]: unverifiable (gate deadline reached before this workspace ran)
+"
+      WORST="unverifiable"; GATE4_BLOCKED=1; continue
+    fi
+    PER=120; [ "$REMAIN" -lt 120 ] && PER="$REMAIN"
+    if [ -n "${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" ]; then
+      PM_CMD="$MERGE_GATES_DRIFT_CMD_OVERRIDE"
+    else
+      PM_CMD="$(detect_pm_for "$pkg") run db:check-drift"
+    fi
+    BIN=$(printf '%s' "$PM_CMD" | awk '{print $1}')
+    if ! command -v "$BIN" >/dev/null 2>&1; then
+      DETAIL="$DETAIL  PKG[$pkg]: unverifiable ('$BIN' not installed)
+"
+      WORST="unverifiable"; GATE4_BLOCKED=1; continue
+    fi
+    RUNCMD="$PM_CMD"; [ -n "$reldir" ] && RUNCMD="cd $(printf '%q' "$reldir") && $PM_CMD"
+    OUT=$(run_bounded "$PER" bash -c "$RUNCMD" 2>&1); RC=$?
+    # 124 = ordinary timeout; 137 = KILLed (our SIGKILL escalation for a
+    # TERM-resistant client, or OOM). Both mean the 120s deadline was hit - label
+    # them so the message isn't a blank generic 'unverifiable'.
+    if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then OUT="$OUT
+drift check exceeded its 120s deadline and was terminated (database likely unreachable)"; fi
+    if [ "$RC" = "0" ]; then
+      DETAIL="$DETAIL  PKG[$pkg]: pass
+"
+    else
+      GATE4_BLOCKED=1
+      if looks_like_drift "$OUT"; then
+        DETAIL="$DETAIL  PKG[$pkg]: drift
+"; [ "$WORST" = "pass" ] && WORST="drift"
+      else
+        DETAIL="$DETAIL  PKG[$pkg]: unverifiable
+"; WORST="unverifiable"
+      fi
+      # Pass the check's own output through verbatim: it names exactly what
+      # production lacks and prints its documented remediation.
+      DETAIL="$DETAIL$(printf '%s\n' "$OUT" | sed "s#^#  DRIFT[$pkg]| #")
+"
+    fi
+  done <<EOF
+$AFFECTED_PKGS
+EOF
+  echo "GATE4_DRIFT: $WORST"
+  printf '%s' "$DETAIL"
+  [ "$CHECK_CODE_CHANGED" = "1" ] && echo "  NOTE=this PR modifies the drift check's own code, which runs with the environment's DATABASE_URL; review the checker/schema changes before trusting the result (SKILL.md security note)"
+fi
+
+# ---------------------------------------------------------------------------
 # Verdict - computed purely from the per-gate blocked flags + GATE3_HAS_RULE / GATE3_RISK.
 # ---------------------------------------------------------------------------
 # Hard blocks (pre-flight, Gate 1, Gate 2) fail outright -> EXIT=1 / BLOCK.
@@ -379,6 +850,7 @@ EXIT=0
 [ "$PREFLIGHT_BLOCKED" = "1" ] && { [ -n "$OVERLAP" ] && REASONS="$REASONS preflight-overlap" || REASONS="$REASONS preflight"; EXIT=1; }
 [ "$GATE1_BLOCKED" = "1" ] && { REASONS="$REASONS gate1-env"; EXIT=1; }
 [ "$GATE2_BLOCKED" = "1" ] && { REASONS="$REASONS gate2-health"; EXIT=1; }
+[ "$GATE4_BLOCKED" = "1" ] && { REASONS="$REASONS gate4-drift"; EXIT=1; }
 
 if [ "$GATE3_HAS_RULE" = "1" ]; then
   REASONS="$REASONS gate3-window-decision"; [ "$EXIT" = "0" ] && EXIT=2
