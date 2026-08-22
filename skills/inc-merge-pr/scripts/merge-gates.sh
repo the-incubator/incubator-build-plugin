@@ -644,8 +644,8 @@ AFFECTED_PKGS=$(printf '%s\n' "$AFFECTED_PKGS" | awk 'NF && !seen[$0]++')
 # script VALUE differs between the merge base and EVAL_HEAD (an in-place
 # entrypoint change a path heuristic can't see).
 CHECK_CODE_CHANGED=0
-git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null \
-  | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
+CHANGED_ALL=$(git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null || true)
+printf '%s\n' "$CHANGED_ALL" | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
 drift_script_val() {  # $1 = package dir ("." = root), $2 = git ref
   local rel="$1/package.json"; rel="${rel#./}"
   git show "$2:$rel" 2>/dev/null | jq -r '(.scripts // {})["db:check-drift"] // ""' 2>/dev/null
@@ -655,7 +655,19 @@ if [ "$CHECK_CODE_CHANGED" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
     [ -n "$pkg" ] || continue
     bv=$(drift_script_val "$pkg" "${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}")
     hv=$(drift_script_val "$pkg" "$EVAL_HEAD")
-    [ "$bv" != "$hv" ] && { CHECK_CODE_CHANGED=1; break; }
+    # (a) the entrypoint command itself changed, or (b) a stable entrypoint whose
+    # own script file the PR edits (value unchanged, filename lacks the keywords):
+    # resolve the script path(s) the command runs and check if they were touched.
+    if [ "$bv" != "$hv" ]; then CHECK_CODE_CHANGED=1; break; fi
+    reld="$pkg"; [ "$reld" = "." ] && reld=""
+    for tok in $hv; do
+      case "$tok" in
+        *.ts|*.js|*.mjs|*.cjs)
+          f="$tok"; [ -n "$reld" ] && f="$reld/$tok"; f=${f#./}
+          printf '%s\n' "$CHANGED_ALL" | grep -qxF "$f" && { CHECK_CODE_CHANGED=1; break; } ;;
+      esac
+    done
+    [ "$CHECK_CODE_CHANGED" = "1" ] && break
   done <<EOF
 $AFFECTED_PKGS
 EOF
@@ -678,9 +690,13 @@ fi
 EVAL_SHA=$(git rev-parse "$EVAL_HEAD" 2>/dev/null || echo "")
 echo "GATE4_EVAL_HEAD: ${EVAL_SHA:-unknown}"
 
-if [ "$EVAL_HEAD_MISSING" = "1" ] && repo_exposes_drift; then
+if [ "$EVAL_HEAD_MISSING" = "1" ]; then
   # We don't have the commit that will merge; the diff we computed used a
-  # different local commit and cannot be trusted.
+  # different local commit and cannot be trusted. Block UNCONDITIONALLY (not gated
+  # on the local tree exposing a check): the unavailable head could itself
+  # introduce both a schema change and the db:check-drift script, which the older
+  # local tree can't reveal. A failed fetch behind a resolvable API SHA is a real
+  # inconsistency worth surfacing regardless.
   echo "GATE4_DRIFT: unverifiable"
   echo "  REASON=the PR head SHA ${HEAD_SHA:-} reported by GitHub is not present locally (a fetch likely failed); Gate 4 cannot evaluate the commit that will merge. Fetch the PR head and re-run."
   GATE4_BLOCKED=1
