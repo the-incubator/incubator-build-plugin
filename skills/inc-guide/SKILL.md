@@ -42,7 +42,7 @@ Stage 2 is implementation itself - you and the user write the code; there is no 
   Then watches CI and the AI reviewers and auto-resolves feedback in a loop, pausing only for items that need a human decision.
   Stops at a feedback-clean PR.
 
-- **`/inc:merge-pr-5`** (stage 5) - Pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads) plus a deploy-window check that respects the team's window rules from `/inc:setup-deploy` (default when none are set: risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm).
+- **`/inc:merge-pr-5`** (stage 5) - Pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved threads; schema drift for repos that expose a `db:check-drift` script) plus a deploy-window check that respects the team's window rules from `/inc:setup-deploy` (default when none are set: risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm).
   If all pass, squash-merges, deletes the branch, and actively observes the deploy.
 
 ## Picking the review tier
@@ -94,7 +94,7 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 | `/inc:review-3a` | `inc-review` | Light review tier - auto-applies safe fixes, surfaces judgment calls, escalates when the diff warrants |
 | `/inc:review-deep-3b` | `inc-review-deep` | Deep review tier - persona fan-out with confidence-gated, deduped findings |
 | `/inc:commit-push-pr-4` | `inc-commit-push-pr` | Commit → push → PR with value-first description, then watch CI + AI reviewers and auto-resolve feedback |
-| `/inc:merge-pr-5` | `inc-merge-pr` | Merge gates (env vars, PR health, deploy window) → squash-merge → observe the deploy |
+| `/inc:merge-pr-5` | `inc-merge-pr` | Merge gates (env vars, PR health, schema drift, deploy window) → squash-merge → observe the deploy |
 
 ### Shortcuts
 

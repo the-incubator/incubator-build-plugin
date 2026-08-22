@@ -3,7 +3,8 @@
 # single structured verdict block.
 #
 # Replaces ~12 separate model-mediated Bash calls (freshness, env vars, the four
-# Gate 2 sub-checks, Gate 3 signals) with one call the orchestrator reads once.
+# Gate 2 sub-checks, the conditional Gate 4 schema-drift check, Gate 3 signals)
+# with one call the orchestrator reads once.
 # The script does the deterministic work; the SKILL.md keeps only the branches
 # that need judgment (env-var paste confirmation, unresolved-thread handling,
 # evaluating a configured deploy-window rule against the clock). Deploy-observation
@@ -31,6 +32,8 @@
 #   MERGE_GATES_DOW_OVERRIDE / MERGE_GATES_HOUR_OVERRIDE  - inject day/hour
 #   MERGE_GATES_SIGNALS_OVERRIDE  - inject the Gate 3 risk signals ("none" or a
 #     space-separated list) instead of computing them from the diff
+#   MERGE_GATES_DRIFT_CMD_OVERRIDE  - replace the detected `<pm> run db:check-drift`
+#     invocation for Gate 4 with an arbitrary command (drive the gate from a stub)
 #   MERGE_GATES_FRESHNESS_BIN / MERGE_GATES_THREADCACHE_BIN / MERGE_GATES_ENVCHECK_BIN
 #   plus stubbing `gh` / `git` on PATH - drive the gate logic from fixtures.
 
@@ -52,6 +55,7 @@ echo "=== MERGE GATES ==="
 PREFLIGHT_BLOCKED=0   # default-branch, path overlap, or freshness error
 GATE1_BLOCKED=0       # new env vars, or env-check could not run
 GATE2_BLOCKED=0       # draft / CI / threads / mergeable / could not verify
+GATE4_BLOCKED=0       # schema drift vs production, or drift check could not run
 OVERLAP=""
 
 # ---------------------------------------------------------------------------
@@ -366,6 +370,93 @@ echo "  SIGNALS=$SIGNALS"
 echo "  DIFFSTAT=${DIFFSTAT:-none}"
 
 # ---------------------------------------------------------------------------
+# Gate 4: schema drift vs production (conditional; hard block on drift)
+# ---------------------------------------------------------------------------
+# Generic across projects: this gate only engages when the target repo actually
+# exposes a drift check - a `db:check-drift` script in package.json (the
+# convention the incubator-build-app guard established) - AND this PR's diff
+# touches schema (the `schema` risk signal). A schema change must never
+# squash-merge while production's database still lacks it, so we run the repo's
+# own read-only drift check here, at the merge decision, not only at build/deploy.
+#
+# Any repo without that script, or any PR that touches no schema files, is a
+# clean no-op (GATE4_DRIFT: skip). We do NOT run the check on non-schema PRs:
+# they cannot introduce drift, and forcing every merge to reach a live database
+# would block unrelated work in credential-less environments for no safety gain.
+#
+# The check runs the repo's own command, so it needs whatever DATABASE_URL that
+# command needs. Per its documented contract it refuses to run (non-zero) rather
+# than checking a database the deploy never uses - so a merge environment that
+# lacks the credentials fails the gate loudly (GATE4_DRIFT: unverifiable) instead
+# of passing silently. Both a real drift and an unrunnable check are hard blocks;
+# only the message differs. Read-only: the check never writes to the database.
+#
+# Test hook: MERGE_GATES_DRIFT_CMD_OVERRIDE replaces the detected package-manager
+# invocation with an arbitrary command, so the gate logic runs from a stub.
+DRIFT_SCRIPT_PRESENT=0
+if [ -f package.json ]; then
+  jq -e '(.scripts // {}) | has("db:check-drift")' package.json >/dev/null 2>&1 && DRIFT_SCRIPT_PRESENT=1
+fi
+
+if [ "$DRIFT_SCRIPT_PRESENT" = "0" ]; then
+  echo "GATE4_DRIFT: skip"
+  echo "  REASON=no db:check-drift script in package.json"
+elif ! printf ' %s ' "$SIGNALS" | grep -q ' schema '; then
+  echo "GATE4_DRIFT: skip"
+  echo "  REASON=db:check-drift present but this diff touches no schema files"
+else
+  if [ -n "${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" ]; then
+    DRIFT_CMD="$MERGE_GATES_DRIFT_CMD_OVERRIDE"
+  else
+    # Detect the package manager from the lockfile; `run` is universal across all.
+    if [ -f pnpm-lock.yaml ]; then PM=pnpm
+    elif [ -f yarn.lock ]; then PM=yarn
+    elif [ -f bun.lockb ]; then PM=bun
+    else PM=npm; fi
+    DRIFT_CMD="$PM run db:check-drift"
+  fi
+
+  # Resolve the manager binary before running so a missing package manager reads
+  # as "could not verify" rather than being misclassified as drift from a shell
+  # "command not found" message.
+  DRIFT_BIN=$(printf '%s' "$DRIFT_CMD" | awk '{print $1}')
+  if ! command -v "$DRIFT_BIN" >/dev/null 2>&1; then
+    echo "GATE4_DRIFT: unverifiable"
+    echo "  REASON=drift check present but '$DRIFT_BIN' is not installed; cannot verify schema drift"
+    GATE4_BLOCKED=1
+  else
+    # Bound the run when `timeout` is available (it is not on stock macOS); a drift
+    # check that hangs on an unreachable DB must not stall the whole gate pass.
+    if command -v timeout >/dev/null 2>&1; then
+      DRIFT_OUT=$(timeout 120 bash -c "$DRIFT_CMD" 2>&1); DRIFT_RC=$?
+      [ "$DRIFT_RC" = "124" ] && DRIFT_OUT="$DRIFT_OUT
+drift check timed out after 120s (database likely unreachable)"
+    else
+      DRIFT_OUT=$(bash -c "$DRIFT_CMD" 2>&1); DRIFT_RC=$?
+    fi
+
+    if [ "$DRIFT_RC" = "0" ]; then
+      echo "GATE4_DRIFT: pass"
+    else
+      # Non-zero means either real drift (production is missing/differs on
+      # something this schema declares) or the check could not run at all
+      # (missing DATABASE_URL / unreachable DB). Both block; classify only to
+      # word the message honestly. Misclassification changes wording, never the
+      # block decision, so the heuristic is safe.
+      if printf '%s' "$DRIFT_OUT" | grep -qiE 'DATABASE_URL|could not connect|connection refused|econnrefused|refuses to run|no database|getaddrinfo|password authentication|SASL|ENOTFOUND|timed out'; then
+        echo "GATE4_DRIFT: unverifiable"
+      else
+        echo "GATE4_DRIFT: drift"
+      fi
+      GATE4_BLOCKED=1
+      # Pass the check's own output through verbatim: it names exactly what
+      # production lacks and prints its documented remediation.
+      printf '%s\n' "$DRIFT_OUT" | sed 's/^/  DRIFT| /'
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Verdict - computed purely from the per-gate blocked flags + GATE3_HAS_RULE / GATE3_RISK.
 # ---------------------------------------------------------------------------
 # Hard blocks (pre-flight, Gate 1, Gate 2) fail outright -> EXIT=1 / BLOCK.
@@ -379,6 +470,7 @@ EXIT=0
 [ "$PREFLIGHT_BLOCKED" = "1" ] && { [ -n "$OVERLAP" ] && REASONS="$REASONS preflight-overlap" || REASONS="$REASONS preflight"; EXIT=1; }
 [ "$GATE1_BLOCKED" = "1" ] && { REASONS="$REASONS gate1-env"; EXIT=1; }
 [ "$GATE2_BLOCKED" = "1" ] && { REASONS="$REASONS gate2-health"; EXIT=1; }
+[ "$GATE4_BLOCKED" = "1" ] && { REASONS="$REASONS gate4-drift"; EXIT=1; }
 
 if [ "$GATE3_HAS_RULE" = "1" ]; then
   REASONS="$REASONS gate3-window-decision"; [ "$EXIT" = "0" ] && EXIT=2

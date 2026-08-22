@@ -224,6 +224,98 @@ git -C "$REPO" add migration.sql 2>/dev/null; git -C "$REPO" commit -q -m "add s
 check "real .sql diff -> schema signal -> risk-confirm" "gate3-risk-confirm"
 check_out "real schema signal emitted" "SIGNALS=schema"
 
+# --- Gate 4: schema drift ------------------------------------------------
+# The drift gate only engages when the repo exposes a `db:check-drift` script
+# AND the diff touches schema. It runs the repo's own read-only check; a stub
+# is injected via MERGE_GATES_DRIFT_CMD_OVERRIDE so no real DB is needed.
+
+# Helper: point the drift override at a stub with a given exit + output.
+mkdrift() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$WORK/drift"; chmod +x "$WORK/drift"; }
+run_drift() {
+  ( cd "$REPO" && PATH="$BIN:$PATH" \
+    MERGE_GATES_FRESHNESS_BIN="$WORK/freshness" \
+    MERGE_GATES_THREADCACHE_BIN="$WORK/threadcache" \
+    MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
+    GH_FIXTURES="$FIX" GH_FAIL="${GH_FAIL:-}" \
+    MERGE_GATES_DOW_OVERRIDE="$DOW" MERGE_GATES_HOUR_OVERRIDE="$HOUR" \
+    MERGE_GATES_SIGNALS_OVERRIDE="${MERGE_GATES_SIGNALS_OVERRIDE:-}" \
+    MERGE_GATES_DRIFT_CMD_OVERRIDE="${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" \
+    bash "$TARGET" 2>/dev/null )
+}
+check_drift() {  # name, want-substring-in-VERDICT, [must-not]
+  local name="$1" want="$2" mustnot="${3:-}" got
+  got=$(run_drift | grep '^VERDICT:' || echo "<no verdict>")
+  if ! printf '%s' "$got" | grep -qF "$want"; then
+    FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"; echo "    got: $got"; return
+  fi
+  if [ -n "$mustnot" ] && printf '%s' "$got" | grep -qF "$mustnot"; then
+    FAIL=$((FAIL+1)); echo "FAIL - $name (must-not matched '$mustnot')"; echo "    got: $got"; return
+  fi
+  PASS=$((PASS+1))
+}
+check_drift_out() {  # name, want-substring-anywhere
+  local name="$1" want="$2" out
+  out=$(run_drift)   # capture fully first; a `run | grep -q` pipe would SIGPIPE
+                     # the script and pipefail would then mask a real match.
+  if printf '%s\n' "$out" | grep -qF "$want"; then PASS=$((PASS+1))
+  else FAIL=$((FAIL+1)); echo "FAIL - $name"; echo "    want substring: $want"
+    echo "    got GATE4 lines: $(printf '%s\n' "$out" | grep 'GATE4_DRIFT' | tr '\n' ' ')"; fi
+}
+
+# No package.json at all -> the gate is a clean no-op (skip), overall GO.
+reset_case; rm -f "$REPO/package.json"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check_drift_out "no package.json -> GATE4 skip" "GATE4_DRIFT: skip"
+check_drift "no package.json -> GO" "VERDICT: GO"
+
+# package.json without a db:check-drift script -> skip (generic no-op).
+reset_case; printf '{"scripts":{"build":"tsc"}}' > "$REPO/package.json"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check_drift_out "no db:check-drift script -> skip" "REASON=no db:check-drift script"
+check_drift "no db:check-drift script -> GO" "VERDICT: GO"
+rm -f "$REPO/package.json"
+
+# Script present but the diff touches no schema files -> skip (do not run the
+# check on non-schema PRs; they cannot introduce drift).
+reset_case; printf '{"scripts":{"db:check-drift":"true"}}' > "$REPO/package.json"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+check_drift_out "script present, no schema diff -> skip" "REASON=db:check-drift present but this diff touches no schema files"
+check_drift "script present, no schema diff -> GO" "VERDICT: GO"
+rm -f "$REPO/package.json"
+
+# Script present + schema signal + check passes -> GATE4 pass (no drift block).
+# (A schema PR is still NEEDS_DECISION via gate3 risk-confirm; gate4 adds no block.)
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "schema + check passes -> GATE4 pass" "GATE4_DRIFT: pass"
+check_drift "schema + check passes -> no drift block" "gate3-risk-confirm" "gate4-drift"
+rm -f "$REPO/package.json"
+
+# Script present + schema signal + real drift (production missing a column) ->
+# hard BLOCK with gate4-drift, and the check's own output passes through.
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'echo "production is missing column \"plans.plan_id\""; echo "Run db:push against prod, then re-run."; exit 1'
+check_drift "real drift -> BLOCK" "BLOCK" "NEEDS_DECISION"
+check_drift "real drift -> gate4-drift reason" "gate4-drift"
+check_drift_out "real drift -> classified as drift" "GATE4_DRIFT: drift"
+check_drift_out "real drift -> output passed through" 'DRIFT| production is missing column'
+rm -f "$REPO/package.json"
+
+# Script present + schema signal + check cannot run (no DATABASE_URL) ->
+# hard BLOCK, classified unverifiable (honest degraded behavior, not a silent pass).
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'echo "DATABASE_URL is not set; refuses to run"; exit 1'
+check_drift "missing creds -> BLOCK not GO" "BLOCK" "GO"
+check_drift "missing creds -> gate4-drift reason" "gate4-drift"
+check_drift_out "missing creds -> classified unverifiable" "GATE4_DRIFT: unverifiable"
+rm -f "$REPO/package.json"
+
+# Package manager binary missing -> unverifiable block, not misclassified as drift.
+reset_case; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+MERGE_GATES_SIGNALS_OVERRIDE="schema"; MERGE_GATES_DRIFT_CMD_OVERRIDE="definitely-not-a-real-pm-bin-xyz run db:check-drift"
+check_drift "missing PM binary -> BLOCK" "gate4-drift"
+check_drift_out "missing PM binary -> unverifiable" "GATE4_DRIFT: unverifiable"
+rm -f "$REPO/package.json"
+
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"
 echo "merge-gates.test.sh: $PASS passed, $FAIL failed"

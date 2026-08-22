@@ -1,12 +1,12 @@
 ---
 name: inc:merge-pr-5
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments; schema drift, for repos that expose a db:check-drift script and PRs that touch schema) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification, TaskStop
 ---
 
 # Merge PR: Production Deploy Readiness Check
 
-Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health); the third - the deploy window - respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
+Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health), plus a conditional **schema-drift** gate that hard-blocks only when the target repo exposes a drift check and this PR touches schema; the deploy-window gate respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
 **Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
@@ -26,10 +26,10 @@ bash "$PLUGIN_ROOT/skills/inc-merge-pr/scripts/merge-gates.sh"
 The block's final line is `VERDICT: <GO | BLOCK | NEEDS_DECISION> [reasons=...]`:
 
 - **GO** - every hard gate passed and Gate 3 is clear: no window rule and a low-risk change (or a rule/risk case you already resolved to OK). Proceed to deploy-observation readiness, then merge.
-- **BLOCK** - at least one hard gate failed: freshness overlap, new env vars, or PR health. A gate that **could not be verified** (helper crashed, `gh` errored, quota exhausted, unparseable remote) is fail-safe and also blocks here - the script never lets an unverifiable gate pass. Report the failing gate(s) per the sections below and **stop** - do not run deploy-observation readiness, do not merge.
+- **BLOCK** - at least one hard gate failed: freshness overlap, new env vars, PR health, or schema drift. A gate that **could not be verified** (helper crashed, `gh` errored, quota exhausted, unparseable remote, drift check unrunnable) is fail-safe and also blocks here - the script never lets an unverifiable gate pass. Report the failing gate(s) per the sections below and **stop** - do not run deploy-observation readiness, do not merge.
 - **NEEDS_DECISION** - no hard failure, but Gate 3 needs your call: either a configured deploy-window rule to evaluate against the current time (`gate3-window-decision`), or - with no window rule - an elevated-risk change to confirm before shipping (`gate3-risk-confirm`). Work the Gate 3 decision branch; merge only if it resolves to OK. (Neither is a hard block.)
 
-The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate3-window-decision`, `gate3-risk-confirm`).
+The exit code mirrors the verdict (0 / 1 / 2) but the `VERDICT:` line is the source of truth - branch on it, not the exit code. Because every unverifiable gate fail-safes into a BLOCK reason, the `VERDICT:` line can never say GO while a gate sub-line says `error`; the two can't contradict. `reasons=` enumerates which gates contributed (`preflight`, `preflight-overlap`, `gate1-env`, `gate2-health`, `gate4-drift`, `gate3-window-decision`, `gate3-risk-confirm`).
 
 ### Read freshness first (`PREFLIGHT_FRESHNESS:` line)
 
@@ -166,6 +166,41 @@ The AI detection covers the common cases (Greptile, CodeRabbit, Copilot, Claude,
 
 ---
 
+## Gate 4: Schema Drift vs Production
+
+A schema change must never squash-merge while production's database still lacks it. That failure is silent: the code merges, deploys, and then 500s on the first request that touches the missing column or constraint. This gate closes that hole at the merge decision - earlier than any build- or deploy-time guard - by running the target repo's own read-only drift check before the merge.
+
+**This gate is generic and conditional.** It carries no project specifics. It engages only when **both** are true:
+
+1. The repo exposes a drift check - a `db:check-drift` script in `package.json` (the convention the app-side guard established). The script auto-detects the package manager from the lockfile (`pnpm`/`yarn`/`bun`/`npm`) and runs `<pm> run db:check-drift`.
+2. This PR's diff touches schema - the Gate 3 `schema` risk signal fired.
+
+Any repo without that script, or any PR that touches no schema files, is a **clean no-op** (`GATE4_DRIFT: skip`). Non-schema PRs are deliberately never run through the check: they cannot introduce drift, and forcing every merge to reach a live database would block unrelated work in credential-less environments for no safety gain.
+
+Read the `GATE4_DRIFT:` line from the gates block:
+
+- `skip` → **Gate 4 not applicable.** The `REASON=` sub-line says why (no `db:check-drift` script, or no schema files in the diff). Nothing to report beyond a one-line note.
+- `pass` → **Gate 4 OK.** The repo's drift check confirmed production matches the schema this PR ships.
+- `drift` → **Gate 4 BLOCK.** Production is missing or differs on something this schema declares. The check's own output is passed through verbatim on `  DRIFT| `-prefixed lines - it names exactly what production lacks and prints the remediation. Surface it and the fix:
+
+  > **Gate 4 BLOCK - schema drift.** Production's database does not yet have the schema this PR ships:
+  > ```
+  > <verbatim DRIFT| lines from the block, prefix stripped>
+  > ```
+  > Merge is blocked until production is brought up to the schema. **Remediation:** run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc:merge-pr-5`) to confirm it's green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
+
+- `unverifiable` → **Gate 4 BLOCK (could not verify).** The check ran but could not reach a database - most commonly the merge environment has no `DATABASE_URL`, or the package manager isn't installed, or the connection timed out. Per its documented contract the check **refuses to run rather than vouch for a database the deploy never uses**, so the gate fail-safes to a block rather than passing silently. The `  DRIFT| ` lines (and the `REASON=` sub-line for a missing package manager) carry the actual error. Surface it honestly:
+
+  > **Gate 4 BLOCK - drift check could not run.** This repo gates schema changes on a live drift check, but it couldn't reach the database from here:
+  > ```
+  > <verbatim DRIFT| lines / REASON, prefix stripped>
+  > ```
+  > I can't confirm production is ready for this schema change, so I'm blocking rather than guessing. Either provide the drift check's `DATABASE_URL` to this environment and re-run, or run `db:check-drift` against production yourself and merge only once it's green.
+
+Do not proceed past this gate on `drift` or `unverifiable`. "I'll push the schema after merge" is the exact failure mode this gate exists to prevent - the database must be ready when the merged code deploys.
+
+---
+
 ## Gate 3: Deployment Window
 
 The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window - the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
@@ -264,6 +299,7 @@ Pre-flight (freshness):  <OK | OK: N behind, no overlap | BLOCK: path overlap on
 Pre-flight (observation): <ready: <platform> as <account> | skip: <reason> | granted: rule added, re-probe ok>
 Gate 1 (env vars):       <OK | BLOCK: ...>
 Gate 2 (PR health):      <OK | BLOCK: draft | BLOCK: CI <failing|pending> - <checks> | BLOCK: <N> unresolved review thread(s) | BLOCK: merge state <status>>
+Gate 4 (schema drift):   <n/a - no drift check / no schema change | OK - production matches schema | BLOCK: drift - <what prod lacks> | BLOCK: could not verify - <reason>>
 Gate 3 (deploy window):  <OK - no window rule, low risk | OK - elevated risk (<signals>), user confirmed | OK - within window (<rule>) | OK (hotfix: <reason>) | OK (minor [, user override despite <signals>]) | BLOCK - user held on elevated risk (<signals>) | BLOCK - outside deploy window (<rule>), wait until <next slot>>
 
 MERGE: <GO | BLOCK - gate(s) N, M>

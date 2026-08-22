@@ -11,7 +11,7 @@ Orchestrates two existing skills in sequence so the user runs one command instea
 1. `inc:review-and-pr` — review the working tree (tiered light/deep), commit-push-PR, watch CI + AI reviewers, resolve feedback in a loop, and stop at a feedback-clean PR.
 2. `inc:merge-pr-5` — run the merge gates, squash-merge, and observe the deploy.
 
-This skill **does not reimplement** any underlying logic — it hands off via the `Skill` tool and waits. The confirmation gates the underlying skills enforce (review gate, commit-push-pr's intent interview, merge-pr's three gates) are preserved. Feedback resolution runs **unattended** inside commit-push-pr's watch loop — only `needs-human` items pause it. So the chain still stops at its real decision points (review findings, a `needs-human` thread, merge gates); it is not fully hands-off, but feedback fixes no longer prompt per-thread.
+This skill **does not reimplement** any underlying logic — it hands off via the `Skill` tool and waits. The confirmation gates the underlying skills enforce (review gate, commit-push-pr's intent interview, merge-pr's gates) are preserved. Feedback resolution runs **unattended** inside commit-push-pr's watch loop — only `needs-human` items pause it. So the chain still stops at its real decision points (review findings, a `needs-human` thread, merge gates); it is not fully hands-off, but feedback fixes no longer prompt per-thread.
 
 `inc:review-and-pr` already contains the commit → watch → resolve loop, so this skill is thin: run it, and if it reached PR-ready, merge.
 
@@ -55,7 +55,7 @@ This runs the whole front of the pipeline: tier-selected review gate → commit-
 Skill: inc:merge-pr-5
 ```
 
-merge-pr runs its own pre-flight (branch freshness), the merge gates (new env vars; PR health; plus a deploy-window check that respects the team's configured window rules - default when none are set is risk-adaptive: low-risk changes just ship, riskier ones prompt a quick confirm), the squash-merge, and active deploy observation. Wait for it to return.
+merge-pr runs its own pre-flight (branch freshness), the merge gates (new env vars; PR health; schema drift for repos that expose a `db:check-drift` script; plus a deploy-window check that respects the team's configured window rules - default when none are set is risk-adaptive: low-risk changes just ship, riskier ones prompt a quick confirm), the squash-merge, and active deploy observation. Wait for it to return.
 
 One timing exception: skills execute inline in this same session - merge-pr is not a blocking subprocess, and the same agent runs both. When merge-pr's Step 4c reports deploy **Ready** and the **first health check** result, emit the Step 4 report at that moment, mid-observation, then let merge-pr's remaining observation (log scan, watch outcomes) continue below it exactly as Step 4 describes.
 
