@@ -191,7 +191,12 @@ Read the `GATE4_DRIFT:` line from the gates block. Per-workspace results appear 
   > ```
   > <verbatim DRIFT[...] lines from the block, prefix stripped>
   > ```
-  > Merge is blocked until production is brought up to the schema. **Remediation:** run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc:merge-pr-5`) to confirm it's green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
+  > Merge is blocked until production and the schema agree. **How to remediate depends on the *kind* of drift - read the lines above before acting:**
+  >
+  > - **Additive / backward-compatible** (a new nullable column, a new table/index the deployed code doesn't yet require): safe to bring production up first. Run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc:merge-pr-5`) to confirm green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
+  > - **Destructive / contract-changing** (dropping or renaming a column/table, narrowing a type, adding a NOT NULL or other incompatible constraint): **do NOT just push to production first** - the currently-deployed code still depends on the old shape, so applying the change pre-merge causes the exact 500s this gate exists to prevent. Use an **expand-contract** rollout: ship and deploy code that tolerates both shapes, migrate/backfill, then contract in a later change. The gate can't tell additive from destructive - that judgment is yours from the drift lines.
+  >
+  > (Because the underlying check is an exact-match comparison, a deliberately-retained legacy object mid-expand-contract can itself read as drift; that's a case to resolve at the app's checker, not by mutating production.)
 
 - `unverifiable` → **Gate 4 BLOCK (could not verify).** The gate fail-safes to a block rather than passing silently, in any of these cases the `REASON=` / `  DRIFT[...] ` lines pinpoint:
   - The check ran but couldn't reach a database - no `DATABASE_URL`, connection refused, or the 120s timeout fired (enforced with a `SIGTERM`→`SIGKILL` escalation so a client that ignores `TERM` can't outlast it). Per its documented contract the check **refuses to run rather than vouch for a database the deploy never uses**.

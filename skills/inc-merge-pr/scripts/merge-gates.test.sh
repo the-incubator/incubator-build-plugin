@@ -68,6 +68,7 @@ reset_case() {
   unset GH_FAIL MERGE_GATES_SIGNALS_OVERRIDE
   RUNNER=run_drift   # default drift runner; real-git cases opt into run_drift_real
   ASSUME_CLEAN=1     # harness writes untracked fixtures; the dirty-tree test sets 0
+  SUBDIR=""; BUDGET_SECS=""   # subdir-invocation and gate-budget test hooks
   DOW=2; HOUR=14   # Tuesday 2pm ET (only used for the emitted TIME context now)
 }
 
@@ -241,7 +242,7 @@ check_out "real schema signal emitted" "SIGNALS=schema"
 mkdrift() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$WORK/drift"; chmod +x "$WORK/drift"; }
 DB_OVR=""
 run_drift() {  # override-driven: $DB_OVR is the changed-DB-schema list
-  ( cd "$REPO" && PATH="${PMBIN:+$PMBIN:}$BIN:$PATH" \
+  ( cd "$REPO/${SUBDIR:-}" && PATH="${PMBIN:+$PMBIN:}$BIN:$PATH" \
     MERGE_GATES_FRESHNESS_BIN="$WORK/freshness" \
     MERGE_GATES_THREADCACHE_BIN="$WORK/threadcache" \
     MERGE_GATES_ENVCHECK_BIN="$WORK/envcheck" \
@@ -251,6 +252,7 @@ run_drift() {  # override-driven: $DB_OVR is the changed-DB-schema list
     MERGE_GATES_DRIFT_CMD_OVERRIDE="${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" \
     MERGE_GATES_DB_SCHEMA_OVERRIDE="$DB_OVR" \
     MERGE_GATES_ASSUME_CLEAN="${ASSUME_CLEAN:-1}" \
+    MERGE_GATES_GATE4_BUDGET_SECS="${BUDGET_SECS:-}" \
     bash "$TARGET" 2>/dev/null )
 }
 run_drift_real() {  # real git: no DB/CMD/SIGNALS override; optional $PMBIN on PATH
@@ -418,7 +420,11 @@ fresh_from_root feat-tamper1
 printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
 git -C "$REPO" add package.json 2>/dev/null; git -C "$REPO" commit -q -m "base has check"
 git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
-git -C "$REPO" rm -q package.json 2>/dev/null; git -C "$REPO" commit -q -m "remove check"
+# The head removes the check AND keeps the schema file present (a real gate
+# deletion: the schema persists while its guard is gone).
+git -C "$REPO" rm -q package.json 2>/dev/null
+mkdir -p "$REPO/drizzle"; printf 'export const t=1;\n' > "$REPO/drizzle/schema.ts"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "remove check, keep schema"
 reset_case; RUNNER=run_drift; DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
 check_drift "removed sole check -> BLOCK" "gate4-drift"
 check_drift_out "removed sole check -> tamper" "cannot be removed by the same PR"
@@ -433,6 +439,7 @@ git -C "$REPO" add apps/web/package.json 2>/dev/null; git -C "$REPO" commit -q -
 git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
 printf '{"scripts":{"build":"tsc"}}' > "$REPO/apps/web/package.json"      # workspace drops its check
 printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"     # only the root now has one
+mkdir -p "$REPO/apps/web/drizzle"; printf 'export const t=1;\n' > "$REPO/apps/web/drizzle/schema.ts"  # schema persists
 git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "workspace drops check, root keeps one"
 reset_case; RUNNER=run_drift; DB_OVR="apps/web/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"
 MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
@@ -622,6 +629,45 @@ MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
 printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"login":"author"}}' "$(git -C "$REPO" rev-parse HEAD)" > "$FIX/pull.json"
 check_drift_out "stable entrypoint file edit -> security NOTE" "NOTE=this PR modifies the drift check's own code"
 rm -f "$REPO/package.json"; rm -rf "$REPO/scripts" "$REPO/drizzle"
+
+# --- Gate 4 round-9: workspace move (no false tamper), subdir invocation, budget
+# A whole schema-owning workspace moved (its package.json + check move with it).
+# The OLD schema path is deleted at head -> must NOT read as gate tamper; the new
+# location's own check runs.
+fresh_from_root feat-wsmove
+mkdir -p "$REPO/apps/old/drizzle"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/old/package.json"
+printf 'export const t=1;\n' > "$REPO/apps/old/drizzle/schema.ts"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "base: apps/old workspace + check"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" rm -rq apps/old 2>/dev/null                       # move the workspace...
+mkdir -p "$REPO/apps/new/drizzle"
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/new/package.json"
+printf 'export const t=1;\n' > "$REPO/apps/new/drizzle/schema.ts"
+git -C "$REPO" add -A 2>/dev/null; git -C "$REPO" commit -q -m "...to apps/new (check moves with it)"
+reset_case; RUNNER=run_drift; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+DB_OVR="$(printf 'apps/old/drizzle/schema.ts\napps/new/drizzle/schema.ts')"
+printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"login":"author"}}' "$(git -C "$REPO" rev-parse HEAD)" > "$FIX/pull.json"
+check_drift "workspace move -> no false tamper" "VERDICT" "gate4-drift"
+check_drift_out "workspace move -> new workspace runs" "PKG[apps/new]: pass"
+
+# Invocation from a subdirectory: git emits repo-root-relative paths, so the gate
+# must resolve package.json/schema from the repo root, not the caller's cwd.
+git -C "$REPO" checkout -q -f feature/x 2>/dev/null; git -C "$REPO" clean -fdq 2>/dev/null
+reset_case; RUNNER=run_drift; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+mkdir -p "$REPO/pkg/sub"; SUBDIR="pkg/sub"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "subdir invocation still finds root check" "GATE4_DRIFT: pass"
+SUBDIR=""; rm -rf "$REPO/pkg"; rm -f "$REPO/package.json"
+
+# Global budget: a workspace reached after the shared deadline is a hard block
+# (prevents the whole gates run being killed past the harness cap).
+git -C "$REPO" checkout -q -f feature/x 2>/dev/null; git -C "$REPO" clean -fdq 2>/dev/null
+reset_case; RUNNER=run_drift; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'; BUDGET_SECS=0
+check_drift "gate budget exhausted -> BLOCK" "gate4-drift"
+check_drift_out "gate budget exhausted -> named cause" "gate deadline reached"
+BUDGET_SECS=""; rm -f "$REPO/package.json"
 
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"

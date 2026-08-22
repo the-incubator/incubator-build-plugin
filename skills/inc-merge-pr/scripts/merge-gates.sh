@@ -38,6 +38,8 @@
 #     Gate 4 instead of computing it from the merge-base diff
 #   MERGE_GATES_ASSUME_CLEAN=1  - skip Gate 4's dirty-working-tree guard (the test
 #     harness writes untracked package.json fixtures on purpose)
+#   MERGE_GATES_GATE4_BUDGET_SECS  - override the global wall-clock budget shared
+#     across per-workspace drift checks (default 420; 0 forces the deadline path)
 #   MERGE_GATES_FRESHNESS_BIN / MERGE_GATES_THREADCACHE_BIN / MERGE_GATES_ENVCHECK_BIN
 #   plus stubbing `gh` / `git` on PATH - drive the gate logic from fixtures.
 
@@ -86,6 +88,14 @@ run_bounded() {
   [ "$had_m" = "0" ] && set +m
   return $rc
 }
+
+# Normalize to the repository root so every relative path (package.json,
+# deploy.md, `git status`, schema paths) resolves the same way regardless of the
+# subdirectory `/inc:merge-pr-5` was invoked from. Git reports repo-root-relative
+# paths, so the working-tree lookups must run from the root too. The plugin-helper
+# paths above are absolute and unaffected.
+MG_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
+[ -n "$MG_TOPLEVEL" ] && cd "$MG_TOPLEVEL" 2>/dev/null || true
 
 echo "=== MERGE GATES ==="
 
@@ -543,11 +553,26 @@ repo_exposes_drift() {
   # Capture into a var, don't end on `| grep -q`: a trailing grep -q closes the
   # pipe on first match, SIGPIPE-ing the upstream `while`, and under `pipefail`
   # that makes this function flakily return non-zero even when a check exists.
+  # Scan the working tree AND the EVAL_HEAD / merge-base trees: when the diff is
+  # unavailable the fetched head that will merge may introduce db:check-drift even
+  # though the (possibly stale) working tree has none, so a working-tree-only look
+  # would wrongly report "no gate" and skip.
   local pj found=""
   found=$({ echo "package.json"; git ls-files '*package.json' 2>/dev/null | grep -v node_modules; } \
     | sed 's#^\./##' | awk 'NF && !seen[$0]++' | while IFS= read -r pj; do
       [ -f "$pj" ] && jq -e '(.scripts // {}) | has("db:check-drift")' "$pj" >/dev/null 2>&1 && { echo yes; break; }
     done)
+  if [ -z "$found" ]; then
+    local ref
+    for ref in "$EVAL_HEAD" "${DB_MERGE_BASE:-}"; do
+      [ -n "$ref" ] || continue
+      found=$(git ls-tree -r "$ref" --name-only 2>/dev/null | grep -E '(^|/)package\.json$' | grep -v node_modules \
+        | while IFS= read -r pj; do
+          git show "$ref:$pj" 2>/dev/null | jq -e '(.scripts // {}) | has("db:check-drift")' >/dev/null 2>&1 && { echo yes; break; }
+        done)
+      [ -n "$found" ] && break
+    done
+  fi
   [ -n "$found" ]
 }
 
@@ -627,9 +652,18 @@ if [ -n "$CHANGED_DB_SCHEMA" ]; then
     bo=$(nearest_drift_pkg "$f" "$BO_REF")   # merge-base owner (empty if none)
     [ -n "$ho" ] && AFFECTED_PKGS="$AFFECTED_PKGS
 $ho"
+    # Tamper only when the schema file itself STILL EXISTS at the head: a file that
+    # was deleted (e.g. an entire workspace directory renamed, so --no-renames
+    # lists the old path as a deletion) carries no live dependency, and the moved
+    # schema's new path gets its own owner check. Deciding tamper on a vanished
+    # path would make legitimate workspace moves unmergeable. A schema file that
+    # persists while its nearest check was removed is the real gate-deletion case.
+    f_at_head=0
+    if [ -z "$HO_REF" ]; then [ -f "$f" ] && f_at_head=1
+    else git cat-file -e "$EVAL_HEAD:$f" 2>/dev/null && f_at_head=1; fi
     # A nearer owner existed at the merge base that HEAD no longer has -> this PR
     # deleted the workspace's own guard (even if a broader ancestor still covers it).
-    if [ -n "$bo" ] && { [ -z "$ho" ] || proper_ancestor "$ho" "$bo"; }; then
+    if [ "$f_at_head" = "1" ] && [ -n "$bo" ] && { [ -z "$ho" ] || proper_ancestor "$ho" "$bo"; }; then
       TAMPER=1
     fi
   done <<EOF
@@ -743,9 +777,22 @@ else
   if [ "$TAMPER" = "1" ]; then WORST="unverifiable"; GATE4_BLOCKED=1
     DETAIL="  REASON=a changed schema file lost the db:check-drift its base branch had (gate tamper)
 "; fi
+  # Global wall-clock budget shared across ALL affected workspaces. Six hung
+  # 120s checks would run ~12 min and exceed the harness's 10-min Bash cap,
+  # killing the whole gates run before it emits a verdict. Cap the total at ~7 min
+  # (each check still gets at most 120s, but never more than the budget left); a
+  # workspace reached after the budget is exhausted is a `unverifiable` block.
+  MG_GATE4_DEADLINE=$(( $(date +%s 2>/dev/null || echo 0) + ${MERGE_GATES_GATE4_BUDGET_SECS:-420} ))
   while IFS= read -r pkg; do
     [ -n "$pkg" ] || continue
     reldir="$pkg"; [ "$reldir" = "." ] && reldir=""
+    NOW=$(date +%s 2>/dev/null || echo 0); REMAIN=$(( MG_GATE4_DEADLINE - NOW ))
+    if [ "$REMAIN" -le 0 ]; then
+      DETAIL="$DETAIL  PKG[$pkg]: unverifiable (gate deadline reached before this workspace ran)
+"
+      WORST="unverifiable"; GATE4_BLOCKED=1; continue
+    fi
+    PER=120; [ "$REMAIN" -lt 120 ] && PER="$REMAIN"
     if [ -n "${MERGE_GATES_DRIFT_CMD_OVERRIDE:-}" ]; then
       PM_CMD="$MERGE_GATES_DRIFT_CMD_OVERRIDE"
     else
@@ -758,7 +805,7 @@ else
       WORST="unverifiable"; GATE4_BLOCKED=1; continue
     fi
     RUNCMD="$PM_CMD"; [ -n "$reldir" ] && RUNCMD="cd $(printf '%q' "$reldir") && $PM_CMD"
-    OUT=$(run_bounded 120 bash -c "$RUNCMD" 2>&1); RC=$?
+    OUT=$(run_bounded "$PER" bash -c "$RUNCMD" 2>&1); RC=$?
     # 124 = ordinary timeout; 137 = KILLed (our SIGKILL escalation for a
     # TERM-resistant client, or OOM). Both mean the 120s deadline was hit - label
     # them so the message isn't a blank generic 'unverifiable'.
