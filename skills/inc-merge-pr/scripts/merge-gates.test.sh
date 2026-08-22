@@ -451,6 +451,60 @@ git -C "$REPO" update-ref -d refs/remotes/origin/main 2>/dev/null
 reset_case; RUNNER=run_drift_real
 check_drift_out "uncomputable diff + no check -> skip" "nothing gates on it"
 
+# --- Gate 4 round-4: negated-drift text, renames, fetched head, merge-base tamper
+# Negated / error-prefixed drift text must NOT read as confirmed drift (it would
+# wrongly recommend a production schema push off a run that found nothing / failed).
+reset_case; RUNNER=run_drift; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"
+DB_OVR="drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"; MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"
+mkdrift 'echo "No schema drift detected"; exit 1'
+check_drift_out "negated drift text -> unverifiable" "GATE4_DRIFT: unverifiable"
+mkdrift 'echo "Schema drift check failed: DATABASE_URL is not set"; exit 1'
+check_drift_out "error-prefixed drift text -> unverifiable" "GATE4_DRIFT: unverifiable"
+rm -f "$REPO/package.json"
+
+# Rename OUT of a recognized tree: --no-renames must surface the old DB path so the
+# gate still engages (git rename detection would otherwise show only the new path).
+fresh_from_root feat-rename
+mkdir -p "$REPO/drizzle"; printf 'export const t = 1;\n' > "$REPO/drizzle/schema.ts"
+git -C "$REPO" add drizzle/schema.ts 2>/dev/null; git -C "$REPO" commit -q -m "base schema"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" mv drizzle/schema.ts oldschema.txt 2>/dev/null; git -C "$REPO" commit -q -m "rename schema out of tree"
+reset_case; RUNNER=run_drift_real; unset MERGE_GATES_DRIFT_CMD_OVERRIDE
+check_drift_out "rename out of tree still engages (old path)" "REASON=no db:check-drift script covers the changed schema files"
+
+# Fetched PR head: Gate 4 evaluates the PR head SHA (from Gate 2), not a stale
+# local HEAD. HEAD here has no schema change; the fetched head (commit A) does.
+fresh_from_root feat-evalhead
+git -C "$REPO" checkout -q -b tmp-prhead
+mkdir -p "$REPO/drizzle"; printf 'export const t = 1;\n' > "$REPO/drizzle/schema.ts"
+git -C "$REPO" add drizzle/schema.ts 2>/dev/null; git -C "$REPO" commit -q -m "PR head adds schema"
+A=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" checkout -q feat-evalhead     # local HEAD: no schema change
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse feat-evalhead)"
+reset_case; RUNNER=run_drift_real
+printf '%s' '[{"number":1,"head":{"ref":"feat-evalhead"}}]' > "$FIX/pulls_list.json"
+printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"'"$A"'"},"user":{"login":"author"}}' > "$FIX/pull.json"
+check_drift_out "evaluates fetched PR head, not stale local HEAD" "REASON=no db:check-drift script covers the changed schema files"
+
+# Merge-base tamper: the DEFAULT branch ADDS a workspace check after divergence
+# while this PR changes a schema file there. That must NOT read as this PR deleting
+# a gate (it never had one) -> no false tamper block.
+fresh_from_root feat-basecheck
+printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/package.json"   # root check exists at divergence
+git -C "$REPO" add package.json 2>/dev/null; git -C "$REPO" commit -q -m "root check at divergence"
+DIV=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" checkout -q -B main-added "$DIV"                          # main branch adds a workspace check LATER
+mkdir -p "$REPO/apps/web"; printf '{"scripts":{"db:check-drift":"stub"}}' > "$REPO/apps/web/package.json"
+git -C "$REPO" add apps/web/package.json 2>/dev/null; git -C "$REPO" commit -q -m "main adds workspace check"
+git -C "$REPO" update-ref refs/remotes/origin/main "$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q -f feat-basecheck                            # feature: only the root check, no apps/web pkg
+git -C "$REPO" clean -fdq 2>/dev/null
+reset_case; RUNNER=run_drift; DB_OVR="apps/web/drizzle/schema.ts"; MERGE_GATES_SIGNALS_OVERRIDE="none"
+MERGE_GATES_DRIFT_CMD_OVERRIDE="$WORK/drift"; mkdrift 'exit 0'
+check_drift_out "base-added check is not tamper (no false block)" "GATE4_DRIFT: pass"
+check_drift "base-added check -> no gate4 block" "VERDICT" "gate4-drift"
+rm -rf "$REPO/apps" "$REPO/package.json"
+
 # --- summary -------------------------------------------------------------
 echo "-----------------------------------------"
 echo "merge-gates.test.sh: $PASS passed, $FAIL failed"

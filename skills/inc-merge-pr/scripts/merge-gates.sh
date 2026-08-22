@@ -73,7 +73,13 @@ run_bounded() {
   { sleep "$secs"; echo 1 > "$fired"; kill -TERM -"$cmd_pid" 2>/dev/null; sleep 5; kill -KILL -"$cmd_pid" 2>/dev/null; } >/dev/null 2>&1 & local wd_pid=$!
   wait "$cmd_pid" 2>/dev/null; local rc=$?
   [ -s "$fired" ] && rc=124                              # deadline fired -> timed out
-  kill -KILL "$wd_pid" 2>/dev/null; wait "$wd_pid" 2>/dev/null   # stop any pending KILL grace
+  # KILL the ENTIRE process group before returning. When the leader exits on TERM
+  # but a DB-client descendant ignores it, that descendant would otherwise keep
+  # the command-substitution output pipe open and hang the caller past both
+  # deadlines. Signalling the group (-cmd_pid, valid while any member lives)
+  # reaps it now rather than cancelling the watchdog and hoping.
+  kill -KILL -"$cmd_pid" 2>/dev/null
+  kill -KILL "$wd_pid" 2>/dev/null; wait "$wd_pid" 2>/dev/null   # reap the watchdog itself
   rm -f "$fired"
   [ "$had_m" = "0" ] && set +m
   return $rc
@@ -474,18 +480,34 @@ echo "  DIFFSTAT=${DIFFSTAT:-none}"
 # validation module does not.
 DB_SCHEMA_RE='(^|/)(migrations?|drizzle|prisma)(/|$)|\.sql(\.ts)?$|(^|/)schema\.(prisma|sql)$|(^|/)db/[^/]*schema[^/]*\.(ts|js|mjs|cjs|sql)$|(^|/)db/schema/.*\.(ts|js|mjs|cjs|sql)$'
 
-# What THIS branch changes vs the merge base (three-dot: the diff that will
-# actually be merged) - not a two-dot working-tree-vs-tip diff, which would also
-# pick up schema commits main gained after divergence and read them as this PR's.
-# Capture the git exit status separately: `... 2>/dev/null | grep ... || true`
-# would turn a diff that could not be computed (shallow clone, missing
-# origin/<default>) into an empty file set and a false "no schema changed" skip.
-# DB_DIFF_UNAVAILABLE drives a fail-safe block below when a check is present.
+# Evaluate the commit that will ACTUALLY merge. Gate 2 verified the fetched PR
+# head SHA and `gh pr merge` merges that remote ref, so a stale local HEAD (a
+# teammate pushed after the local checkout) must not be what Gate 4 diffs. Use the
+# PR head SHA from Gate 2 when it is present locally (pre-flight freshness fetched
+# origin/<pr-branch>); otherwise fall back to local HEAD.
+EVAL_HEAD=HEAD
+if [ -n "${HEAD_SHA:-}" ] && git rev-parse -q --verify "$HEAD_SHA^{commit}" >/dev/null 2>&1; then
+  EVAL_HEAD="$HEAD_SHA"
+fi
+# The merge base of that head against the default branch - used for tamper
+# ownership so a check the DEFAULT branch ADDED after divergence isn't mistaken
+# for one this PR deleted.
+DB_MERGE_BASE=$(git merge-base "origin/$DEFAULT_BRANCH" "$EVAL_HEAD" 2>/dev/null || echo "")
+
+# What EVAL_HEAD changes vs the merge base (three-dot: the diff that will actually
+# be merged) - not a two-dot working-tree-vs-tip diff, which would also pick up
+# schema commits main gained after divergence and read them as this PR's.
+# `--no-renames` so a schema file renamed OUT of a recognized tree (e.g.
+# drizzle/schema.ts -> archive/schema.ts.bak) still surfaces the old DB path as a
+# deletion, engaging the gate. Capture the git exit status separately: a
+# `... 2>/dev/null | grep ... || true` would turn a diff that could not be
+# computed (shallow clone, missing origin/<default>) into an empty file set and a
+# false "no schema changed" skip. DB_DIFF_UNAVAILABLE drives a fail-safe block.
 DB_DIFF_UNAVAILABLE=0
 if [ -n "${MERGE_GATES_DB_SCHEMA_OVERRIDE+x}" ]; then
   CHANGED_DB_SCHEMA="$MERGE_GATES_DB_SCHEMA_OVERRIDE"
 else
-  DB_DIFF_RAW=$(git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" 2>/dev/null); DB_DIFF_RC=$?
+  DB_DIFF_RAW=$(git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null); DB_DIFF_RC=$?
   if [ "$DB_DIFF_RC" -ne 0 ]; then
     DB_DIFF_UNAVAILABLE=1; CHANGED_DB_SCHEMA=""
   else
@@ -541,8 +563,14 @@ detect_pm_for() {
 }
 
 # Does an output positively read as a drift report (vs an operational failure)?
+# Guard against negated ("No schema drift detected") and error-context ("Schema
+# drift check failed: DATABASE_URL is not set") phrasings that contain the drift
+# keywords but describe the opposite or a failure - misreading those would tell
+# the user to push schema to production off a run that found nothing / never ran.
 looks_like_drift() {
-  printf '%s' "$1" | grep -qiE 'drift detected|schema drift|is missing (a |an )?(column|table|index|constraint|foreign key|enum|sequence|view|type)|missing (column|table|index|constraint|foreign key)|differs from|out of sync|not in sync'
+  local o="$1"
+  printf '%s' "$o" | grep -qiE 'no (schema )?drift|drift check (failed|error|could not|errored)|(failed|unable|could not) to (run|connect|check|introspect)|error:' && return 1
+  printf '%s' "$o" | grep -qiE 'drift detected|is missing (a |an )?(column|table|index|constraint|foreign key|enum|sequence|view|type)|missing (column|table|index|constraint|foreign key)|differs from (schema|the schema|expected)|out of sync|not in sync'
 }
 
 # Is $1 a proper ancestor dir of $2? ("." is an ancestor of everything.)
@@ -560,14 +588,21 @@ proper_ancestor() {
 # catches the "no HEAD owner at all, base had one" case.
 AFFECTED_PKGS=""; TAMPER=0
 if [ -n "$CHANGED_DB_SCHEMA" ]; then
+  # Head owner reads the working tree when EVAL_HEAD is the local HEAD (the normal
+  # case, and what the tests drive); when EVAL_HEAD is a distinct fetched SHA, read
+  # ownership from that tree so detection and evaluation stay consistent.
+  HO_REF=""; [ "$EVAL_HEAD" != "HEAD" ] && HO_REF="$EVAL_HEAD"
+  # Base owner is compared at the MERGE BASE, not the base tip: a check the default
+  # branch added AFTER divergence must not read as one this PR deleted.
+  BO_REF="${DB_MERGE_BASE:-origin/$DEFAULT_BRANCH}"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    ho=$(nearest_drift_pkg "$f" "")                        # head owner (empty if none)
-    bo=$(nearest_drift_pkg "$f" "origin/$DEFAULT_BRANCH")  # base owner (empty if none)
+    ho=$(nearest_drift_pkg "$f" "$HO_REF")   # head owner (empty if none)
+    bo=$(nearest_drift_pkg "$f" "$BO_REF")   # merge-base owner (empty if none)
     [ -n "$ho" ] && AFFECTED_PKGS="$AFFECTED_PKGS
 $ho"
-    # Base had a nearer owner that HEAD no longer has -> the workspace deleted its
-    # own guard (whether or not a broader ancestor still covers it).
+    # A nearer owner existed at the merge base that HEAD no longer has -> this PR
+    # deleted the workspace's own guard (even if a broader ancestor still covers it).
     if [ -n "$bo" ] && { [ -z "$ho" ] || proper_ancestor "$ho" "$bo"; }; then
       TAMPER=1
     fi
@@ -579,7 +614,7 @@ AFFECTED_PKGS=$(printf '%s\n' "$AFFECTED_PKGS" | awk 'NF && !seen[$0]++')
 
 # Note when the PR changes the checker's own code (runs with the ambient DATABASE_URL).
 CHECK_CODE_CHANGED=0
-git diff --name-only "origin/$DEFAULT_BRANCH...HEAD" 2>/dev/null \
+git diff --no-renames --name-only "origin/$DEFAULT_BRANCH...$EVAL_HEAD" 2>/dev/null \
   | grep -qiE 'check.?db.?drift|drift.?check|check.?drift' && CHECK_CODE_CHANGED=1
 
 if [ "$DB_DIFF_UNAVAILABLE" = "1" ]; then
