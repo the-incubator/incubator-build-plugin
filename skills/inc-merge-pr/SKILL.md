@@ -172,30 +172,35 @@ A schema change must never squash-merge while production's database still lacks 
 
 **This gate is generic and conditional.** It carries no project specifics. It engages only when **both** are true:
 
-1. The repo exposes a drift check - a `db:check-drift` script in `package.json` (the convention the app-side guard established). The script auto-detects the package manager from the lockfile (`pnpm`/`yarn`/`bun`/`npm`) and runs `<pm> run db:check-drift`.
-2. This PR's diff touches schema - the Gate 3 `schema` risk signal fired.
+1. The repo exposes a drift check - a `db:check-drift` script in a `package.json` (the convention the app-side guard established). The lookup is **monorepo-aware**: it searches the repo root *and* the schema-owning workspace package (e.g. `apps/web/package.json`), and runs the check from whichever package defines it. It auto-detects the package manager from the root lockfile (`pnpm`/`yarn`/`bun` - both `bun.lock` and `bun.lockb` - or `npm`) and runs `<pm> run db:check-drift` bounded by a portable 120s timeout.
+2. This PR's diff touches schema - the Gate 3 `schema` risk signal fired (which now also recognizes Drizzle `*.sql.ts` files, not just `*.sql`).
 
 Any repo without that script, or any PR that touches no schema files, is a **clean no-op** (`GATE4_DRIFT: skip`). Non-schema PRs are deliberately never run through the check: they cannot introduce drift, and forcing every merge to reach a live database would block unrelated work in credential-less environments for no safety gain.
 
+**What a green check proves - and its one blind spot.** The check confirms the schema matches **whatever database the environment's `DATABASE_URL` points at**. It cannot itself prove that connection targets *production* - if `/inc:merge-pr-5` runs in a shell whose `DATABASE_URL` points at a local, preview, or staging database, a `pass` confirms only that that database is in sync. When you merge a schema change, make sure the environment's `DATABASE_URL` is the production one (or run the check with the production connection yourself). This gate closes the "code merged, prod DB never updated" hole; it does not police which database you pointed it at.
+
 Read the `GATE4_DRIFT:` line from the gates block:
 
-- `skip` → **Gate 4 not applicable.** The `REASON=` sub-line says why (no `db:check-drift` script, or no schema files in the diff). Nothing to report beyond a one-line note.
-- `pass` → **Gate 4 OK.** The repo's drift check confirmed production matches the schema this PR ships.
-- `drift` → **Gate 4 BLOCK.** Production is missing or differs on something this schema declares. The check's own output is passed through verbatim on `  DRIFT| `-prefixed lines - it names exactly what production lacks and prints the remediation. Surface it and the fix:
+- `skip` → **Gate 4 not applicable.** The `REASON=` sub-line says why (no schema files in the diff, or no `db:check-drift` script in any package.json). Nothing to report beyond a one-line note.
+- `pass` → **Gate 4 OK.** The repo's drift check confirmed the target database matches the schema this PR ships. A `PKG=` sub-line names the workspace package it ran in, when not the root.
+- `drift` → **Gate 4 BLOCK.** The target database is missing or differs on something this schema declares. This verdict is used **only** when the check's output positively reads as a drift report - so an operational crash is never mislabeled as drift. The check's own output is passed through verbatim on `  DRIFT| `-prefixed lines; it names exactly what is missing and prints the remediation. Surface it and the fix:
 
-  > **Gate 4 BLOCK - schema drift.** Production's database does not yet have the schema this PR ships:
+  > **Gate 4 BLOCK - schema drift.** The production database does not yet have the schema this PR ships:
   > ```
   > <verbatim DRIFT| lines from the block, prefix stripped>
   > ```
   > Merge is blocked until production is brought up to the schema. **Remediation:** run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc:merge-pr-5`) to confirm it's green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
 
-- `unverifiable` → **Gate 4 BLOCK (could not verify).** The check ran but could not reach a database - most commonly the merge environment has no `DATABASE_URL`, or the package manager isn't installed, or the connection timed out. Per its documented contract the check **refuses to run rather than vouch for a database the deploy never uses**, so the gate fail-safes to a block rather than passing silently. The `  DRIFT| ` lines (and the `REASON=` sub-line for a missing package manager) carry the actual error. Surface it honestly:
+- `unverifiable` → **Gate 4 BLOCK (could not verify).** The gate fail-safes to a block rather than passing silently, in any of these cases the `REASON=` / `  DRIFT| ` lines pinpoint:
+  - The check ran but couldn't reach a database - no `DATABASE_URL`, connection refused, or the 120s timeout fired. Per its documented contract the check **refuses to run rather than vouch for a database the deploy never uses**.
+  - The package manager isn't installed, or the check crashed for an operational reason (missing dependency, script error) that ran **no** schema comparison - so it is deliberately *not* called drift, and the remediation does not tell you to mutate production.
+  - **Gate tamper:** the base branch defines `db:check-drift` but this PR's tree no longer does while changing schema - a schema PR trying to delete the very gate meant to evaluate it. Restore the check (or split the removal into its own non-schema PR) and re-run.
 
-  > **Gate 4 BLOCK - drift check could not run.** This repo gates schema changes on a live drift check, but it couldn't reach the database from here:
+  > **Gate 4 BLOCK - drift check could not run.** This repo gates schema changes on a live drift check, but I couldn't get a trustworthy result from here:
   > ```
-  > <verbatim DRIFT| lines / REASON, prefix stripped>
+  > <verbatim REASON / DRIFT| lines, prefix stripped>
   > ```
-  > I can't confirm production is ready for this schema change, so I'm blocking rather than guessing. Either provide the drift check's `DATABASE_URL` to this environment and re-run, or run `db:check-drift` against production yourself and merge only once it's green.
+  > I can't confirm the production database is ready for this schema change, so I'm blocking rather than guessing. Depending on the reason above: provide the check's production `DATABASE_URL` to this environment and re-run, install the missing package manager, fix the check, or restore the removed drift script.
 
 Do not proceed past this gate on `drift` or `unverifiable`. "I'll push the schema after merge" is the exact failure mode this gate exists to prevent - the database must be ready when the merged code deploys.
 
