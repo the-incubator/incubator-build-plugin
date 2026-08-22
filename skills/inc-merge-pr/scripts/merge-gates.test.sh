@@ -588,6 +588,13 @@ printf '{"draft":false,"mergeable_state":"clean","head":{"sha":"%s"},"user":{"lo
 printf 'CREATE TABLE dirty (id int);\n' > "$REPO/drizzle/uncommitted.sql"   # untracked, dirty
 check_drift_out "dirty working tree -> BLOCK" "GATE4_DRIFT: unverifiable"
 check_drift_out "dirty working tree -> named cause" "uncommitted or untracked changes"
+git -C "$REPO" clean -fdq 2>/dev/null
+
+# A dirty file OUTSIDE the affected package (e.g. a shared checker the package
+# imports) must also block - the whole tree must be clean, not just schema/pkg
+# paths. Here the dirty file is neither a schema file nor under the affected dir.
+printf 'console.log(1)\n' > "$REPO/shared-checker.js"   # untracked, unrelated path, not schema
+check_drift_out "dirty file outside affected pkg -> BLOCK" "GATE4_DRIFT: unverifiable"
 git -C "$REPO" clean -fdq 2>/dev/null; rm -f "$REPO/package.json"; rm -rf "$REPO/drizzle"
 
 # --- summary -------------------------------------------------------------

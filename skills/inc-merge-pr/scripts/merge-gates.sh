@@ -662,26 +662,15 @@ EOF
 fi
 
 # Dirty working tree at the right commit: EVAL_STALE compares commits only, but
-# the check EXECUTES working-tree files. An uncommitted/untracked edit to a
-# DB-schema file or an affected package makes the result reflect code that isn't
-# what merges. Scope to schema/affected paths so unrelated local dirt doesn't
-# block. Test hook: MERGE_GATES_ASSUME_CLEAN=1 skips this (the harness writes
-# untracked fixtures on purpose).
+# the check EXECUTES working-tree files. Any uncommitted/untracked change makes
+# the result reflect code that isn't what merges - and scoping to schema/affected
+# paths is unsound because a checker can import shared code from anywhere in the
+# repo (e.g. apps/api's script running ../../scripts/check-drift.js). So require
+# the WHOLE tree clean while the gate runs. Test hook: MERGE_GATES_ASSUME_CLEAN=1
+# skips this (the harness writes untracked fixtures on purpose).
 WORKTREE_DIRTY=0
 if [ "${MERGE_GATES_ASSUME_CLEAN:-0}" != "1" ] && [ "$EVAL_STALE" = "0" ] && [ -n "$AFFECTED_PKGS" ]; then
-  DIRTY=$(git status --porcelain 2>/dev/null)
-  if [ -n "$DIRTY" ]; then
-    printf '%s\n' "$DIRTY" | grep -qiE "$DB_SCHEMA_RE" && WORKTREE_DIRTY=1
-    if [ "$WORKTREE_DIRTY" = "0" ]; then
-      while IFS= read -r pkg; do
-        [ -n "$pkg" ] || continue
-        if [ "$pkg" = "." ]; then WORKTREE_DIRTY=1; break; fi
-        printf '%s\n' "$DIRTY" | grep -qE "(^|[ >])$pkg/" && { WORKTREE_DIRTY=1; break; }
-      done <<EOF
-$AFFECTED_PKGS
-EOF
-    fi
-  fi
+  [ -n "$(git status --porcelain 2>/dev/null)" ] && WORKTREE_DIRTY=1
 fi
 
 # Surface the exact commit Gate 4 evaluated so the merge step can pin to it
@@ -725,10 +714,11 @@ elif [ "$EVAL_STALE" = "1" ]; then
   echo "  REASON=the local checkout ($LOCAL_HEAD) is behind the PR head ($EVAL_HEAD) that will merge; the drift check runs in the working tree and would evaluate stale code. Pull the PR head (git pull) and re-run so the check evaluates what actually merges."
   GATE4_BLOCKED=1
 elif [ "$WORKTREE_DIRTY" = "1" ]; then
-  # Right commit, but uncommitted/untracked schema or checker edits would be what
-  # the check runs against - not the committed code that merges.
+  # Right commit, but the check runs the working tree - any uncommitted/untracked
+  # change (a checker can import shared code from anywhere) means it evaluates
+  # code that isn't the committed PR head that merges.
   echo "GATE4_DRIFT: unverifiable"
-  echo "  REASON=the working tree has uncommitted or untracked changes to schema or an affected package; the drift check runs those files, not the committed PR head that merges. Commit or stash them and re-run."
+  echo "  REASON=the working tree is not clean (uncommitted or untracked changes); the drift check runs the working tree, so it must exactly match the committed PR head. Commit or stash all changes and re-run."
   GATE4_BLOCKED=1
 else
   # Run the drift check in EVERY affected workspace; the worst result wins. A
