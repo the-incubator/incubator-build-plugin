@@ -1,7 +1,7 @@
 ---
 name: inc:create-verification-skill
 description: "Generate a project-local verification skill that drives your app the way a user does — any language, framework, or platform. Use for /inc:create-verification-skill, \"make a verification skill for this repo\", \"make a control skill for this app\", or when a project has no scripted way to prove UI/CLI/service behavior."
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # Create a verification skill
@@ -10,7 +10,7 @@ Every serious project needs a scripted way to drive the real app and prove behav
 
 This skill is ported from [pstack `create-verification-skill`](https://github.com/cursor/plugins/tree/main/pstack/skills/create-verification-skill) by Lauren Tan, which is MIT licensed. The retained copyright and license text is in [NOTICE.md](NOTICE.md).
 
-**Where the generated skill lands.** The output is a project-local skill directory in the target repo. In Claude Code that is `.claude/skills/verify-<app>/`; under Codex it is `.codex/skills/verify-<app>/`. This document writes `.claude/skills/verify-<app>/` throughout — substitute `.codex/skills/` when you are running under Codex.
+**Where the generated skill lands.** The output is a project-local skill directory in the target repo. In Claude Code that is `.claude/skills/verify-<app>/`; under Codex it is `.agents/skills/verify-<app>/`. This document writes `.claude/skills/verify-<app>/` throughout — substitute `.agents/skills/` when you are running under Codex.
 
 ## 1. Interview the repo, not the user
 

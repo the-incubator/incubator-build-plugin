@@ -1,7 +1,7 @@
 ---
 name: inc:maintain-verification-skill
 description: "Periodic pass that keeps a project's verification skill and feature map honest: parallel source readers per feature, one live session driving every feature, at most one PR of proven corrections. Use for /inc:maintain-verification-skill, \"audit the verify skill\", or \"keep the verification map honest\" as the app changes."
-disable-model-invocation: true
+disable-model-invocation: false
 ---
 
 # Maintain a verification skill
@@ -10,7 +10,7 @@ A feature map rots the moment the app changes. This skill is the upkeep loop for
 
 This skill is ported from [pstack `maintain-verification-skill`](https://github.com/cursor/plugins/tree/main/pstack/skills/maintain-verification-skill) by Lauren Tan, which is MIT licensed. The retained copyright and license text is in [NOTICE.md](NOTICE.md).
 
-**Where the verification skill lives.** A project-local skill directory in the target repo: `.claude/skills/verify-*/` in Claude Code, `.codex/skills/verify-*/` under Codex. Substitute the Codex path when you are running there.
+**Where the verification skill lives.** A project-local skill directory in the target repo: `.claude/skills/verify-*/` in Claude Code, `.agents/skills/verify-*/` under Codex. Substitute the Codex path when you are running there.
 
 ## Outcomes
 
@@ -26,7 +26,7 @@ Only edit the verification skill's own directory (its SKILL.md, features/, and a
 
 ## Pass
 
-0. **Locate the target.** Find the verification skill to maintain: the project-local skill whose body has launch/drive sections and a feature map (usually `.claude/skills/verify-*/`, or `.codex/skills/verify-*/` under Codex). Several candidates → ask which one; none → stop and point at `/inc:create-verification-skill` instead of inventing a target.
+0. **Locate the target.** Find the verification skill to maintain: the project-local skill whose body has launch/drive sections and a feature map (usually `.claude/skills/verify-*/`, or `.agents/skills/verify-*/` under Codex). Several candidates → ask which one; none → stop and point at `/inc:create-verification-skill` instead of inventing a target.
 
 1. **Index hygiene.** Read the feature map README and glob its sibling files. Fix missing, extra, duplicate, or dead entries. Lightweight; no generated inventory.
 
@@ -38,6 +38,6 @@ Only edit the verification skill's own directory (its SKILL.md, features/, and a
 
 5. **Triage.** Wrong or missing user-POV description → doc drift, fix it. Working behavior the harness can't drive → harness gap, fix it; a harness fix follows the same helpers rule as generation (scripts executable, invocation documented in the skill body). App behavior that's actually broken → product gap; record it for the user, keep it out of this PR.
 
-6. **Ship or stop.** For changed: one PR of proven corrections, re-read every changed file first. For clean or blocked: no PR, report the outcome and the coverage honestly.
+6. **Ship or stop.** For changed: re-read every changed file first, then hand PR creation to `/inc:commit-push-pr-4` so its branch-identity gate and file-level staging apply — one PR of proven corrections, shipped from a safe branch, never bundled with unrelated work. For clean or blocked: no PR, report the outcome and the coverage honestly.
 
 Keep concise run notes (features covered, unreachable prerequisites, confirmed drift, outcome) in a scratch location; don't commit them.
