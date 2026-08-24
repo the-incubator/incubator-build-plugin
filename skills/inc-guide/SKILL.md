@@ -115,6 +115,8 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 | `/inc:visual-plan` | `inc-visual-plan` | Create and iterate a hosted visual plan from the live block catalog, with safe source replacement and a surfaced review URL |
 | `/inc:preview-url` | `inc-preview-url` | Public `*.trycloudflare.com` tunnel to a locally-running app - share or test from another device |
 | `/inc:team-lead-review` | `team-lead-review` | Product-acceptance PR review - did the author build what was actually requested, per spec/Slack/board task |
+| `/inc:create-verification-skill` | `inc-create-verification-skill` | Generate a project-local `verify-<app>` skill that drives the real app the way a user does - launch, doctor, drive, evidence, cleanup, plus a per-feature map - and proves itself by running once before it counts as delivered |
+| `/inc:maintain-verification-skill` | `inc-maintain-verification-skill` | Upkeep loop that keeps a `verify-<app>` skill and its feature map honest as the app changes - source readers per feature, one live pass driving every feature, at most one PR of proven corrections |
 
 ### Building blocks (mostly invoked by other skills)
 
@@ -129,5 +131,6 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 - Keep the answer short and scannable; lead with the one skill (or pipeline slice) that fits, not the whole catalog.
 - Refer to skills by their exact invokable name (`/inc:ship-it`, `/inc:review-3a`) so the user can run them directly.
 - Proactively point to the adjacent step: after a clean review suggest `/inc:commit-push-pr-4`; when review comments arrive suggest `/inc:resolve-pr-feedback`; when a bug appears suggest `/inc:debug` before any fix.
+- When the user wants to *prove the app's real behavior* - not just review the diff or run tests, but drive the running app the way a user would - point them at `/inc:create-verification-skill` to generate a project-local `verify-<app>` skill, then `/inc:maintain-verification-skill` to keep its feature map honest as the app changes. This is the verification layer that complements the review and test skills: review reads the code, tests assert units, verification drives the live product and captures evidence.
 - If the question isn't covered here, read that skill's `SKILL.md` (path in the skill map) and summarize from the source - never guess.
 - Never run any pipeline step from this skill - explain, recommend, and let the user choose.

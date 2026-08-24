@@ -1,6 +1,6 @@
 # Incubator Build Plugin
 
-Incubator Build provides agent skills for planning, PR review, debugging, resolving review feedback, and shipping pull requests.
+Incubator Build provides agent skills for planning, PR review, debugging, resolving review feedback, shipping pull requests, and generating project-local verification skills that drive the real app to prove its behavior.
 
 ## Codex Local Install
 
