@@ -94,12 +94,13 @@ Set only:
 ```json
 "statusLine": {
   "type": "command",
-  "command": "<tsx> <target>/statusline.ts"
+  "command": "<tsx> \"<target>/statusline.ts\""
 }
 ```
 
 where `<tsx>` is the Step 2 runner and `<target>` is the Step 1 install directory (default `~/.claude/statusline`).
 Use the **same** target you copied the bundle to in Step 1 — if the user gave a custom target, the command must point there, not at the default.
+**Double-quote the script path inside the command** so a target containing spaces or shell metacharacters still resolves when Claude Code runs the command through a shell; the default path has no spaces, but a custom target may.
 
 > **Shell state does not persist across separate Bash tool calls.**
 > The `$TARGET` and `$TSX` variables from Steps 1–2 are gone by the time you run Step 3.
@@ -120,7 +121,7 @@ Set `TSX` and `TARGET` to the literal Step 1/2 results in this same block:
 ```bash
 TSX="tsx"                              # the Step 2 runner ("tsx" or "npx tsx")
 TARGET="$HOME/.claude/statusline"      # the Step 1 install dir (custom target if given)
-CMD="$TSX $TARGET/statusline.ts"
+CMD="$TSX \"$TARGET/statusline.ts\""   # quote the path so a target with spaces still resolves
 S="$HOME/.claude/settings.json"
 [ -f "$S" ] || echo '{}' > "$S"
 jq --arg cmd "$CMD" '.statusLine = {type:"command", command:$cmd}' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
