@@ -36,12 +36,13 @@ Below, `<bundle>` means that `statusline/` directory.
 
 When the user types `/inc:setup-claude-status-line`, run this skill.
 An optional argument is the install target directory (e.g. `/inc:setup-claude-status-line ~/.claude/statusline`) — use it to skip the default.
-Otherwise the default target is `~/.claude/statusline/`.
+Otherwise the default target is `<config>/statusline/`, where `<config>` is the active Claude config dir (`$CLAUDE_CONFIG_DIR` if set, else `~/.claude`).
 
 ## Step 1 — Copy the bundle to the install target
 
 The install target is self-contained; the whole `statusline/` tree must land there so the relative imports resolve.
-Default target: `~/.claude/statusline/`.
+Resolve the active Claude config dir once and reuse it for both the install target and `settings.json` (Step 3), so a profile running with `CLAUDE_CONFIG_DIR` installs into that profile — the same directory the bundled runtime treats as authoritative in `getClaudeProfilePaths` (`lib/usage.ts`).
+Default target: `<config>/statusline/` (`<config>` = `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`).
 
 For each of the five files (`statusline.ts`, `lib/pace.ts`, `lib/read-stdin.ts`, `lib/usage.ts`, `types/statusline-input.ts`):
 
@@ -52,7 +53,8 @@ For each of the five files (`statusline.ts`, `lib/pace.ts`, `lib/read-stdin.ts`,
 
 ```bash
 BUNDLE="<bundle>"                     # the statusline/ dir shipped with this skill
-TARGET="${TARGET:-$HOME/.claude/statusline}"
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"   # active Claude config dir (used again in Step 3)
+TARGET="${TARGET:-$CFG/statusline}"   # custom target from the argument overrides this
 for rel in statusline.ts lib/pace.ts lib/read-stdin.ts lib/usage.ts types/statusline-input.ts; do
   src="$BUNDLE/$rel"; dst="$TARGET/$rel"
   if [ ! -e "$dst" ]; then
@@ -102,27 +104,32 @@ where `<tsx>` is the Step 2 runner and `<target>` is the Step 1 install director
 Use the **same** target you copied the bundle to in Step 1 — if the user gave a custom target, the command must point there, not at the default.
 **Double-quote the script path inside the command** so a target containing spaces or shell metacharacters still resolves when Claude Code runs the command through a shell; the default path has no spaces, but a custom target may.
 
+Write it to the active profile's `settings.json` — `$CLAUDE_CONFIG_DIR/settings.json` when that variable is set, else `~/.claude/settings.json`.
+Writing to the default path while a custom config dir is active installs the setting into the wrong profile, so the status line never appears.
+
 > **Shell state does not persist across separate Bash tool calls.**
-> The `$TARGET` and `$TSX` variables from Steps 1–2 are gone by the time you run Step 3.
+> The `$CFG`, `$TARGET`, and `$TSX` variables from Steps 1–2 are gone by the time you run Step 3.
 > Substitute the literal values you resolved directly into the command below (or run Steps 1–4 in one Bash invocation), so `command` is never written with an empty runner or the wrong path.
 
-First read the existing value:
+First read the existing value from the active config dir:
 
 ```bash
-jq '.statusLine // "NONE"' "$HOME/.claude/settings.json" 2>/dev/null || echo "NO_SETTINGS_FILE"
+jq '.statusLine // "NONE"' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null || echo "NO_SETTINGS_FILE"
 ```
 
 - If there is no `statusLine`, or it already equals the command you are about to write, merge it in.
 - If a **different** `statusLine` already exists, show it to the user and confirm before replacing it.
 
 Merge with `jq` so the rest of the file is untouched (write to a temp file, then move into place).
-Set `TSX` and `TARGET` to the literal Step 1/2 results in this same block:
+Set `CFG`, `TSX`, and `TARGET` to the literal Step 1/2 results in this same block:
 
 ```bash
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"  # active Claude config dir (same as Step 1)
 TSX="tsx"                              # the Step 2 runner ("tsx" or "npx tsx")
-TARGET="$HOME/.claude/statusline"      # the Step 1 install dir (custom target if given)
+TARGET="$CFG/statusline"               # the Step 1 install dir (custom target if given)
 CMD="$TSX \"$TARGET/statusline.ts\""   # quote the path so a target with spaces still resolves
-S="$HOME/.claude/settings.json"
+S="$CFG/settings.json"                 # the active profile's settings, not always ~/.claude
+mkdir -p "$(dirname "$S")"             # a first-time custom-config profile may not have it yet
 [ -f "$S" ] || echo '{}' > "$S"
 jq --arg cmd "$CMD" '.statusLine = {type:"command", command:$cmd}' "$S" > "$S.tmp" && mv "$S.tmp" "$S"
 ```
@@ -136,7 +143,7 @@ Run this in one block with the same literal runner and target you used in Step 3
 The sample is copy-paste deterministic — the `context_window.used_percentage` of 58 lands in the yellow tier, so line 1 always renders:
 
 ```bash
-TSX="tsx"; TARGET="$HOME/.claude/statusline"   # match Step 3's resolved runner + target
+TSX="tsx"; TARGET="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline"   # match Step 3's resolved runner + target
 echo '{"model":{"id":"claude-opus-4-8","display_name":"Opus 4.8"},"context_window":{"total_input_tokens":120000,"total_output_tokens":8000,"context_window_size":200000,"used_percentage":58,"remaining_percentage":42,"current_usage":null},"workspace":{"current_dir":"'"$HOME"'","project_dir":"'"$HOME"'","added_dirs":[]},"output_style":{"name":"default"},"effort":{"level":"high"}}' \
   | $TSX "$TARGET/statusline.ts"
 ```
