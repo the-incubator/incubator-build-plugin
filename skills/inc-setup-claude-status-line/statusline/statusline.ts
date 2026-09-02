@@ -4,6 +4,11 @@ import { readStdin } from "./lib/read-stdin.js";
 import { getUsageLimits, type UsageLimit } from "./lib/usage.js";
 import type { StatusLineInput } from "./types/statusline-input.js";
 
+// Warning tiers shared by the bar color and the session reset countdown, so the
+// countdown appears exactly when the bar turns yellow.
+const WARN_PCT = 70;
+const CRIT_PCT = 90;
+
 // 5-cell bar + colored percent, e.g. "▰▱▱▱▱  23%"
 // Always colored (green/yellow/red) so it reads at a glance even at low %.
 function usageBar(percent: number): string {
@@ -12,7 +17,11 @@ function usageBar(percent: number): string {
   const filled = Math.min(5, Math.floor(percent / 20));
   // Muted sage for normal so it reads without shouting; yellow/red for warning tiers
   const color =
-    percent >= 90 ? "\x1b[31m" : percent >= 70 ? "\x1b[33m" : "\x1b[38;5;108m";
+    percent >= CRIT_PCT
+      ? "\x1b[31m"
+      : percent >= WARN_PCT
+        ? "\x1b[33m"
+        : "\x1b[38;5;108m";
   const bar =
     color +
     "▰".repeat(filled) +
@@ -22,8 +31,9 @@ function usageBar(percent: number): string {
   return `${bar}  ${color}${Math.round(percent)}%\x1b[0m`;
 }
 
-// Compact time-until-reset, e.g. "↻6d" / "↻30h" / "↻45m".
-// Below 2 days it switches to hours so "1d" never hides how many hours remain.
+// Compact time-until-reset, e.g. "↻6d" / "↻30h" / "↻95m".
+// Below 2 days it switches to hours so "1d" never hides how many hours remain,
+// and below 2 hours to minutes so a 5h-window countdown is not rounded to "2h".
 function resetIn(resetsAt: string): string | null {
   const ms = new Date(resetsAt).getTime() - Date.now();
   if (!Number.isFinite(ms) || ms <= 0) return null;
@@ -31,7 +41,7 @@ function resetIn(resetsAt: string): string | null {
   const label =
     hours >= 48
       ? `${Math.round(hours / 24)}d`
-      : hours >= 1
+      : hours >= 2
         ? `${Math.round(hours)}h`
         : `${Math.max(1, Math.round(ms / 60_000))}m`;
   return `\x1b[2m↻ ${label}\x1b[0m`;
@@ -42,7 +52,13 @@ function usageSegment(limits: UsageLimit[]): string {
   const weekly = limits.find((l) => l.kind === "weekly_all");
   const scoped = limits.find((l) => l.kind === "weekly_scoped");
   const parts: string[] = [];
-  if (session) parts.push(`5h ${usageBar(session.percent)}`);
+  if (session) {
+    // Once the 5h window is in the warning zone, the question is "how soon
+    // does it come back", so show the countdown there too.
+    const reset =
+      session.percent >= WARN_PCT ? resetIn(session.resets_at) : null;
+    parts.push(`5h ${usageBar(session.percent)}${reset ? ` ${reset}` : ""}`);
+  }
   if (scoped) {
     const name = scoped.scope?.model?.display_name ?? "Model";
     const pace = paceBadge(

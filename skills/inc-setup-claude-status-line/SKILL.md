@@ -1,6 +1,6 @@
 ---
 name: inc:setup-claude-status-line
-description: Use when the user wants to install the captain's Claude Code status line — a two-line statusLine that shows model + effort + context % + project/branch on line 1 and 5h/weekly/weekly-all usage bars with pace badges on line 2. Triggers on "setup the status line", "install the claude status line", "set up the status line", "add the usage bars to my status line", or "/inc:setup-claude-status-line". Copies the bundled statusline/ tree to a self-contained install target (default ~/.claude/statusline/), resolves a tsx runner, MERGES the statusLine command into ~/.claude/settings.json without touching other keys, and verifies with a sample payload. The usage line needs macOS + a logged-in Claude Code; elsewhere the base line still renders.
+description: Use when the user wants to install the captain's Claude Code status line — a two-line statusLine that shows model + effort + context % + project/branch on line 1 and 5h/weekly/weekly-all usage bars with pace badges on line 2 (the 5h bar also shows a reset countdown once it enters the warning zone). Triggers on "setup the status line", "install the claude status line", "set up the status line", "add the usage bars to my status line", or "/inc:setup-claude-status-line". Copies the bundled statusline/ tree to a self-contained install target (default ~/.claude/statusline/), resolves a tsx runner, MERGES the statusLine command into ~/.claude/settings.json without touching other keys, and verifies with a sample payload. The usage line needs macOS + a logged-in Claude Code; elsewhere the base line still renders.
 allowed-tools: Read, Write, Edit, AskUserQuestion, Bash(command -v *), Bash(cp *), Bash(cmp *), Bash(diff *), Bash(mkdir *), Bash(test *), Bash(ls *), Bash(cat *), Bash(jq *), Bash(mv *), Bash(tsx *), Bash(npx *), Bash(echo *), Bash(dirname *), Bash(find *)
 argument-hint: "[optional: install target dir, e.g. '~/.claude/statusline']"
 ---
@@ -11,7 +11,7 @@ Install the captain's Claude Code status line for the current user.
 It is a TypeScript script that Claude Code runs through `tsx` via the `statusLine` setting, and it renders two lines:
 
 - **Line 1:** model name + effort level (dim), output style (only when non-default), context % (yellow above 50, red above 70), and the project dir + git branch.
-- **Line 2:** usage bars — 5h session, model-scoped weekly, and weekly-all quota — each a 5-cell bar + colored percent, with pace badges like `(1.4x)` and a reset countdown like `↻6d`.
+- **Line 2:** usage bars — 5h session, model-scoped weekly, and weekly-all quota — each a 5-cell bar + colored percent, with pace badges like `(1.4x)` and a reset countdown like `↻6d`. The 5h bar also appends its own reset countdown once it enters the warning zone (70%+, when the bar turns yellow), so you can see how soon the window comes back.
 
 Line 2 reads the Claude Code OAuth token from the macOS Keychain, calls the Anthropic usage endpoint, and caches for 60s.
 On any failure it silently falls back to line 1 only, so the script is safe cross-platform: the usage line is effectively macOS-only, and everywhere else the base line still renders.
