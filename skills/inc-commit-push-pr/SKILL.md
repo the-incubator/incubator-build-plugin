@@ -77,7 +77,7 @@ Read the current PR body so any existing `## Demo` or `## Screenshots` block can
 gh pr view --json body --jq '.body'
 ```
 
-Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5.
+Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5. Existing image references — whether GitHub `user-attachments` URLs (permanent, from a prior `--attach`) or third-party hosted URLs — are preserved **verbatim**. Never re-upload or re-attach an image already in the body; the URLs already point at a permanent asset.
 
 ### DU-4: Gather the real branch diff
 
@@ -276,6 +276,25 @@ git rev-parse --verify origin/<default> >/dev/null 2>&1 \
 git diff origin/<default>...HEAD
 ```
 
+**`gh` capability preflight — decide the delivery path first.** Evidence images go **into the PR body as GitHub attachments** (`gh --attach`), not onto a third-party image host. That flag exists only on **GitHub CLI 2.99.0 or newer**. Read the installed version and record which delivery path this run uses:
+
+```bash
+GH_VER=$(gh --version | sed -n 's/^gh version \([0-9.]*\).*/\1/p' | head -1)
+printf '%s\n' "$GH_VER"
+```
+
+Compare `GH_VER` against `2.99.0`:
+
+- **2.99.0 or newer** → set the delivery path to **`github-attachment`**. Evidence renders inline in the PR body from `user-attachments` URLs, with no third-party host involved.
+- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Give the upgrade command for their install method — `brew upgrade gh` when `gh` came from Homebrew (`command -v gh` under a Homebrew prefix such as `/opt/homebrew` or `/usr/local/Cellar`), otherwise point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`). Offer:
+  > Your `gh` is `<version>`; inline PR images need **2.99.0+**. What now?
+  >
+  > 1. Upgrade now (`<upgrade command>`), then re-run this gate
+  > 2. Proceed with the external image-host path (evidence hosted off GitHub)
+  > 3. Skip evidence
+  >
+  On **Upgrade now**, run the upgrade command, re-read `gh --version`, and re-evaluate. On **Proceed**, set the delivery path to **`hosted`**. On **Skip**, skip the evidence gate entirely.
+
 Ask:
 
 > Capture evidence for the PR description?
@@ -284,11 +303,13 @@ Ask:
 > 2. Demo reel (GIF)
 > 3. Skip
 
-Invoke `demo-reel` with the chosen intent — screenshots map to Tier 4 (`Static Screenshots`), reels map to Tiers 1-3 (Browser / Terminal / Screenshot Reel). Pass a target description inferred from the branch diff. `demo-reel` returns `Tier`, `Description`, `URL`. Use the returned URL(s) in the body:
+Invoke `demo-reel` with the chosen intent **and the delivery path** (`github-attachment` or `hosted`) recorded above — screenshots map to Tier 4 (`Static Screenshots`), reels map to Tiers 1-3 (Browser / Terminal / Screenshot Reel). Pass a target description inferred from the branch diff. `demo-reel` returns `Tier`, `Delivery`, `Description`, and then either `Path` (local artifact path(s), for `github-attachment`) or `URL` (hosted URL(s), for `hosted`). Carry the returned artifacts into the body per Step 11:
 
 - Screenshots → `## Screenshots` section
 - Reel → `## Demo` section
-- `Tier: skipped` or `URL: "none"` → no evidence section
+- `Tier: skipped` / `Delivery: none` / `URL: "none"` → no evidence section
+
+On the **`github-attachment`** path, hold each returned local `Path` plus a real one-line description of that shot (for the `#alt` text) — Step 11 writes local relative references and Step 12 uploads them via `--attach`.
 
 **Do not offer a "paste a URL" option.** Preview URLs already attach to the PR automatically via deploy bots; the evidence section is for captures the skill produced.
 
@@ -346,11 +367,11 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 ## Demo    <!-- optional: only if Step 9 captured a reel -->
 
-<demo-reel URL>
+<attachment path: a local image reference — `![<alt text>]` immediately followed by `(./<file>)` — no space between  ·  hosted path: the demo-reel URL>
 
 ## Screenshots    <!-- optional: only if Step 9 captured screenshots -->
 
-<demo-reel URL(s)>
+<attachment path: one local image reference per shot — `![<alt text>]` immediately followed by `(./<file>)`  ·  hosted path: the demo-reel URL(s)>
 
 <details>
 <summary>Implementation Plan</summary>
@@ -376,15 +397,33 @@ BODY_FILE="$(mktemp -t pr-body).md"
 - **Reference issues/PRs as bullets.** Use `- #123` or `- https://github.com/owner/repo/issues/123` so GitHub renders them as linked cards.
 - **Avoid accidental issue links.** `#42` in prose auto-links to issue 42. Only use `#NUMBER` for intentional references; rephrase ("top cause", "third priority") otherwise. If a literal `#NUMBER` is unavoidable, escape it: `\#42`.
 
-Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward to Step 12.
+**Evidence sections — match the delivery path from Step 9:**
+
+- **`github-attachment` path** — write **local relative markdown image references** in `## Demo` / `## Screenshots`, one per artifact: an alt-text label `![<alt>]` immediately followed by the parenthesized relative path `(./<file>)`, with no space between them (e.g. alt `login error state` + file `login.png` → `![login error state]` written directly before `(./login.png)`). `<file>` is the basename of the local `Path` demo-reel returned and `<alt>` the real description of the shot. Do **not** write a remote URL. Step 12's `--attach` uploads each file and rewrites these local references to `user-attachments` URLs.
+- **`hosted` path** — write the hosted URL exactly as demo-reel returned it, as today.
+
+Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward to Step 12. On the `github-attachment` path, also carry the list of `(<file path>, <alt text>)` pairs forward — Step 12 needs them for `--attach`.
 
 ### Step 12: Create or update the PR
+
+**Attaching evidence images (`github-attachment` path only).** When Step 9 captured evidence on the `github-attachment` path, add one repeatable `--attach '<file>#<alt text>'` per artifact **on the same command that writes the body** (the create or edit below) — upload and body land together. `<file>` is the local path demo-reel returned; `<alt text>` is the real description of the shot, never the filename. `gh` (2.99.0+) rewrites the body's local relative image references (an `![alt]` label directly followed by a `(./file)` path) to `user-attachments` URLs. Up to 50 files per command. On the `hosted` path (or no evidence), pass no `--attach` flags.
 
 **New PR (no existing PR from Step 2).** Substitute `<TITLE>` and `<BODY_FILE>` verbatim. If `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 
 ```bash
-gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
+gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")" \
+  --attach '<file1>#<alt text 1>' --attach '<file2>#<alt text 2>'
 ```
+
+Drop the `--attach` flags entirely when there is nothing to attach.
+
+**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Read the body back and confirm every local image reference became a `user-attachments` URL:
+
+```bash
+gh pr view --json body --jq '.body' | grep -nE '!\[[^]]*\]\(\./' && echo 'STILL_LOCAL' || echo 'ALL_REWRITTEN'
+```
+
+If any reference is still a local `./` path (`STILL_LOCAL`), say so and retry `--attach` for that specific file (`gh pr edit --attach '<file>#<alt>'`) rather than reporting success. Only report the evidence as delivered once every reference is a `user-attachments` URL. After verification succeeds, the local artifacts are no longer needed and may be removed.
 
 **Existing PR (open PR found in Step 2).** New commits make the existing description stale by default — the title and "why" almost certainly no longer cover what was just pushed. **Default action is to rewrite the description**, not to leave it as-is. Treat "leave it as-is" as an explicit opt-out, not the default.
 
@@ -397,7 +436,7 @@ Run the writer (Step 11) against the existing PR's `baseRefName`, preserve any e
 >
 > Apply this rewrite, or keep the existing description as-is?
 
-- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`.
+- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`, adding the same repeatable `--attach '<file>#<alt text>'` flags described above when Step 9 captured evidence on the `github-attachment` path. Then run the rewrite verification.
 - **Keep as-is** (explicit opt-out only) → skip the edit. Note in the report that the description is stale relative to the new commits.
 
 Skip the rewrite **only** in these cases:
@@ -489,5 +528,6 @@ This watch only survives the current Claude session. If the user closes the term
 | Add a `## Test plan` section | Deliberately dropped from this skill — testing lives in QA |
 | Describe the conversation, not the diff | The PR must reflect the actual changes, not just what was discussed |
 | Paste a preview URL as "evidence" | Deploy bots already attach preview URLs to the PR; the evidence section is for captures this skill produced |
+| Claim GitHub has no API for putting images in a PR body | It does — `gh --attach` (GitHub CLI 2.99.0+) uploads local files and rewrites body references to `user-attachments` URLs. The correct response to an old CLI is to ask the user to upgrade, not to declare the capability missing |
 | Use `#NUMBER` in prose | `#42` auto-links on GitHub — rephrase unless it's an intentional issue/PR reference |
 | Reuse a branch whose prior PR merged | Step 2 already switched you off; don't switch back without the user asking |

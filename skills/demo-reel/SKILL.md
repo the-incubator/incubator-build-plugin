@@ -7,7 +7,7 @@ argument-hint: "[what to capture, e.g. 'the new settings page' or 'CLI output of
 
 # Demo Reel
 
-Detect project type, recommend a capture tier, record visual evidence, upload to a public URL, and return markdown for PR inclusion.
+Detect project type, recommend a capture tier, record visual evidence, and deliver it for PR inclusion — either as a **local artifact the caller attaches into the PR body** (`gh --attach`, GitHub CLI 2.99.0+) or, as a fallback, as a **permanent public URL** on a third-party host.
 
 **Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
 
@@ -22,6 +22,7 @@ Never generate fake or placeholder image/GIF URLs. If upload fails, report the f
 Parse `$ARGUMENTS`:
 - **What to capture**: A description of the feature or behavior to demonstrate. If provided, use it to guide which pages to visit, commands to run, or states to capture.
 - If blank, infer what to capture from recoverable branch or PR context. If the target remains ambiguous after that, ask the user what they want to demonstrate before proceeding.
+- **Delivery mode**: How the approved evidence should be handed back. `github-attachment` — the caller uploads the file into the PR body via `gh --attach` (requires GitHub CLI **2.99.0+**), so demo-reel returns local artifact path(s) and leaves the files in place. `hosted` (default when unspecified) — demo-reel promotes the approved file to a permanent public host and returns that URL. A caller that has confirmed a capable `gh` passes `github-attachment`; older callers or those with no PR to attach to use `hosted`.
 
 ## Step 0: Discover Capture Target
 
@@ -105,7 +106,7 @@ Create a per-run scratch directory in the OS temp location:
 mktemp -d -t demo-reel-XXXXXX
 ```
 
-Use the output as `RUN_DIR`. Pass this concrete run directory to every tier reference. Evidence artifacts are ephemeral — they get uploaded to a public URL and then discarded. The OS temp directory is the right place for them, not the repo tree.
+Use the output as `RUN_DIR`. Pass this concrete run directory to every tier reference. Evidence artifacts are temporary and belong in the OS temp directory, not the repo tree. In `hosted` mode they are discarded after promotion to the permanent URL; in `github-attachment` mode they are left in place until the caller has attached and verified them (see `references/upload-and-approval.md`).
 
 ## Step 6: Recommend Tier and Ask User
 
@@ -146,7 +147,7 @@ Load the appropriate reference file for the selected tier:
 
 ## Step 8: Upload and Approval
 
-After the selected tier produces an artifact, read `references/upload-and-approval.md` for upload to a public host, user approval gate, and markdown embed generation.
+After the selected tier produces an artifact, read `references/upload-and-approval.md` for the temporary preview upload, the user approval gate, and delivery of the approved evidence per the active delivery mode (local path for `github-attachment`, permanent host URL for `hosted`).
 
 ## Output
 
@@ -155,14 +156,19 @@ Return these values to the caller (e.g., `inc:commit-push-pr-4`):
 ```
 === Evidence Capture Complete ===
 Tier: [browser-reel / terminal-recording / screenshot-reel / static / skipped]
+Delivery: [github-attachment / hosted / none]
 Description: [1 sentence describing what the evidence shows]
-URL: [public URL or "none" (multiple URLs comma-separated for static screenshots)]
+Path: [local absolute path(s), comma-separated — present ONLY when Delivery: github-attachment]
+URL: [public URL(s), comma-separated — present ONLY when Delivery: hosted]
 === End Evidence ===
 ```
 
-The `Description` is a 1-line summary derived from the capture hypothesis in Step 0 (e.g., "CLI detect command classifying 3 project types and recommending capture tiers"). The caller decides how to format the URL(s) into the PR description.
+The `Description` is a 1-line summary derived from the capture hypothesis in Step 0 (e.g., "CLI detect command classifying 3 project types and recommending capture tiers"). The caller decides how to format the evidence into the PR description.
 
-- `Tier: skipped` or `URL: "none"` means no evidence was captured.
+- Emit exactly one of `Path` or `URL`, matching `Delivery`, so the caller never has to guess whether a value is a local file or a hosted URL. Multiple artifacts (static screenshots tier) are comma-separated within that one field.
+- `Delivery: github-attachment` → `Path:` carries local absolute artifact path(s); the files are left in place for the caller to run `gh --attach`.
+- `Delivery: hosted` → `URL:` carries permanent host URL(s).
+- `Tier: skipped`, `Delivery: none`, or `URL: "none"` means no evidence was captured.
 
 **Label convention:**
 - Browser reel, terminal recording, screenshot reel: label as "Demo"
