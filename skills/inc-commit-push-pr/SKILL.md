@@ -77,7 +77,7 @@ Read the current PR body so any existing `## Demo` or `## Screenshots` block can
 gh pr view --json body --jq '.body'
 ```
 
-Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5.
+Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5. Existing image references — whether GitHub `user-attachments` URLs (permanent, from a prior `--attach`) or third-party hosted URLs — are preserved **verbatim**. Never re-upload or re-attach an image already in the body; the URLs already point at a permanent asset.
 
 ### DU-4: Gather the real branch diff
 
@@ -104,6 +104,10 @@ If confirmed, apply — `<TITLE>` and `<BODY_FILE>` come verbatim from the write
 ```bash
 gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
 ```
+
+**If DU-5 refreshed evidence on the `github-attachment` path**, the new body carries local `![alt]`+`(./file)` references that GitHub cannot render on their own — this `gh pr edit` must therefore carry the same repeatable `--attach '<file>#<alt text>'` flags (safely quoted) as Step 12, **capture `WRITE_RC=$?` immediately after** (the Step 12 verifier reads `WRITE_RC` — leaving it unset makes `[ "$WRITE_RC" -ne 0 ]` error out and can mask a failed edit as `ALL_REWRITTEN`), and then run Step 12's fail-closed rewrite verification. Do not report the refresh as done until every local reference is confirmed a `user-attachments` URL. When DU-3 only spliced back **already-hosted** evidence (existing `user-attachments`/hosted URLs), pass no `--attach` and skip verification — those URLs are already permanent.
+
+**If the user declines the DU-6 apply** and DU-5 had captured fresh evidence on the `github-attachment` path, the attachment command never runs — so delete the returned artifact(s) / demo-reel run directory now, exactly as the full-workflow "Keep as-is" path does, rather than leaving potentially sensitive captures on disk.
 
 Report the PR URL. Do not run the CI/AI watch (Step 14) — body edits don't re-trigger reviewers.
 
@@ -276,6 +280,25 @@ git rev-parse --verify origin/<default> >/dev/null 2>&1 \
 git diff origin/<default>...HEAD
 ```
 
+**`gh` capability preflight — decide the delivery path first.** Evidence images go **into the PR body as GitHub attachments** (`gh --attach`), not onto a third-party image host. That flag exists only on **GitHub CLI 2.99.0 or newer**. Read the installed version and record which delivery path this run uses:
+
+```bash
+GH_VER=$(gh --version | sed -n 's/^gh version \([0-9.]*\).*/\1/p' | head -1)
+printf '%s\n' "$GH_VER"
+```
+
+Compare `GH_VER` against `2.99.0`:
+
+- **2.99.0 or newer** → set the delivery path to **`github-attachment`**. The **permanent** evidence renders inline in the PR body from GitHub `user-attachments` URLs — no third-party host holds the final asset. Note that the pre-PR review step still uploads a temporary 1-hour preview to a third-party host (litterbox) before approval, in this mode too; for sensitive/private captures, demo-reel's local-review option keeps the artifact off any third-party host (see `demo-reel`'s `upload-and-approval.md`).
+- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Determine the upgrade path from how `gh` is installed (`command -v gh`, resolving symlinks): a Homebrew prefix (`/opt/homebrew`, `/usr/local/Cellar`) → `brew upgrade gh`; a version-manager shims path (`.../mise/`, `.../asdf/`) → a command that **advances the pinned version**. A plain `mise upgrade gh` won't move an exact pin at all. First check whether a **repo-local** pin governs `gh` here (`mise.toml`/`.mise.toml` in the tree, or `.tool-versions`): if one does, it takes precedence over global config, so writing a global `latest` won't change the `gh` this repo selects — and rewriting the repo-local file would dirty an unrelated toolchain file in the PR's working tree (this gate runs post-push). In that case, do **not** silently mutate either: tell the user a repo-local pin controls `gh` and ask them to bump it (or pick Proceed/Skip). Only when **no** repo-local pin applies, advance the global pin: `mise use --global gh@latest` for mise, `asdf install github-cli latest && asdf global github-cli latest` for asdf; a system package path → the OS package manager (`apt`, `dnf`, `pacman`, …). If no automatable upgrade command can be identified, there is **no command to run** — point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`) and treat "Upgrade now" as a manual step. Offer:
+  > Your `gh` is `<version>`; inline PR images need **2.99.0+**. What now?
+  >
+  > 1. Upgrade now, then re-run this gate
+  > 2. Proceed with the external image-host path (evidence hosted off GitHub)
+  > 3. Skip evidence
+  >
+  On **Upgrade now**: if an automatable upgrade command was identified, run it; otherwise tell the user the exact manual step (releases page or their package manager) and **wait** for them to confirm it's done — never claim to have run a command that doesn't exist. Either way, re-read `gh --version` and re-evaluate; if it's still below 2.99.0, re-offer Proceed/Skip rather than looping. On **Proceed**, set the delivery path to **`hosted`**. On **Skip**, skip the evidence gate entirely.
+
 Ask:
 
 > Capture evidence for the PR description?
@@ -284,11 +307,13 @@ Ask:
 > 2. Demo reel (GIF)
 > 3. Skip
 
-Invoke `demo-reel` with the chosen intent — screenshots map to Tier 4 (`Static Screenshots`), reels map to Tiers 1-3 (Browser / Terminal / Screenshot Reel). Pass a target description inferred from the branch diff. `demo-reel` returns `Tier`, `Description`, `URL`. Use the returned URL(s) in the body:
+Invoke `demo-reel` with the chosen intent **and the delivery path** (`github-attachment` or `hosted`) recorded above — screenshots map to Tier 4 (`Static Screenshots`), reels map to Tiers 1-3 (Browser / Terminal / Screenshot Reel). Pass a target description inferred from the branch diff. `demo-reel` returns `Tier`, `Delivery`, `Description`, and then either `Path` (local artifact path(s), for `github-attachment`) or `URL` (hosted URL(s), for `hosted`). Carry the returned artifacts into the body per Step 11:
 
 - Screenshots → `## Screenshots` section
 - Reel → `## Demo` section
-- `Tier: skipped` or `URL: "none"` → no evidence section
+- `Tier: skipped` / `Delivery: none` / `URL: "none"` → no evidence section
+
+On the **`github-attachment`** path, hold each returned local `Path` plus a real one-line description of that shot (for the `#alt` text) — Step 11 writes local relative references and Step 12 uploads them via `--attach`.
 
 **Do not offer a "paste a URL" option.** Preview URLs already attach to the PR automatically via deploy bots; the evidence section is for captures the skill produced.
 
@@ -346,11 +371,11 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 ## Demo    <!-- optional: only if Step 9 captured a reel -->
 
-<demo-reel URL>
+<attachment path: a local image reference — `![<alt text>]` immediately followed by `(./<file>)` — no space between  ·  hosted path: the demo-reel URL>
 
 ## Screenshots    <!-- optional: only if Step 9 captured screenshots -->
 
-<demo-reel URL(s)>
+<attachment path: one local image reference per shot — `![<alt text>]` immediately followed by `(./<file>)`  ·  hosted path: the demo-reel URL(s)>
 
 <details>
 <summary>Implementation Plan</summary>
@@ -376,15 +401,59 @@ BODY_FILE="$(mktemp -t pr-body).md"
 - **Reference issues/PRs as bullets.** Use `- #123` or `- https://github.com/owner/repo/issues/123` so GitHub renders them as linked cards.
 - **Avoid accidental issue links.** `#42` in prose auto-links to issue 42. Only use `#NUMBER` for intentional references; rephrase ("top cause", "third priority") otherwise. If a literal `#NUMBER` is unavoidable, escape it: `\#42`.
 
-Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward to Step 12.
+**Evidence sections — match the delivery path from Step 9:**
+
+- **`github-attachment` path** — write **local relative markdown image references** in `## Demo` / `## Screenshots`, one per artifact: an alt-text label `![<alt>]` immediately followed by the parenthesized relative path `(./<file>)`, with no space between them (e.g. alt `login error state` + file `login.png` → `![login error state]` written directly before `(./login.png)`). `<file>` is the basename of the local `Path` demo-reel returned and `<alt>` the real description of the shot. **Escape Markdown-significant characters in the alt text** so the reference stays well-formed and `gh` can match and rewrite it: a literal `]` in a description (e.g. `the [Save] button`) closes the `![…]` early and produces broken Markdown plus a duplicate appended attachment — escape it as `\]` (and `[` as `\[`). This Markdown escaping is separate from, and applied before, the shell quoting in Step 12. Do **not** write a remote URL. Step 12's `--attach` uploads each file and rewrites these local references to `user-attachments` URLs. Keep the **same** alt text in the body reference and in the `--attach '<file>#<alt>'` value so `gh` pairs them.
+- **`hosted` path** — write the hosted URL exactly as demo-reel returned it, as today.
+
+Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward to Step 12. On the `github-attachment` path, also carry the list of `(<file path>, <alt text>)` pairs forward — Step 12 needs them for `--attach`.
 
 ### Step 12: Create or update the PR
+
+**Attaching evidence images (`github-attachment` path only).** When Step 9 captured evidence on the `github-attachment` path, add one repeatable `--attach '<file>#<alt text>'` per artifact **on the same command that writes the body** (the create or edit below) — upload and body land together. `<file>` is the local path demo-reel returned; `<alt text>` is the real description of the shot, never the filename. `gh` (2.99.0+) rewrites the body's local relative image references (an `![alt]` label directly followed by a `(./file)` path) to `user-attachments` URLs. Up to 50 files per command. On the `hosted` path (or no evidence), pass no `--attach` flags.
+
+**Quote the `--attach` value safely.** The `<alt text>` comes from a real shot description and may contain shell metacharacters — an apostrophe (`user's dashboard`), a backtick, or `$`. Interpolating it raw into the single-quoted `'<file>#<alt text>'` literal breaks the quoting and the whole `gh` command fails to parse. Apply the same escaping discipline as the title: keep the single quotes and replace every embedded single quote with `'\''`, e.g. `--attach 'shot.png#user'\''s dashboard'`. If a description also carries backticks or `$`, either it stays inside single quotes (which already neutralize them) or the apostrophes are escaped as above. Never drop the description down to the filename just to dodge quoting.
 
 **New PR (no existing PR from Step 2).** Substitute `<TITLE>` and `<BODY_FILE>` verbatim. If `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 
 ```bash
-gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
+gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")" \
+  --attach '<file1>#<alt text 1>' --attach '<file2>#<alt text 2>'
+WRITE_RC=$?   # gh exits non-zero if ANY attachment failed to upload, even though the PR is still created
 ```
+
+Drop the `--attach` flags entirely when there is nothing to attach.
+
+**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Two independent signals, and **both** must hold:
+
+1. **The write command's own exit status (`WRITE_RC`).** `gh pr create`/`gh pr edit` exit **non-zero when any attachment fails to upload** (and when an edit fails before changing anything) even though the PR is created/updated and its URL is printed. This is the authoritative "every attachment landed" signal — a non-zero write means not all of the new evidence landed, regardless of what the body says.
+2. **None of this run's evidence references remain local in the body.** `gh` rewrites only the references that correspond to **attached files**, so check for **this run's specific `./<file>` paths**, not any `./` image in the body — the body may also carry an unrelated relative image (e.g. inside the implementation plan copied in Step 10), and a whole-body `./` grep would wrongly report `STILL_LOCAL` forever. Build `LOCAL_REFS` as a regex alternation of just the evidence paths this run wrote (each regex-escaped), e.g. `\./login\.png|\./flow\.gif`. Do **not** count total `/user-attachments/` occurrences — DU-3 deliberately preserves *existing* attachments, so an aggregate count would pass on an old, unchanged body even when none of the new evidence landed.
+
+**Fail closed** on the readback so a failed `gh pr view` (expired auth, rate limit, transient error) is never mistaken for a clean body:
+
+```bash
+LOCAL_REFS='\./login\.png|\./flow\.gif'   # this run's evidence paths only, regex-escaped
+if BODY=$(gh pr view --json body --jq '.body'); then
+  if [ "$WRITE_RC" -ne 0 ]; then
+    echo 'WRITE_FAILED'          # gh reported an attachment failure — some new evidence did not upload
+  elif printf '%s' "$BODY" | grep -qE "\]\((${LOCAL_REFS})\)"; then
+    echo 'STILL_LOCAL'           # one of this run's refs was never rewritten
+  else
+    echo 'ALL_REWRITTEN'         # write succeeded AND none of this run's local refs remain
+  fi
+else
+  echo 'VERIFY_UNAVAILABLE'      # could not read the body back — do not assume anything
+fi
+```
+
+The checks run **only inside the successful-read branch** — branching on the read command's own exit status, not on whether `BODY` is set. (A failed `gh pr view` still leaves `BODY` set to an empty string, so `${BODY+set}` would wrongly read as a clean body; the `if <command>` form avoids that trap.)
+
+`ALL_REWRITTEN` is the **only** success signal. Recovery depends on **whether a PR now exists**, because `gh pr create` can only make the first PR for a branch:
+
+- **On `WRITE_FAILED` or `STILL_LOCAL`** — a PR exists (the write reached far enough to create/update it), so **retry via `gh pr edit` on that PR** with the intended `--title`, `--body`, and `--attach` flags (safely quoted; a `./` link still in the body names the file that didn't land), then **re-capture `WRITE_RC=$?`** and re-verify. Even after a *partial* `gh pr create` (PR created, some attachments failed), recover with `gh pr edit` — re-running `gh pr create` would just fail because the branch already has a PR. Do **not** retry `--attach` alone: an attach-only edit appends files while leaving the intended title/body unwritten, and never clears the original non-zero `WRITE_RC`, so verification would stay `WRITE_FAILED` forever.
+- **On `VERIFY_UNAVAILABLE`** — the readback failed, so first check `WRITE_RC`: if the write itself was a **`gh pr create` that failed before creating anything** (non-zero `WRITE_RC` and no PR URL printed — `gh pr create` prints the URL only on success), the create is what to retry, not the read. Only when the write succeeded (or the PR already existed) is this a genuine read failure — surface it, do **not** report the evidence as delivered, do **not** delete the local artifacts, and retry the read.
+
+Once `ALL_REWRITTEN` holds, **delete the returned local artifact(s) / demo-reel run directory immediately** — demo-reel deliberately left them in place for this caller, so nothing else will clean up those (potentially sensitive) captures.
 
 **Existing PR (open PR found in Step 2).** New commits make the existing description stale by default — the title and "why" almost certainly no longer cover what was just pushed. **Default action is to rewrite the description**, not to leave it as-is. Treat "leave it as-is" as an explicit opt-out, not the default.
 
@@ -397,8 +466,8 @@ Run the writer (Step 11) against the existing PR's `baseRefName`, preserve any e
 >
 > Apply this rewrite, or keep the existing description as-is?
 
-- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`.
-- **Keep as-is** (explicit opt-out only) → skip the edit. Note in the report that the description is stale relative to the new commits.
+- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`, adding the same repeatable `--attach '<file>#<alt text>'` flags described above when Step 9 captured evidence on the `github-attachment` path. Capture `WRITE_RC=$?` immediately after, then run the rewrite verification (which uses `WRITE_RC`).
+- **Keep as-is** (explicit opt-out only) → skip the edit. Note in the report that the description is stale relative to the new commits. **If evidence was captured on the `github-attachment` path**, demo-reel left those artifacts on disk for this caller to attach — since the body update is abandoned they will never be used, so delete the returned artifact(s) / their run directory now rather than leaving potentially sensitive captures on disk for external cleanup.
 
 Skip the rewrite **only** in these cases:
 - The user already said in conversation "don't touch the description" / "leave the body alone".
@@ -489,5 +558,6 @@ This watch only survives the current Claude session. If the user closes the term
 | Add a `## Test plan` section | Deliberately dropped from this skill — testing lives in QA |
 | Describe the conversation, not the diff | The PR must reflect the actual changes, not just what was discussed |
 | Paste a preview URL as "evidence" | Deploy bots already attach preview URLs to the PR; the evidence section is for captures this skill produced |
+| Claim GitHub has no API for putting images in a PR body | It does — `gh --attach` (GitHub CLI 2.99.0+) uploads local files and rewrites body references to `user-attachments` URLs. The correct response to an old CLI is to ask the user to upgrade, not to declare the capability missing |
 | Use `#NUMBER` in prose | `#42` auto-links on GitHub — rephrase unless it's an intentional issue/PR reference |
 | Reuse a branch whose prior PR merged | Step 2 already switched you off; don't switch back without the user asking |
