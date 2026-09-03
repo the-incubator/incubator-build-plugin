@@ -288,7 +288,7 @@ printf '%s\n' "$GH_VER"
 Compare `GH_VER` against `2.99.0`:
 
 - **2.99.0 or newer** → set the delivery path to **`github-attachment`**. Evidence renders inline in the PR body from `user-attachments` URLs, with no third-party host involved.
-- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Determine the upgrade path from how `gh` is installed (`command -v gh`, resolving symlinks): a Homebrew prefix (`/opt/homebrew`, `/usr/local/Cellar`) → `brew upgrade gh`; a mise/asdf shims path (`.../mise/`, `.../asdf/`) → `mise upgrade gh` / `asdf install github-cli latest`; a system package path → the OS package manager (`apt`, `dnf`, `pacman`, …). If no automatable upgrade command can be identified, there is **no command to run** — point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`) and treat "Upgrade now" as a manual step. Offer:
+- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Determine the upgrade path from how `gh` is installed (`command -v gh`, resolving symlinks): a Homebrew prefix (`/opt/homebrew`, `/usr/local/Cellar`) → `brew upgrade gh`; a version-manager shims path (`.../mise/`, `.../asdf/`) → a command that **advances the pinned version**, not one that only stays within the existing constraint (an exact pin like `gh 2.96.0` in `mise.toml` will not move under `mise upgrade gh`) — use `mise use gh@latest` for mise, `asdf install github-cli latest && asdf local github-cli latest` for asdf; a system package path → the OS package manager (`apt`, `dnf`, `pacman`, …). If no automatable upgrade command can be identified, there is **no command to run** — point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`) and treat "Upgrade now" as a manual step. Offer:
   > Your `gh` is `<version>`; inline PR images need **2.99.0+**. What now?
   >
   > 1. Upgrade now, then re-run this gate
@@ -424,13 +424,18 @@ Drop the `--attach` flags entirely when there is nothing to attach.
 **Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Read the body back and confirm every local image reference became a `user-attachments` URL. **Fail closed:** capture the read's exit status separately so a failed `gh pr view` (expired auth, rate limit, transient API error) is never mistaken for a clean body — an empty read makes `grep` match nothing, which would otherwise look like success:
 
 ```bash
-BODY=$(gh pr view --json body --jq '.body') || { echo 'VERIFY_UNAVAILABLE'; }
-if [ "${BODY+set}" = set ] && printf '%s' "$BODY" | grep -qE '!\[[^]]*\]\(\./'; then
-  echo 'STILL_LOCAL'
-elif [ "${BODY+set}" = set ]; then
-  echo 'ALL_REWRITTEN'
+if BODY=$(gh pr view --json body --jq '.body'); then
+  if printf '%s' "$BODY" | grep -qE '!\[[^]]*\]\(\./'; then
+    echo 'STILL_LOCAL'
+  else
+    echo 'ALL_REWRITTEN'
+  fi
+else
+  echo 'VERIFY_UNAVAILABLE'
 fi
 ```
+
+The grep checks run **only inside the successful-read branch** — branching on the command's own exit status, not on whether `BODY` is set. (A failed `gh pr view` still leaves `BODY` set to an empty string, so `${BODY+set}` would wrongly read as a clean body; the `if <command>` form avoids that trap.)
 
 `ALL_REWRITTEN` is the **only** success signal. On `STILL_LOCAL`, say so and retry `--attach` for the specific file(s) (`gh pr edit --attach '<file>#<alt>'`, safely quoted) rather than reporting success. On `VERIFY_UNAVAILABLE` (the read itself failed), do **not** report the evidence as delivered and do **not** delete the local artifacts — surface that verification couldn't run and retry the read. Only once every reference is confirmed a `user-attachments` URL are the local artifacts no longer needed and safe to remove.
 
