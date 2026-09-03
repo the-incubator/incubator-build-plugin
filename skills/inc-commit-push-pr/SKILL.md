@@ -105,6 +105,8 @@ If confirmed, apply — `<TITLE>` and `<BODY_FILE>` come verbatim from the write
 gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
 ```
 
+**If DU-5 refreshed evidence on the `github-attachment` path**, the new body carries local `![alt]`+`(./file)` references that GitHub cannot render on their own — this `gh pr edit` must therefore carry the same repeatable `--attach '<file>#<alt text>'` flags (safely quoted) as Step 12, and be followed by Step 12's fail-closed rewrite verification. Do not report the refresh as done until every local reference is confirmed a `user-attachments` URL. When DU-3 only spliced back **already-hosted** evidence (existing `user-attachments`/hosted URLs), pass no `--attach` and skip verification — those URLs are already permanent.
+
 Report the PR URL. Do not run the CI/AI watch (Step 14) — body edits don't re-trigger reviewers.
 
 ---
@@ -286,14 +288,14 @@ printf '%s\n' "$GH_VER"
 Compare `GH_VER` against `2.99.0`:
 
 - **2.99.0 or newer** → set the delivery path to **`github-attachment`**. Evidence renders inline in the PR body from `user-attachments` URLs, with no third-party host involved.
-- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Give the upgrade command for their install method — `brew upgrade gh` when `gh` came from Homebrew (`command -v gh` under a Homebrew prefix such as `/opt/homebrew` or `/usr/local/Cellar`), otherwise point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`). Offer:
+- **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Determine the upgrade path from how `gh` is installed (`command -v gh`, resolving symlinks): a Homebrew prefix (`/opt/homebrew`, `/usr/local/Cellar`) → `brew upgrade gh`; a mise/asdf shims path (`.../mise/`, `.../asdf/`) → `mise upgrade gh` / `asdf install github-cli latest`; a system package path → the OS package manager (`apt`, `dnf`, `pacman`, …). If no automatable upgrade command can be identified, there is **no command to run** — point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`) and treat "Upgrade now" as a manual step. Offer:
   > Your `gh` is `<version>`; inline PR images need **2.99.0+**. What now?
   >
-  > 1. Upgrade now (`<upgrade command>`), then re-run this gate
+  > 1. Upgrade now, then re-run this gate
   > 2. Proceed with the external image-host path (evidence hosted off GitHub)
   > 3. Skip evidence
   >
-  On **Upgrade now**, run the upgrade command, re-read `gh --version`, and re-evaluate. On **Proceed**, set the delivery path to **`hosted`**. On **Skip**, skip the evidence gate entirely.
+  On **Upgrade now**: if an automatable upgrade command was identified, run it; otherwise tell the user the exact manual step (releases page or their package manager) and **wait** for them to confirm it's done — never claim to have run a command that doesn't exist. Either way, re-read `gh --version` and re-evaluate; if it's still below 2.99.0, re-offer Proceed/Skip rather than looping. On **Proceed**, set the delivery path to **`hosted`**. On **Skip**, skip the evidence gate entirely.
 
 Ask:
 
@@ -408,6 +410,8 @@ Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward
 
 **Attaching evidence images (`github-attachment` path only).** When Step 9 captured evidence on the `github-attachment` path, add one repeatable `--attach '<file>#<alt text>'` per artifact **on the same command that writes the body** (the create or edit below) — upload and body land together. `<file>` is the local path demo-reel returned; `<alt text>` is the real description of the shot, never the filename. `gh` (2.99.0+) rewrites the body's local relative image references (an `![alt]` label directly followed by a `(./file)` path) to `user-attachments` URLs. Up to 50 files per command. On the `hosted` path (or no evidence), pass no `--attach` flags.
 
+**Quote the `--attach` value safely.** The `<alt text>` comes from a real shot description and may contain shell metacharacters — an apostrophe (`user's dashboard`), a backtick, or `$`. Interpolating it raw into the single-quoted `'<file>#<alt text>'` literal breaks the quoting and the whole `gh` command fails to parse. Apply the same escaping discipline as the title: keep the single quotes and replace every embedded single quote with `'\''`, e.g. `--attach 'shot.png#user'\''s dashboard'`. If a description also carries backticks or `$`, either it stays inside single quotes (which already neutralize them) or the apostrophes are escaped as above. Never drop the description down to the filename just to dodge quoting.
+
 **New PR (no existing PR from Step 2).** Substitute `<TITLE>` and `<BODY_FILE>` verbatim. If `<TITLE>` contains `"`, `` ` ``, `$`, or `\`, escape them or switch to single quotes:
 
 ```bash
@@ -417,13 +421,18 @@ gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")" 
 
 Drop the `--attach` flags entirely when there is nothing to attach.
 
-**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Read the body back and confirm every local image reference became a `user-attachments` URL:
+**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Read the body back and confirm every local image reference became a `user-attachments` URL. **Fail closed:** capture the read's exit status separately so a failed `gh pr view` (expired auth, rate limit, transient API error) is never mistaken for a clean body — an empty read makes `grep` match nothing, which would otherwise look like success:
 
 ```bash
-gh pr view --json body --jq '.body' | grep -nE '!\[[^]]*\]\(\./' && echo 'STILL_LOCAL' || echo 'ALL_REWRITTEN'
+BODY=$(gh pr view --json body --jq '.body') || { echo 'VERIFY_UNAVAILABLE'; }
+if [ "${BODY+set}" = set ] && printf '%s' "$BODY" | grep -qE '!\[[^]]*\]\(\./'; then
+  echo 'STILL_LOCAL'
+elif [ "${BODY+set}" = set ]; then
+  echo 'ALL_REWRITTEN'
+fi
 ```
 
-If any reference is still a local `./` path (`STILL_LOCAL`), say so and retry `--attach` for that specific file (`gh pr edit --attach '<file>#<alt>'`) rather than reporting success. Only report the evidence as delivered once every reference is a `user-attachments` URL. After verification succeeds, the local artifacts are no longer needed and may be removed.
+`ALL_REWRITTEN` is the **only** success signal. On `STILL_LOCAL`, say so and retry `--attach` for the specific file(s) (`gh pr edit --attach '<file>#<alt>'`, safely quoted) rather than reporting success. On `VERIFY_UNAVAILABLE` (the read itself failed), do **not** report the evidence as delivered and do **not** delete the local artifacts — surface that verification couldn't run and retry the read. Only once every reference is confirmed a `user-attachments` URL are the local artifacts no longer needed and safe to remove.
 
 **Existing PR (open PR found in Step 2).** New commits make the existing description stale by default — the title and "why" almost certainly no longer cover what was just pushed. **Default action is to rewrite the description**, not to leave it as-is. Treat "leave it as-is" as an explicit opt-out, not the default.
 

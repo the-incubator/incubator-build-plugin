@@ -4,10 +4,12 @@ Upload a temporary preview for the user to review, then deliver the approved evi
 
 **Two delivery modes.** The caller chooses where the evidence ultimately lives (see the "Delivery mode" argument in `SKILL.md`):
 
-- **`github-attachment`** — the caller (e.g. `inc:commit-push-pr-4`) will upload the file into the PR body itself via `gh --attach` (GitHub CLI **2.99.0+**). No third-party host is involved. demo-reel returns the **local artifact path(s)** and leaves the files in place for the caller to attach.
+- **`github-attachment`** — the caller (e.g. `inc:commit-push-pr-4`) will upload the file into the PR body itself via `gh --attach` (GitHub CLI **2.99.0+**). The **permanent** evidence involves no third-party host — it lives on GitHub as a `user-attachments` asset. demo-reel returns the **local artifact path(s)** and leaves the files in place for the caller to attach.
 - **`hosted`** (default) — demo-reel promotes the approved file to a permanent public host (catbox) and returns that URL. This is the behavior for callers that cannot attach to a PR body.
 
 The preview upload and approval gate below are identical for both modes — they happen before any PR exists and are the right review step regardless of final destination.
+
+**Preview host caveat.** The Step 1 preview uses a temporary third-party host (litterbox, 1-hour expiry). This is true in **both** modes, including `github-attachment` — so a screenshot from a private repo does transit an external service for the ~1-hour preview even when the permanent evidence will stay on GitHub. When that transit is unacceptable (sensitive/private content), use the **local-review fallback** in Step 1 (open the file locally instead of uploading a preview); it keeps the artifact off any third-party host entirely.
 
 ## Step 1: Preview Upload (Temporary)
 
@@ -22,6 +24,8 @@ The last line of output is the preview URL (e.g., `https://litter.catbox.moe/abc
 For multiple files (static screenshots tier), upload each file separately.
 
 **If upload fails** after retry, fall back to opening the local file with the platform file-opener (`open` on macOS, `xdg-open` on Linux) so the user can still review it. Include the local path in the approval question instead of a URL.
+
+**Sensitive content — local review instead of upload.** If the artifact may contain private or sensitive content and the temporary third-party preview host is unacceptable, skip the preview upload and use the same local file-opener path for review. Present the local path in the approval question. This keeps the artifact off any third-party host — relevant in `github-attachment` mode, where the permanent evidence never leaves GitHub anyway.
 
 ## Step 2: Approval Gate
 
