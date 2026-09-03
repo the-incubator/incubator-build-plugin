@@ -191,6 +191,8 @@ A ```mermaid fence renders in a chat client but is **inert** in a raw HTML file 
 
 This is verified to render in a real browser. Keep the pin explicit so the page renders the same later.
 
+**Escape HTML-significant characters in the diagram source too.** `<pre class="mermaid">` is a `<pre>` like any other: if a label carries `<`, `>`, or `&` (a node named `<Service>`, an edge label `A & B`, even a literal `</pre>`), the browser parses it as markup *before* Mermaid runs, so the label vanishes or the diagram fails. Write those characters escaped in the source — `&lt;`, `&gt;`, `&amp;` — the same rule the text shapes follow above; the browser turns them back into text for Mermaid to render.
+
 ## Design bar — applies to every report
 
 - Match the product's colors, type, spacing, and components. Use real labels and data from the topic, not placeholders.
