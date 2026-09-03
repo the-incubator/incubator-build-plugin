@@ -46,7 +46,7 @@ Return to the tier execution step. The user's instructions guide what to change 
 
 ### On "Proceed without evidence"
 
-Set evidence to null and proceed. The preview link expires on its own.
+Set evidence to null and proceed. The preview link expires on its own. **Delete the `[RUN_DIR]` scratch directory now** — no artifact is returned to the caller, so no one else will clean it up, and a rejected screenshot/recording (possibly sensitive) must not linger in the OS temp directory. This applies in **both** modes, including `github-attachment`.
 
 ## Step 3: Deliver the Approved Evidence
 
