@@ -287,7 +287,7 @@ printf '%s\n' "$GH_VER"
 
 Compare `GH_VER` against `2.99.0`:
 
-- **2.99.0 or newer** → set the delivery path to **`github-attachment`**. Evidence renders inline in the PR body from `user-attachments` URLs, with no third-party host involved.
+- **2.99.0 or newer** → set the delivery path to **`github-attachment`**. The **permanent** evidence renders inline in the PR body from GitHub `user-attachments` URLs — no third-party host holds the final asset. Note that the pre-PR review step still uploads a temporary 1-hour preview to a third-party host (litterbox) before approval, in this mode too; for sensitive/private captures, demo-reel's local-review option keeps the artifact off any third-party host (see `demo-reel`'s `upload-and-approval.md`).
 - **Older than 2.99.0** → do **not** silently fall back and do **not** claim GitHub can't host images in a PR body (it can — see the anti-patterns table). Tell the user plainly, in one short blocking question consistent with the skill's other gates, that inline PR images need `gh` 2.99.0 or newer. Determine the upgrade path from how `gh` is installed (`command -v gh`, resolving symlinks): a Homebrew prefix (`/opt/homebrew`, `/usr/local/Cellar`) → `brew upgrade gh`; a version-manager shims path (`.../mise/`, `.../asdf/`) → a command that **advances the pinned version** while targeting **global** config, not the project (this gate runs from the repo after Step 6 already committed/pushed, so a project-local pin would dirty an unrelated toolchain file — `mise use` defaults to `mise.toml` in the cwd, `asdf local` writes `.tool-versions`). A plain `mise upgrade gh` won't move an exact pin at all. Use `mise use --global gh@latest` for mise, `asdf install github-cli latest && asdf global github-cli latest` for asdf; a system package path → the OS package manager (`apt`, `dnf`, `pacman`, …). If no automatable upgrade command can be identified, there is **no command to run** — point at the GitHub CLI releases page (`https://github.com/cli/cli/releases`) and treat "Upgrade now" as a manual step. Offer:
   > Your `gh` is `<version>`; inline PR images need **2.99.0+**. What now?
   >
@@ -401,7 +401,7 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 **Evidence sections — match the delivery path from Step 9:**
 
-- **`github-attachment` path** — write **local relative markdown image references** in `## Demo` / `## Screenshots`, one per artifact: an alt-text label `![<alt>]` immediately followed by the parenthesized relative path `(./<file>)`, with no space between them (e.g. alt `login error state` + file `login.png` → `![login error state]` written directly before `(./login.png)`). `<file>` is the basename of the local `Path` demo-reel returned and `<alt>` the real description of the shot. Do **not** write a remote URL. Step 12's `--attach` uploads each file and rewrites these local references to `user-attachments` URLs.
+- **`github-attachment` path** — write **local relative markdown image references** in `## Demo` / `## Screenshots`, one per artifact: an alt-text label `![<alt>]` immediately followed by the parenthesized relative path `(./<file>)`, with no space between them (e.g. alt `login error state` + file `login.png` → `![login error state]` written directly before `(./login.png)`). `<file>` is the basename of the local `Path` demo-reel returned and `<alt>` the real description of the shot. **Escape Markdown-significant characters in the alt text** so the reference stays well-formed and `gh` can match and rewrite it: a literal `]` in a description (e.g. `the [Save] button`) closes the `![…]` early and produces broken Markdown plus a duplicate appended attachment — escape it as `\]` (and `[` as `\[`). This Markdown escaping is separate from, and applied before, the shell quoting in Step 12. Do **not** write a remote URL. Step 12's `--attach` uploads each file and rewrites these local references to `user-attachments` URLs. Keep the **same** alt text in the body reference and in the `--attach '<file>#<alt>'` value so `gh` pairs them.
 - **`hosted` path** — write the hosted URL exactly as demo-reel returned it, as today.
 
 Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward to Step 12. On the `github-attachment` path, also carry the list of `(<file path>, <alt text>)` pairs forward — Step 12 needs them for `--attach`.
@@ -417,33 +417,35 @@ Write the finished body to `$BODY_FILE`. Pass `<TITLE>` and `$BODY_FILE` forward
 ```bash
 gh pr create --base "<default>" --title "<TITLE>" --body "$(cat "<BODY_FILE>")" \
   --attach '<file1>#<alt text 1>' --attach '<file2>#<alt text 2>'
+WRITE_RC=$?   # gh exits non-zero if ANY attachment failed to upload, even though the PR is still created
 ```
 
 Drop the `--attach` flags entirely when there is nothing to attach.
 
-**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Verification has two halves:
+**Verify the rewrite (`github-attachment` path).** `gh` can partially fail — some attachments upload, others don't — yet still create/update the PR and print its URL, so the outcome must be checked, not assumed. Two independent signals, and **both** must hold:
 
-1. **Capture the write command's own exit status.** `gh pr create`/`gh pr edit` exit **non-zero on a partial attachment failure** (some files uploaded, some didn't) even though the PR is created/updated and its URL is printed. A non-zero write is a signal that not every attachment landed — do not skip straight to "delivered". Also, on an existing PR an edit can fail *before changing anything*, leaving the **old** body in place; the old body has no `./` refs, so a "no local links" check alone would falsely pass.
-2. **Positively confirm the evidence landed.** Read the body back and require **both**: no local `./` image references remain, **and** the expected `user-attachments` reference(s) are actually present (one per attached artifact). Absence of local links is necessary but not sufficient — an unchanged/old body also has none. **Fail closed:** branch on the read command's own exit status so a failed `gh pr view` (expired auth, rate limit, transient error) is never mistaken for a clean body:
+1. **The write command's own exit status (`WRITE_RC`).** `gh pr create`/`gh pr edit` exit **non-zero when any attachment fails to upload** (and when an edit fails before changing anything) even though the PR is created/updated and its URL is printed. This is the authoritative "every attachment landed" signal — a non-zero write means not all of the new evidence landed, regardless of what the body says.
+2. **No local `./` references remain in the body.** `gh` rewrites each **newly attached** local reference in place, so after a fully successful write there are no `./` image links left. This confirms the specific references this run wrote were rewritten. Do **not** count total `/user-attachments/` occurrences — DU-3 deliberately preserves *existing* attachments, so an aggregate count would pass on an old, unchanged body even when none of the new evidence landed.
+
+**Fail closed** on the readback so a failed `gh pr view` (expired auth, rate limit, transient error) is never mistaken for a clean body:
 
 ```bash
-EXPECTED=<number of artifacts attached>
 if BODY=$(gh pr view --json body --jq '.body'); then
-  if printf '%s' "$BODY" | grep -qE '!\[[^]]*\]\(\./'; then
-    echo 'STILL_LOCAL'
-  elif [ "$(printf '%s' "$BODY" | grep -coE '/user-attachments/')" -ge "$EXPECTED" ]; then
-    echo 'ALL_REWRITTEN'
+  if [ "$WRITE_RC" -ne 0 ]; then
+    echo 'WRITE_FAILED'          # gh reported an attachment failure — some new evidence did not upload
+  elif printf '%s' "$BODY" | grep -qE '!\[[^]]*\]\(\./'; then
+    echo 'STILL_LOCAL'           # a local ref was never rewritten
   else
-    echo 'MISSING_ATTACHMENTS'   # no local refs, but the expected user-attachments URLs aren't there
+    echo 'ALL_REWRITTEN'         # write succeeded AND no local refs remain
   fi
 else
-  echo 'VERIFY_UNAVAILABLE'
+  echo 'VERIFY_UNAVAILABLE'      # could not read the body back — do not assume anything
 fi
 ```
 
-The grep checks run **only inside the successful-read branch** — branching on the command's own exit status, not on whether `BODY` is set. (A failed `gh pr view` still leaves `BODY` set to an empty string, so `${BODY+set}` would wrongly read as a clean body; the `if <command>` form avoids that trap.)
+The checks run **only inside the successful-read branch** — branching on the read command's own exit status, not on whether `BODY` is set. (A failed `gh pr view` still leaves `BODY` set to an empty string, so `${BODY+set}` would wrongly read as a clean body; the `if <command>` form avoids that trap.)
 
-`ALL_REWRITTEN` is the **only** success signal. On `STILL_LOCAL` **or** `MISSING_ATTACHMENTS`, say so and retry `--attach` for the affected file(s) (`gh pr edit --attach '<file>#<alt>'`, safely quoted) rather than reporting success — `MISSING_ATTACHMENTS` most often means the write itself failed to apply the edit at all. On `VERIFY_UNAVAILABLE` (the read failed), do **not** report the evidence as delivered and do **not** delete the local artifacts — surface that verification couldn't run and retry the read. Only once the readback confirms every expected `user-attachments` reference is present (and no local ref remains) are the local artifacts no longer needed and safe to remove.
+`ALL_REWRITTEN` is the **only** success signal. On `WRITE_FAILED` or `STILL_LOCAL`, say so and retry `--attach` for the affected file(s) (`gh pr edit --attach '<file>#<alt>'`, safely quoted; a `./` link still in the body names the file that didn't land) rather than reporting success. On `VERIFY_UNAVAILABLE` (the read failed), do **not** report the evidence as delivered and do **not** delete the local artifacts — surface that verification couldn't run and retry the read. Once `ALL_REWRITTEN` holds, **delete the returned local artifact(s) / demo-reel run directory immediately** — demo-reel deliberately left them in place for this caller, so nothing else will clean up those (potentially sensitive) captures.
 
 **Existing PR (open PR found in Step 2).** New commits make the existing description stale by default — the title and "why" almost certainly no longer cover what was just pushed. **Default action is to rewrite the description**, not to leave it as-is. Treat "leave it as-is" as an explicit opt-out, not the default.
 
@@ -456,7 +458,7 @@ Run the writer (Step 11) against the existing PR's `baseRefName`, preserve any e
 >
 > Apply this rewrite, or keep the existing description as-is?
 
-- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`, adding the same repeatable `--attach '<file>#<alt text>'` flags described above when Step 9 captured evidence on the `github-attachment` path. Then run the rewrite verification.
+- **Apply** (default) → write with `gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"`, adding the same repeatable `--attach '<file>#<alt text>'` flags described above when Step 9 captured evidence on the `github-attachment` path. Capture `WRITE_RC=$?` immediately after, then run the rewrite verification (which uses `WRITE_RC`).
 - **Keep as-is** (explicit opt-out only) → skip the edit. Note in the report that the description is stale relative to the new commits. **If evidence was captured on the `github-attachment` path**, demo-reel left those artifacts on disk for this caller to attach — since the body update is abandoned they will never be used, so delete the returned artifact(s) / their run directory now rather than leaving potentially sensitive captures on disk for external cleanup.
 
 Skip the rewrite **only** in these cases:
