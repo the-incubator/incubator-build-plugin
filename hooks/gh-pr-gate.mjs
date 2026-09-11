@@ -1,7 +1,7 @@
-// PreToolUse hook — blocks PR creation unless the `inc-commit-push-pr`
+// PreToolUse hook - blocks PR creation unless the PR workflow
 // skill has been activated in this session when a transcript is available.
 //
-// Enforces the PR workflow at the tool layer: Claude must load the skill
+// Enforces the PR workflow at the tool layer: the host must load the skill
 // (which extracts intent and writes a proper description) before it can open
 // a PR. The skill itself opens the PR once activated; this hook denies every
 // shortcut path that would skip it. Firstmate-managed sessions do not save a
@@ -25,8 +25,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { readStdinJson } from "./_util.mjs";
-
-const SKILL_NAME = "inc-commit-push-pr";
+import { prWorkflowSkill } from "./pr-workflow-skill.mjs";
 
 // MCP tools that open a PR directly, bypassing the shell entirely. Matched as a
 // suffix so any server namespace counts (e.g. "mcp__github__create_pull_request").
@@ -86,35 +85,72 @@ function deny(reason) {
   );
 }
 
-async function skillActivated(transcriptPath) {
-  if (!transcriptPath || !existsSync(transcriptPath)) return false;
+async function activationEvidence(transcriptPath, sessionId, skill) {
+  const absent = { activated: false, codex: false };
   let raw;
   try {
     raw = await readFile(transcriptPath, "utf8");
   } catch {
-    return false;
+    return absent;
   }
+  const records = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
-    // Fast substring check before parsing — transcripts can be large.
-    if (!line.includes(SKILL_NAME)) continue;
-    let msg;
     try {
-      msg = JSON.parse(line);
+      const record = JSON.parse(line);
+      // Do not retain tool outputs or encrypted reasoning from large rollouts.
+      if (record?.type === "session_meta" ||
+          (record?.type === "event_msg" && record.payload?.type === "item_completed" &&
+            record.payload.item?.type === "UserMessage") ||
+          (record?.type === "response_item" && record.payload?.type === "message" && record.payload.role === "user") ||
+          Array.isArray(record?.message?.content)) records.push(record);
     } catch {
       continue;
     }
+  }
+
+  // Codex rollouts may contain inherited history. The FIRST session_meta owns
+  // the file; an item_completed event binds each activation turn to its thread.
+  // Text, XML tags, or a file read alone are never activation evidence.
+  const session = records.find((record) => record?.type === "session_meta")?.payload;
+  if (session) {
+    const denied = { activated: false, codex: true };
+    if (typeof sessionId !== "string" || !sessionId || session.id !== sessionId) return denied;
+    if (session.session_id !== undefined && session.session_id !== sessionId) return denied;
+    const turns = new Set();
+    for (const record of records) {
+      const event = record?.payload;
+      if (record?.type === "event_msg" && event?.type === "item_completed" &&
+          event.thread_id === sessionId && typeof event.turn_id === "string" &&
+          event.item?.type === "UserMessage") turns.add(event.turn_id);
+      if (record?.type !== "response_item" || event?.type !== "message" || event.role !== "user") continue;
+      const metadata = event.internal_chat_message_metadata_passthrough;
+      if (!turns.has(metadata?.turn_id) || !Array.isArray(event.content) ||
+          !Array.isArray(metadata?.content_item_kinds) ||
+          metadata.content_item_kinds.length !== event.content.length) continue;
+      for (const [index, block] of event.content.entries()) {
+        if (metadata.content_item_kinds[index] !== "skills.selected_skill_instructions" ||
+            block?.type !== "input_text" || typeof block.text !== "string") continue;
+        const name = /^<skill>\r?\n<name>([^<>\r\n]+)<\/name>\r?\n<path>[^<>\r\n]+<\/path>\r?\n[\s\S]*\r?\n<\/skill>$/.exec(block.text)?.[1];
+        if (skill.matches(name)) return { activated: true, codex: true };
+      }
+    }
+    return denied;
+  }
+
+  for (const msg of records) {
+    // Claude records are left intact. Reject an explicitly foreign session;
+    // older transcripts without a per-record sessionId remain supported.
+    if (sessionId && msg?.sessionId && msg.sessionId !== sessionId) continue;
     const content = msg?.message?.content;
     if (!Array.isArray(content)) continue;
     for (const block of content) {
       if (block?.type !== "tool_use") continue;
       if (block.name !== "Skill") continue;
-      const skill = String(block.input?.skill ?? "");
-      // Match both bare and plugin-scoped forms (e.g. "incubator:inc-commit-push-pr").
-      if (skill === SKILL_NAME || skill.endsWith(`:${SKILL_NAME}`)) return true;
+      if (skill.matches(block.input?.skill)) return { activated: true, codex: false };
     }
   }
-  return false;
+  return absent;
 }
 
 function transcriptAvailable(transcriptPath) {
@@ -139,14 +175,18 @@ async function main() {
   // Keep enforcement hard whenever the transcript exists; only the
   // provably-unavailable case is allowed to proceed without skill evidence.
   if (!transcriptAvailable(payload.transcript_path)) return 0;
-  if (await skillActivated(payload.transcript_path)) return 0;
+  const skill = prWorkflowSkill();
+  const evidence = await activationEvidence(payload.transcript_path, payload.session_id, skill);
+  if (evidence.activated) return 0;
+  const instruction = evidence.codex || typeof payload.turn_id === "string"
+    ? `Activate \`$${skill.name}\` in Codex first`
+    : `Load the \`${skill.name}\` skill first (Skill tool, skill: "${skill.name}")`;
 
   deny(
-    `Opening a PR is blocked because the \`inc-commit-push-pr\` skill was not found in the available session transcript. ` +
-      `This applies to every path — \`gh pr create\`, the REST API ` +
+    `Opening a PR is blocked because the \`${skill.name}\` skill was not found in the available session transcript. ` +
+      `This applies to every path - \`gh pr create\`, the REST API ` +
       `(\`gh api .../pulls\`, \`curl\`), GraphQL \`createPullRequest\` mutations, and MCP ` +
-      `\`create_pull_request\` tools — not just the CLI shortcut. Load the ` +
-      `\`inc-commit-push-pr\` skill first (Skill tool, skill: "inc-commit-push-pr"); ` +
+      `\`create_pull_request\` tools - not just the CLI shortcut. ${instruction}; ` +
       `it extracts the business intent, writes a value-first description, and opens the PR itself.`,
   );
   return 0;

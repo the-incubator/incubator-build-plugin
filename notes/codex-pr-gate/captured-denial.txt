@@ -1,0 +1,2 @@
+Script error:
+Command blocked by PreToolUse hook: Opening a PR is blocked because the `inc-commit-push-pr` skill was not found in the available session transcript. This applies to every path — `gh pr create`, the REST API (`gh api .../pulls`, `curl`), GraphQL `createPullRequest` mutations, and MCP `create_pull_request` tools — not just the CLI shortcut. Load the `inc-commit-push-pr` skill first (Skill tool, skill: "inc-commit-push-pr"); it extracts the business intent, writes a value-first description, and opens the PR itself.

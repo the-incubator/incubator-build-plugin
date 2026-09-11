@@ -1,0 +1,14 @@
+{
+  "session_id": "codex-session-a",
+  "turn_id": "codex-turn-a",
+  "transcript_path": "notes/codex-pr-gate/codex-activation.jsonl",
+  "cwd": "/SANITIZED/worktree",
+  "hook_event_name": "PreToolUse",
+  "model": "[omitted]",
+  "permission_mode": "[omitted]",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "gh-axi pr create --base main --head fm/example --title \"example\" --body-file pr-body.md"
+  },
+  "tool_use_id": "tool-use-a"
+}

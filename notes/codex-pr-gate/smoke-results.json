@@ -1,0 +1,8 @@
+{
+  "inputProvenance": "Reconstructed hook stdin; sanitized genuine transcript records",
+  "publishing": false,
+  "fixedActivation": "allow",
+  "fixedNoActivation": "deny",
+  "installedActivation": "deny",
+  "installedNoActivation": "deny"
+}
