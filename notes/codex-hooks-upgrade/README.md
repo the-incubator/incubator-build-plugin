@@ -69,6 +69,7 @@ It creates isolated HOME/CODEX_HOME and a plugin cache whose path includes space
 A real shell tool executes a harmless printf command.
 Observers capture SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, and SessionEnd, with both plugin-root aliases and project cwd verified for every event.
 The process completes successfully without hook errors.
+The release-candidate result is recorded in `runtime-results.json`.
 This proves the runtime integration; the response fixture is not a live model-quality or account-authentication test.
 The updater and telemetry are disabled only in this hook-lifecycle fixture, with updater behavior checked separately above.
 Hook trust is bypassed only for this reviewed isolated fixture; production code does not bypass it.
