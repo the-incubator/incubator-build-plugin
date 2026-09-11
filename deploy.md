@@ -5,7 +5,7 @@
 - Platform: custom (does-not-deploy)
 - Production branch: main
 - Production URL: none - this repo ships no running service
-- Deploy trigger: none. This is a Claude Code / Codex **plugin source repo**, not a deployed app. "Release" means: bump `version` in `.claude-plugin/plugin.json` and merge to `main`; installs pull the new version when their plugin updater runs (Claude Code treats that `version` string as an update pin).
+- Deploy trigger: none. This is a Claude Code / Codex **plugin source repo**, not a deployed app. "Release" means: bump `version` in both `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` and merge to `main`; installs pull the new version when their plugin updater runs (the manifests pin each host's installed release).
 - CLI auth check: `gh auth status`
 - Reauth: `gh auth login`
 - Deploy window: none
@@ -27,7 +27,7 @@ poll, do not run the post-deploy watch. The absence of a deploy is the expected 
 a failed observation.
 
 **Health check:** none — there is no runtime surface. Post-merge correctness is covered by the
-`validate` workflow (`npm run test:skills`), which must be green before the merge gates pass.
+`validate` workflow (`npm run test:skills` and `npm run test:hooks`), which must be green before the merge gates pass.
 
 The real post-merge verification is on the consumer side: a user's plugin updater pulls the new
 `version`, and a stale local checkout can keep running old skill code even after main moves.

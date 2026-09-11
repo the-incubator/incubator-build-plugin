@@ -5,10 +5,8 @@ on:
     paths:
       - "skills/**"
       - "scripts/validate-skills.mjs"
-      # validate-skills.mjs imports this parser to assert the PR-workflow skill's
-      # name stays the canonical form the gate reads, so a change to it must
-      # re-run validation too.
-      - "hooks/pr-workflow-skill.mjs"
+      - "hooks/**"
+      - "scripts/toggle-local.sh"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/validate-skills.yml"
@@ -26,3 +24,4 @@ jobs:
           cache: "npm"
       - run: npm install --no-audit --no-fund
       - run: npm run test:skills
+      - run: npm run test:hooks

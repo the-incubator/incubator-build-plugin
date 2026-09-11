@@ -20,6 +20,16 @@ Pick the shape, answer from this guide, and stop.
    Only if the user wants implementation-level detail the map doesn't cover, read that skill's own `SKILL.md` (path in the map) and summarize - the guide is the entry point, the sources are the follow-up.
 3. **Situation** ("I just finished a small fix", "this touches auth", "my PR got review comments") - recommend the one skill that fits and stop.
 
+## Codex installation and updates
+
+For installation, authentication, hook trust, local development, or updating an older Codex install, use the plugin-root `README.md` as the canonical plugin-local guide.
+Normal Codex installs must register `the-incubator/incubator-build-plugin` with `--ref main` using `codex plugin marketplace add`, then run `codex plugin add incubator-build@incubator`.
+Do not recommend the local-folder toggle for new users; local sources are for plugin development and cannot fetch GitHub releases.
+Hooks work on both Codex and Claude, and the updater runs the matching host's refresh/install commands in the background.
+A new session loads an updated release, and Codex may ask the user to review changed hook commands.
+A clean Codex install needs Codex model authentication and GitHub repository access; Incubator service enrollment is separate and is not required for the skills, PR gate, or Git-backed updater.
+The hosted app installer remains Claude-specific; it is not the Codex onboarding path.
+
 ## The core pipeline
 
 The numbers in skill names are pipeline stages.
