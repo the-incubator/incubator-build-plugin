@@ -75,12 +75,22 @@ These policies are retained.
 An absent or nonexistent transcript path still allows the call without activation evidence.
 An existing but unreadable transcript still denies because activation cannot be established.
 A readable transcript with no qualifying activation, including malformed or empty content, denies.
-Malformed stdin and unexpected exceptions still exit zero without a denial, preserving the existing fail-open policy.
-Identity loading happens inside the main error boundary, so an unexpected frontmatter/filesystem failure follows that same policy.
+Malformed stdin and unexpected exceptions still exit zero without a denial, preserving the existing fail-open policy for transcript reads.
+Loading the gate's own skill identity is the one scoped exception: while actively gating a PR-create with a transcript present, a failure to read the PR-workflow skill's frontmatter name (an unreadable file, or a name in a form the gate cannot read) fails CLOSED with a plugin-integrity denial, rather than falling through to the fail-open boundary and waving the PR past with no activation check.
+The gate reads only the canonical simple scalar name; `scripts/validate-skills.mjs` asserts that skill keeps that form, so an exotic-but-YAML-legal spelling (quotes, a trailing comment, a block scalar) is caught at CI instead of at runtime.
 Read-only commands and writes to PR sub-resources remain unaffected.
 
 Codex denials now give the current skill name with the native dollar-prefix syntax.
 Claude denials retain the `Skill` tool instruction using that same frontmatter name.
+
+## Known limitation: legacy history_mode rollouts
+
+The Codex adapter binds an activation turn from an `event_msg` record of type `item_completed` carrying a `UserMessage` item.
+A rollout written in the legacy `history_mode` instead emits `event_msg` records with `payload.type: "user_message"`, a different shape this branch does not collect, so the turn never binds and a genuine activation in that mode is still denied.
+This is an over-denial (a functional coverage gap), not a security bypass: it can only make the gate stricter, never allow an unactivated PR.
+It is deliberately left unimplemented here because the captured evidence is a modern-mode transcript, and the brief forbids encoding an unconfirmed record schema; implementing it correctly needs a captured legacy-mode sample.
+It overlaps the deferred live fresh-installed-Codex verification, and the captain's current CLI (0.153.4) is modern-mode.
+Follow-up: capture a legacy-`history_mode` activation sample, then extend the turn-binding branch to recognize the `user_message` shape with real evidence.
 
 ## Validation and smoke replay
 
