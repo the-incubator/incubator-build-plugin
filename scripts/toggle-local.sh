@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CODEX_MARKETPLACE_ROOT="$(cd "$REPO_DIR/.." && pwd)"
+CODEX_MARKETPLACE_ROOT="$REPO_DIR"
 MARKETPLACE_NAME="incubator"
 PROD_SOURCE="the-incubator/incubator-build-plugin"
 PLUGIN_NAME="incubator-build"
@@ -11,8 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: scripts/toggle-local.sh [claude|codex] [local|prod]
 
-Defaults to Claude and toggles between local/prod. For Codex, this registers the
-marketplace; enable the plugin from the Codex app/plugin UI after adding it.
+Defaults to Claude and toggles between local/prod. Codex installs from Git-backed
+main by default when no source is registered; local is for plugin development.
 EOF
 }
 
@@ -66,21 +66,20 @@ detect_claude_mode() {
 }
 
 detect_codex_mode() {
-  local config="$HOME/.codex/config.toml"
+  local config="${CODEX_HOME:-$HOME/.codex}/config.toml"
   if [[ ! -f "$config" ]]; then
     echo "none"; return
   fi
-  awk -v name="$MARKETPLACE_NAME" -v repo="$CODEX_MARKETPLACE_ROOT" '
+  awk -v name="$MARKETPLACE_NAME" '
     $0 == "[marketplaces." name "]" { in_block=1; found=1; next }
     /^\[/ && in_block { in_block=0 }
     in_block && $1 == "source_type" && $3 ~ /"local"/ { local_type=1 }
     in_block && $1 == "source" {
-      if (index($0, repo) > 0) local_source=1
       if (index($0, "the-incubator/incubator-build-plugin") > 0) prod_source=1
     }
     END {
       if (!found) print "none";
-      else if (local_type && local_source) print "local";
+      else if (local_type) print "local";
       else if (prod_source) print "prod";
       else print "unknown";
     }
@@ -110,13 +109,12 @@ show_plan() {
     fi
     echo "  3. claude plugin install $PLUGIN_NAME@$MARKETPLACE_NAME"
   else
-    echo "  1. codex plugin marketplace remove $MARKETPLACE_NAME"
     if [[ "$target" == "local" ]]; then
-      echo "  2. codex plugin marketplace add $CODEX_MARKETPLACE_ROOT"
+      echo "  1. codex plugin marketplace add $CODEX_MARKETPLACE_ROOT"
     else
-      echo "  2. codex plugin marketplace add $PROD_SOURCE"
+      echo "  1. codex plugin marketplace add $PROD_SOURCE --ref main"
     fi
-    echo "  3. Enable $PLUGIN_NAME@$MARKETPLACE_NAME in the Codex app/plugin UI"
+    echo "  2. codex plugin add $PLUGIN_NAME@$MARKETPLACE_NAME"
   fi
   echo
 }
@@ -135,13 +133,13 @@ swap_claude_to() {
 
 swap_codex_to() {
   local target="$1"
-  codex plugin marketplace remove "$MARKETPLACE_NAME" || true
   if [[ "$target" == "local" ]]; then
     codex plugin marketplace add "$CODEX_MARKETPLACE_ROOT"
   else
-    codex plugin marketplace add "$PROD_SOURCE"
+    codex plugin marketplace add "$PROD_SOURCE" --ref main
   fi
-  echo "done. restart Codex, then enable $PLUGIN_NAME@$MARKETPLACE_NAME if it is not already enabled."
+  codex plugin add "$PLUGIN_NAME@$MARKETPLACE_NAME"
+  echo "done. start a new Codex session and review the plugin hooks when prompted."
 }
 
 if [[ "$PLATFORM" == "claude" ]]; then
@@ -154,7 +152,11 @@ else
 fi
 
 if [[ -z "$TARGET" ]]; then
-  TARGET=$(opposite_or_default "$CURRENT")
+  if [[ "$PLATFORM" == "codex" && "$CURRENT" == "none" ]]; then
+    TARGET="prod"
+  else
+    TARGET=$(opposite_or_default "$CURRENT")
+  fi
 fi
 
 case "$CURRENT" in
