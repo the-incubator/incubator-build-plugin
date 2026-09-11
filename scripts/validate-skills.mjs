@@ -3,9 +3,18 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
+import { parseSkillName } from "../hooks/pr-workflow-skill.mjs";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 const SKILLS_DIR = join(REPO_ROOT, "skills");
+
+// The gh-pr-gate hook reads this skill's frontmatter name to enforce PR creation.
+// Its reader accepts only the canonical simple scalar form, so assert that here: a
+// maintainer who reformats the name into another YAML-legal spelling (quotes, a
+// trailing comment, a block scalar) gets a clear CI error, instead of the hook
+// silently failing to read it at runtime. The hook fails closed in that case, so
+// this check protects against a self-inflicted PR-creation lockout, not a bypass.
+const PR_WORKFLOW_SKILL_DIR = "inc-commit-push-pr";
 
 const NAME_RE = /^[a-z0-9][a-z0-9:_-]*$/;
 const MAX_DESCRIPTION = 1024;
@@ -49,7 +58,7 @@ function parseFrontmatter(source, file) {
       err(file, "frontmatter is empty or not an object");
       return null;
     }
-    return { frontmatter: parsed, content: source.slice(end + 4) };
+    return { frontmatter: parsed, content: source.slice(end + 4), body };
   } catch (e) {
     err(file, `invalid YAML frontmatter: ${e.message}`);
     return null;
@@ -142,6 +151,12 @@ function main() {
     if (!parsed) continue;
     const fm = validateFrontmatter(parsed.frontmatter, rel);
     validateRelativeLinks(parsed.content, rel, skillFile);
+
+    if (skillDir === join(SKILLS_DIR, PR_WORKFLOW_SKILL_DIR) && typeof fm.name === "string") {
+      if (parseSkillName(parsed.body) !== fm.name) {
+        err(rel, `PR-workflow gate skill 'name' must be the canonical simple form the gh-pr-gate hook reads (a plain unquoted scalar, e.g. 'name: ${fm.name}'); a quoted, commented, or block-scalar form is YAML-legal but unreadable by the hook`);
+      }
+    }
 
     if (typeof fm.name === "string") {
       const list = nameToFiles.get(fm.name) ?? [];

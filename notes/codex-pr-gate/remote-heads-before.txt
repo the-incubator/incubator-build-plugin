@@ -1,0 +1,13 @@
+6c484766916c09b688e7b6a85d9a4ee3c380cb50	refs/heads/feat/beta-release-channel
+7a913b53fdcda80ea9badc34fbca193f9be8a4c8	refs/heads/feat/mobile-rrweb-analysis
+a58e88d76eabf3868a263c1725483baec500842a	refs/heads/feat/review-feedback-triage
+e188481e68fcd20e5f38e9e71f7fa4ca2f6b9525	refs/heads/fix/feedback-render-hardening
+a266bae245c3bd555bb489299048b6c9e4a676cd	refs/heads/fm/identity-keys-p3-plugin
+23499885c2ed1fcb43b13f0e6fb8743c322f34c0	refs/heads/fm/plan-autolaunch
+49cff1d0b246b3fda51fd9df12a22db3442c2dac	refs/heads/fm/plan-skill-voice
+8c6adeabbdce881584a32c55dd0a0661fea58c98	refs/heads/fm/visual-plan-plugin
+40bdff2dcebb96a1a3113fec019b3a8448c636fd	refs/heads/main
+b22894e6db2feb088acd7323a29bf8ebe3666569	refs/heads/rename-ship-pr-to-merge-pr
+305b33bdba1cfa764d6d205cafc963c4481fd969	refs/heads/worktree-no-draft-pr
+ce826ba04336eb86f4331a254d080131c2cff789	refs/heads/worktree-review-3a-lighten
+eed28ba63077bf05fd47e92b8ed9c50dd5df8ab7	refs/heads/worktree-review-deep-fable-model-tiering

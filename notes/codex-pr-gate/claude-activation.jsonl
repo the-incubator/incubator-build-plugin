@@ -1,0 +1,1 @@
+{"type": "assistant", "sessionId": "claude-session-a", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "claude-tool-a", "name": "Skill", "input": {"skill": "incubator-build:inc-commit-push-pr"}, "caller": {"type": "direct"}}]}}

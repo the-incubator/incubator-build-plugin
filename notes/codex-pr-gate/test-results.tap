@@ -1,0 +1,88 @@
+TAP version 13
+# Subtest: blocks PR-creation across all channels
+ok 1 - blocks PR-creation across all channels
+  ---
+  duration_ms: 5.886542
+  type: 'test'
+  ...
+# Subtest: allows read-only calls and sub-resource writes
+ok 2 - allows read-only calls and sub-resource writes
+  ---
+  duration_ms: 0.452166
+  type: 'test'
+  ...
+# Subtest: matches MCP create_pull_request tool names by suffix
+ok 3 - matches MCP create_pull_request tool names by suffix
+  ---
+  duration_ms: 0.316042
+  type: 'test'
+  ...
+# Subtest: transcript-unavailable sessions are advisory, while available transcripts stay enforced
+ok 4 - transcript-unavailable sessions are advisory, while available transcripts stay enforced
+  ---
+  duration_ms: 1434.072
+  type: 'test'
+  ...
+# Subtest: regression: captured genuine Codex activation preceding the reproduced denial allows
+ok 5 - regression: captured genuine Codex activation preceding the reproduced denial allows
+  ---
+  duration_ms: 254.584416
+  type: 'test'
+  ...
+# Subtest: captured Claude activation still allows and current Codex unrelated activation denies
+ok 6 - captured Claude activation still allows and current Codex unrelated activation denies
+  ---
+  duration_ms: 540.639333
+  type: 'test'
+  ...
+# Subtest: frontmatter identity resolves current and intentional legacy names in both hosts
+ok 7 - frontmatter identity resolves current and intentional legacy names in both hosts
+  ---
+  duration_ms: 1257.253083
+  type: 'test'
+  ...
+# Subtest: available Codex transcript without activation denies with a Codex instruction
+ok 8 - available Codex transcript without activation denies with a Codex instruction
+  ---
+  duration_ms: 428.536292
+  type: 'test'
+  ...
+# Subtest: Codex evidence from another session or inherited turn cannot authorize
+ok 9 - Codex evidence from another session or inherited turn cannot authorize
+  ---
+  duration_ms: 2301.381
+  type: 'test'
+  ...
+# Subtest: mentions, exact XML pastes, file reads, unrelated skills and wrong metadata never activate
+ok 10 - mentions, exact XML pastes, file reads, unrelated skills and wrong metadata never activate
+  ---
+  duration_ms: 2778.786667
+  type: 'test'
+  ...
+# Subtest: CLI REST GraphQL and MCP decisions retain activation and read-only boundaries
+ok 11 - CLI REST GraphQL and MCP decisions retain activation and read-only boundaries
+  ---
+  duration_ms: 10499.708166
+  type: 'test'
+  ...
+# Subtest: Claude text, pasted tool examples and explicitly foreign records deny
+ok 12 - Claude text, pasted tool examples and explicitly foreign records deny
+  ---
+  duration_ms: 719.892917
+  type: 'test'
+  ...
+# Subtest: existing unreadable transcripts deny; malformed stdin and unexpected errors still fail open
+ok 13 - existing unreadable transcripts deny; malformed stdin and unexpected errors still fail open
+  ---
+  duration_ms: 779.346417
+  type: 'test'
+  ...
+1..13
+# tests 13
+# suites 0
+# pass 13
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21369.01
