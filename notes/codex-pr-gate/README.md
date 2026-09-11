@@ -89,9 +89,14 @@ The new cases live in that file, not in a duplicate test suite.
 `test-results.tap` records the run.
 
 Run `node notes/codex-pr-gate/smoke.mjs` from the repository root.
-An optional installed-gate file argument compares the unchanged affected version with the fixed source.
+A plain run prints its results to stdout and writes nothing, so it never dirties the worktree.
+An optional installed-gate file argument compares the unchanged affected version with the fixed source, adding the two installed-gate rows.
 The runner supplies JSON on stdin to gate processes only; it never executes a PR command.
-The saved `smoke-results.json` records:
+
+The committed `smoke-results.json` is the canonical four-row artifact and is authoritative.
+It is regenerated deliberately, never by a plain run: pass the installed-gate path together with `--write` (`node notes/codex-pr-gate/smoke.mjs <installed-gate> --write`).
+Use `--write=PATH` to send an ordinary run's results to a scratch/untracked path instead.
+The tracked `smoke-results.json` records:
 
 - Fixed gate, genuine activation fixture: allow, exit zero and empty stdout.
 - Fixed gate, same session without activation: deny.
