@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { detectHost, runUpdate, updatePaths } from "./plugin-update.mjs";
+import { acquireLock, detectHost, runUpdate, updatePaths } from "./plugin-update.mjs";
 
 function fixture(t, source = "git") {
   const home = mkdtempSync(join(tmpdir(), "incubator-update-"));
@@ -105,6 +105,56 @@ test("recovers an abandoned lock and a future timestamp", (t) => {
   utimesSync(paths.lock, old, old);
   writeFileSync(paths.stamp, String(f.now + 10_000));
   assert.equal(runUpdate(f).status, "updated");
+});
+
+// In-memory lock filesystem so the concurrent-worker interleaving is
+// deterministic. stat reports the state as of the call's entry, so a hook can
+// model another worker acting in the window between this worker's operations.
+function memoryLockOps(store, { now = () => Date.now(), onStat } = {}) {
+  const fail = (code) => { const err = new Error(code); err.code = code; return err; };
+  return {
+    mkdir(path) {
+      if (store.has(path)) throw fail("EEXIST");
+      store.set(path, { mtimeMs: now() });
+    },
+    stat(path) {
+      const observed = store.has(path) ? { mtimeMs: store.get(path).mtimeMs } : null;
+      onStat?.(path);
+      if (!observed) throw fail("ENOENT");
+      return observed;
+    },
+    rename(from, to) {
+      if (!store.has(from)) throw fail("ENOENT");
+      store.set(to, store.get(from));
+      store.delete(from);
+    },
+    rm(path) { store.delete(path); },
+  };
+}
+
+test("concurrent stale-lock reclaim lets exactly one worker acquire; the other backs off", () => {
+  const LOCK = "/incubator/plugin-update.lock";
+  const MAX = 10 * 60 * 1000;
+  const NOW = 10_000_000;
+  const store = new Map([[LOCK, { mtimeMs: NOW - (MAX + 60_000) }]]); // stranded, stale
+  const nowFn = () => NOW;
+  const winner = memoryLockOps(store, { now: nowFn });
+  let raced = false;
+  // The instant the loser reads the stale lock's age, the winner wakes, reaps
+  // that same stale lock, and acquires a fresh one at the same path -- exactly
+  // the window the old "blind rmSync then mkdir" reaper clobbered.
+  const loser = memoryLockOps(store, {
+    now: nowFn,
+    onStat: (path) => {
+      if (path === LOCK && !raced) {
+        raced = true;
+        assert.equal(acquireLock(LOCK, { now: NOW, maxAgeMs: MAX, ops: winner }), true);
+      }
+    },
+  });
+  assert.equal(acquireLock(LOCK, { now: NOW, maxAgeMs: MAX, ops: loser }), false);
+  assert.ok(raced, "the interleave under test must actually fire");
+  assert.ok(store.has(LOCK), "the winner's freshly acquired lock must survive the loser's reap");
 });
 
 test("hook launches a detached Codex worker with inherited home and throttles repeated starts", async (t) => {

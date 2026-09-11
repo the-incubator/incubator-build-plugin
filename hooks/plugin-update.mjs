@@ -2,7 +2,7 @@
 // blocking the current one. A detached Node worker serializes each host's
 // refresh/install pair; command failures remain visible in its log.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, statSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, rmSync, renameSync, statSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,23 +63,81 @@ function execute(command, args, env) {
   });
 }
 
-export function runUpdate({ host, force = false, env = process.env, home = homedir(), run = execute, now = Date.now() }) {
-  const commands = updateCommands(host);
-  const paths = updatePaths(host, env, home);
-  mkdirSync(dirname(paths.log), { recursive: true });
-  // The maximum worker time is three bounded CLI calls. Only reap a lock far
-  // older than that window, so interrupted workers cannot strand updates.
+// Filesystem primitives the lock uses, isolated so tests can drive the
+// concurrent-worker interleavings deterministically.
+const realLockOps = {
+  mkdir: (path) => mkdirSync(path),
+  stat: (path) => statSync(path),
+  rename: (from, to) => renameSync(from, to),
+  rm: (path, opts) => rmSync(path, opts),
+};
+
+function claimLock(lock, ops) {
+  // mkdir is atomic: it fails with EEXIST if the directory already exists, so a
+  // successful mkdir IS exclusive ownership. This is the ONLY way to acquire.
   try {
-    if (now - statSync(paths.lock).mtimeMs > LOCK_MAX_AGE_MS) rmSync(paths.lock, { recursive: true, force: true });
+    ops.mkdir(lock);
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
+  }
+}
+
+function reclaimStaleLock(lock, now, maxAgeMs, ops) {
+  // Returns true when the lock path is free to re-claim, false to back off.
+  // Reaps only a genuinely stale lock, and never removes the live path with a
+  // blind rmSync -- it renames the directory to a private name first, so only
+  // one worker can ever remove a given lock (the losers see ENOENT and just
+  // re-claim). Whoever wins the rename then confirms the directory really was
+  // stale; if it turned fresh between the age check and the rename (a worker
+  // acquired in that window), it is restored and this caller backs off.
+  let ageMs;
+  try {
+    ageMs = now - ops.stat(lock).mtimeMs;
+  } catch (err) {
+    if (err.code === "ENOENT") return true; // vanished on its own; re-claim.
+    throw err;
+  }
+  if (ageMs <= maxAgeMs) return false; // a live worker holds it.
+  const held = `${lock}.stale-${process.pid}-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    ops.rename(lock, held);
+  } catch (err) {
+    if (err.code === "ENOENT") return true; // lost the rename race; re-claim.
+    throw err;
+  }
+  try {
+    if (now - ops.stat(held).mtimeMs <= maxAgeMs) {
+      // We renamed away a lock that was actually fresh. Put it back if the path
+      // is still free; otherwise drop our copy. Either way, do not proceed.
+      try { ops.rename(held, lock); } catch { try { ops.rm(held, { recursive: true, force: true }); } catch {} }
+      return false;
+    }
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
   try {
-    mkdirSync(paths.lock);
+    ops.rm(held, { recursive: true, force: true });
   } catch (err) {
-    if (err.code === "EEXIST") return { status: "busy" };
-    throw err;
+    if (err.code !== "ENOENT") throw err;
   }
+  return true;
+}
+
+export function acquireLock(lock, { now = Date.now(), maxAgeMs = LOCK_MAX_AGE_MS, ops = realLockOps } = {}) {
+  // The maximum worker time is three bounded CLI calls, so any lock far older
+  // than that window was stranded by an interrupted worker and is safe to reap.
+  if (claimLock(lock, ops)) return true;
+  if (!reclaimStaleLock(lock, now, maxAgeMs, ops)) return false;
+  return claimLock(lock, ops);
+}
+
+export function runUpdate({ host, force = false, env = process.env, home = homedir(), run = execute, now = Date.now() }) {
+  const commands = updateCommands(host);
+  const paths = updatePaths(host, env, home);
+  mkdirSync(dirname(paths.log), { recursive: true });
+  if (!acquireLock(paths.lock, { now })) return { status: "busy" };
   try {
     let last = 0;
     try { last = Number(readFileSync(paths.stamp, "utf8")); } catch {}
