@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { looksLikePrCreate, isPrCreateTool } from "./gh-pr-gate.mjs";
+import { looksLikePrCreate, isPrCreateTool, loadPrWorkflowSkill } from "./gh-pr-gate.mjs";
 import { prWorkflowSkill, parseSkillName } from "./pr-workflow-skill.mjs";
 
 const BLOCK = [
@@ -170,22 +170,36 @@ test("frontmatter identity resolves current and intentional legacy names in both
   }
 });
 
-test("quoted frontmatter names resolve so the identity load never fails open", () => {
-  // The repo skill validator (scripts/validate-skills.mjs) parses via YAML, so an
-  // unquoted, single-quoted, or double-quoted name are all validator-legal. Each must
-  // resolve here too; previously a quoted name threw, and the gate's error boundary
-  // then failed open, allowing PR creation without any activation evidence.
+test("identity load fails CLOSED on an exotic or unreadable name, and binds a canonical one", () => {
+  // The gate reads only the canonical simple scalar form. Any other YAML-legal
+  // spelling must NOT parse here — validate-skills.mjs rejects it at CI, and if one
+  // ever reached the runtime the gate must fail closed rather than fail open.
   assert.equal(parseSkillName("name: inc:commit-push-pr-4"), "inc:commit-push-pr-4");
-  assert.equal(parseSkillName('name: "inc:commit-push-pr-4"'), "inc:commit-push-pr-4");
-  assert.equal(parseSkillName("name: 'inc:commit-push-pr-4'"), "inc:commit-push-pr-4");
-  assert.equal(parseSkillName('description: x\nname: "inc:commit-push-pr-4"\nother: y'), "inc:commit-push-pr-4");
-  // A genuinely absent or non-scalar-legal name still yields undefined, so the identity
-  // load still throws and the deliberate fail-open-on-unexpected-error policy is intact.
-  assert.equal(parseSkillName("description: no name here"), undefined);
-  assert.equal(parseSkillName('name: "Not A Valid Name"'), undefined);
-  // The real (unquoted) frontmatter loads without throwing, and a real session that
-  // never activated the skill is still denied — enforcement is not weakened.
-  assert.doesNotThrow(() => prWorkflowSkill());
+  for (const exotic of [
+    'name: "inc:commit-push-pr-4"',
+    "name: 'inc:commit-push-pr-4'",
+    "name: inc:commit-push-pr-4 # workflow",
+    "name: >\n  inc:commit-push-pr-4",
+    "description: no name here",
+  ]) {
+    assert.equal(parseSkillName(exotic), undefined, `exotic form must not parse: ${JSON.stringify(exotic)}`);
+    const source = `---\n${exotic}\ndescription: x\n---\nbody\n`;
+    // prWorkflowSkill throws on an unreadable name, and loadPrWorkflowSkill turns any
+    // throw into the fail-CLOSED null the gate denies on — never a silent pass.
+    assert.throws(() => prWorkflowSkill(source));
+    assert.equal(loadPrWorkflowSkill(() => prWorkflowSkill(source)), null);
+  }
+  // An unreadable identity file (loader throws) also fails closed.
+  assert.equal(loadPrWorkflowSkill(() => { throw new Error("ENOENT"); }), null);
+  // A canonical name resolves, binds current + legacy spellings, and loads for real.
+  const canonical = prWorkflowSkill("---\nname: inc:commit-push-pr-4\ndescription: x\n---\n");
+  assert.equal(canonical.name, "inc:commit-push-pr-4");
+  assert.equal(canonical.matches("incubator-build:inc:commit-push-pr-4"), true);
+  assert.equal(canonical.matches("inc-commit-push-pr"), true);
+  assert.ok(loadPrWorkflowSkill());
+  assert.equal(loadPrWorkflowSkill().name, "inc:commit-push-pr-4");
+  // With a valid identity and an available transcript, a session that never activated
+  // the skill is still denied — enforcement is not weakened by the fail-closed change.
   withTranscript(capturedCodex.slice(0, -1), (result) => {
     assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny");
   });

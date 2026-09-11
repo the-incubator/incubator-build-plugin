@@ -19,7 +19,11 @@
 // Read-only calls (`gh pr list`, `gh pr view`, `gh api repos/O/R/pulls` with no
 // write flags) are deliberately left alone.
 //
-// Fails open on any unexpected error — never bricks a session.
+// Fails open on any unexpected error — never bricks a session — with one scoped
+// exception: failing to load the gate's OWN skill identity while actively gating a
+// PR-create denies (fails CLOSED). That is a plugin-integrity condition, not a
+// transcript one, so it must not fall through to the fail-open boundary and wave a
+// PR past the gate with no activation check at all.
 
 import { readFile } from "node:fs/promises";
 import { existsSync, realpathSync } from "node:fs";
@@ -157,6 +161,19 @@ function transcriptAvailable(transcriptPath) {
   return Boolean(transcriptPath && existsSync(transcriptPath));
 }
 
+// Load the gate's own skill identity. Returns the skill on success, or null on ANY
+// failure (unreadable SKILL.md, or a frontmatter name in a form the gate cannot
+// read). The caller must fail CLOSED on null — this is a plugin-integrity failure,
+// distinct from the transcript-availability fail-open above. `load` is injectable
+// for tests; production passes nothing.
+export function loadPrWorkflowSkill(load = prWorkflowSkill) {
+  try {
+    return load();
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
   const payload = await readStdinJson(500);
   if (!payload) return 0;
@@ -175,7 +192,21 @@ async function main() {
   // Keep enforcement hard whenever the transcript exists; only the
   // provably-unavailable case is allowed to proceed without skill evidence.
   if (!transcriptAvailable(payload.transcript_path)) return 0;
-  const skill = prWorkflowSkill();
+
+  // Plugin-integrity gate: we are actively enforcing a PR-create with a transcript
+  // present, so a failure to read our own skill identity must fail CLOSED, not fall
+  // through to the outer fail-open catch.
+  const skill = loadPrWorkflowSkill();
+  if (!skill) {
+    deny(
+      "Opening a PR is blocked: this gate could not read the PR-workflow skill's " +
+        "frontmatter name from skills/inc-commit-push-pr/SKILL.md, so it cannot verify " +
+        "that the skill was activated. This is a plugin-integrity problem, not a normal " +
+        "denial — set that skill's frontmatter `name` to a plain unquoted scalar " +
+        "(for example `name: inc:commit-push-pr-4`) and retry.",
+    );
+    return 0;
+  }
   const evidence = await activationEvidence(payload.transcript_path, payload.session_id, skill);
   if (evidence.activated) return 0;
   const instruction = evidence.codex || typeof payload.turn_id === "string"
