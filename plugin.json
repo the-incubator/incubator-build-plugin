@@ -8,11 +8,5 @@
   },
   "homepage": "https://github.com/the-incubator/incubator-build-plugin",
   "repository": "https://github.com/the-incubator/incubator-build-plugin",
-  "keywords": [
-    "code-review",
-    "pull-request",
-    "debugging",
-    "planning",
-    "developer-tools"
-  ]
+  "keywords": ["code-review", "pull-request", "debugging", "planning", "developer-tools"]
 }

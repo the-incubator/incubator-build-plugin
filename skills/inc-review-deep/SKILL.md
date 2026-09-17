@@ -8,6 +8,12 @@ argument-hint: "[blank to review current branch, or provide PR link]"
 
 Reviews code changes using dynamically selected reviewer personas. Spawns parallel sub-agents that return structured JSON, then merges and deduplicates findings into a single report.
 
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Persona names below identify bundled prompt assets, not mandatory registered agent types.
+Read their files from the resolved plugin-root `agents/` directory and supply the contents to the host's general-purpose subagent mechanism.
+Explicitly read the Included References at the end of this file; `@` inclusion is not portable.
+If independent subagents are unavailable, stop with a capability gap rather than silently turning deep review into self-review.
+
 ## When to Use
 
 - Before creating a PR

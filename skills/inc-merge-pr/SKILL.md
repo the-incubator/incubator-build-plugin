@@ -8,7 +8,9 @@ allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), B
 
 Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health), plus a conditional **schema-drift** gate that hard-blocks only when the target repo exposes a drift check and this PR touches schema; the deploy-window gate respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
+Use native sibling-skill invocation when available, otherwise read and follow the linked file inline.
 
 Report each gate in order. At the end, print a single line: `MERGE: GO` or `MERGE: BLOCK - <reasons>`. On `MERGE: GO`, squash-merge the PR into `main` with `--delete-branch` (which also checks out `main` and removes the local feature branch), then **actively observe the deploy** (wait for Ready state, scan first-3-min logs for errors) before declaring the skill complete.
 
@@ -37,7 +39,7 @@ Commit count is a noisy proxy for staleness - 50 commits on files this branch do
 
 - `ok` - pre-flight OK. If `BEHIND > 0` with `OVERLAP_COUNT=0`, note "`<BEHIND>` commits behind `main`, no path overlap" in the report and continue.
 - `block_default_branch` - **stop.** You're on the default branch, so there's no PR to merge. Tell the user to check out the PR's feature branch and re-run.
-- `block_overlap` - **block the merge**, regardless of `BEHIND`. List the `OVERLAP=` paths so the collision is visible. If the user is on the PR branch locally, invoke the `inc:update-code` skill via the `Skill` tool (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-5`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
+- `block_overlap` - **block the merge**, regardless of `BEHIND`. List the `OVERLAP=` paths so the collision is visible. If the user is on the PR branch locally, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-5`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
 - `error` - **freshness BLOCK (unverifiable).** Freshness couldn't be computed - not a git repo, detached HEAD, or the `branch-freshness` helper crashed / returned no usable output. The script fail-safes this to a block rather than emitting a false "ok" that could let a merge through without checking path overlap. Surface the reason and stop.
 
 **Success criteria:** No files changed on both the branch and on `main` since divergence - or the user has updated the branch and CI is re-running before re-invocation.
@@ -68,7 +70,7 @@ grep -A 80 "## Deploy Configuration" deploy.md 2>/dev/null \
   > 3. **Abort** - don't run the gates.
 
   Resolve:
-  - **Run setup-deploy** → invoke the `/inc:setup-deploy` skill via the Skill tool, then re-read the block (the grep above) and continue to Step 0b with the persisted config.
+  - **Run setup-deploy** → run [inc:setup-deploy](../inc-setup-deploy/SKILL.md) through native invocation or by reading and following that file inline, then re-read the block (the grep above) and continue to Step 0b with the persisted config.
   - **Skip** → set `OBSERVATION_READY=skip` with reason "no deploy configuration; user declined /inc:setup-deploy", continue to the gate interpretation below.
   - **Abort** → stop the skill entirely.
 
@@ -76,14 +78,16 @@ grep -A 80 "## Deploy Configuration" deploy.md 2>/dev/null \
 
 - **Probe succeeds** → `OBSERVATION_READY=1`. Note "`<platform>` CLI authed as `<account>`" in the report. Continue to the gate interpretation below.
 - **CLI missing or unauthed** (non-zero exit, "command not found", "not logged in", token expired) → don't silently skip; this is usually fixable in seconds and observation is the skill's whole back half. Print the actual error **plus the fix command**: the `Reauth` line from the Deploy Configuration block, falling back to the platform default (`vercel login`, `netlify login`, `fly auth login`, `railway login`, `gcloud auth login`, `gh auth login`; for a missing CLI, the install command, e.g. `npm i -g vercel`). **Never run install/login yourself** - logins are interactive and the account choice is the user's. Suggest they run it as `! <command>` (runs inside this session so the auth lands here). Then ask (AskUserQuestion):
-  1. **Fixed - re-probe** → re-run the auth check; on success set `OBSERVATION_READY=1` and continue to the gate interpretation below. If the CLI was **missing** (not just unauthed) and the user installed it, also re-run `/inc:setup-deploy` (via the Skill tool) before proceeding - the persisted commands were verified against a CLI version that wasn't this one, and flags drift between majors.
+  1. **Fixed - re-probe** → re-run the auth check; on success set `OBSERVATION_READY=1` and continue to the gate interpretation below. If the CLI was **missing** (not just unauthed) and the user installed it, also re-run `/inc:setup-deploy` (through native invocation or by reading and following its file inline) before proceeding - the persisted commands were verified against a CLI version that wasn't this one, and flags drift between majors.
   2. **Skip observation** → `OBSERVATION_READY=skip` with the actual error recorded. Note in the report and continue to the gate interpretation below.
 - **Probe denied by sandbox** (denial message mentioning "Production Reads", "permission for this action has been denied", or similar harness-level refusal that is *not* a CLI-level error) → **STOP. Do not proceed to gates.** Surface the choice:
 
   > **Pre-flight (deploy observation readiness):** Detected platform: `<platform>`. The sandbox blocked `<probe command>` (a read-only auth check) before it could run. Without permission for this command, post-merge observation will be unavailable - I won't be able to wait for Ready or scan logs.
   >
   > How would you like to proceed?
-  > 1. **Grant permission** - I'll invoke the `update-config` skill to add `Bash(<platform> *)` (or a tighter rule like `Bash(<platform> status)`, `Bash(<platform> logs:*)`, `Bash(<platform> whoami)`) to project `.claude/settings.json` (or user `~/.claude/settings.json` if you prefer global). Then I'll re-probe and continue.
+  > 1. **Grant permission** - Use this host's permission controls to authorize the specific observation commands, then re-probe and continue.
+  > On Claude Code, an available `update-config` skill can add narrowly scoped rules to the appropriate settings file.
+  > On other hosts, do not write Claude settings or assume `update-config` exists.
   > 2. **Accept observation skipped** - proceed with the gates and skip Active Deploy Observation. You'll watch the platform dashboard yourself.
   > 3. **Abort** - don't run the gates at all.
 

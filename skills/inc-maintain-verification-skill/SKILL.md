@@ -10,7 +10,9 @@ A feature map rots the moment the app changes. This skill is the upkeep loop for
 
 This skill is ported from [pstack `maintain-verification-skill`](https://github.com/cursor/plugins/tree/main/pstack/skills/maintain-verification-skill) by Lauren Tan, which is MIT licensed. The retained copyright and license text is in [NOTICE.md](NOTICE.md).
 
-**Where the verification skill lives.** A project-local skill directory in the target repo: `.claude/skills/verify-*/` in Claude Code, `.agents/skills/verify-*/` under Codex. Substitute the Codex path when you are running there.
+**Where the verification skill lives.** Find the existing `verify-*/SKILL.md` in the host's project skill directory: `.claude/skills/`, `.agents/skills/` (Codex/Pi), `.cursor/skills/`, `.cline/skills/`, or the host's documented equivalent.
+Keep its existing location and substitute it in all examples below.
+Read [host compatibility](../inc-guide/references/host-compatibility.md) for portable subagent dispatch and reference loading.
 
 ## Outcomes
 

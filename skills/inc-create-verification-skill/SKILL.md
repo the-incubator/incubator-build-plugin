@@ -10,7 +10,10 @@ Every serious project needs a scripted way to drive the real app and prove behav
 
 This skill is ported from [pstack `create-verification-skill`](https://github.com/cursor/plugins/tree/main/pstack/skills/create-verification-skill) by Lauren Tan, which is MIT licensed. The retained copyright and license text is in [NOTICE.md](NOTICE.md).
 
-**Where the generated skill lands.** The output is a project-local skill directory in the target repo. In Claude Code that is `.claude/skills/verify-<app>/`; under Codex it is `.agents/skills/verify-<app>/`. This document writes `.claude/skills/verify-<app>/` throughout — substitute `.agents/skills/` when you are running under Codex.
+**Where the generated skill lands.** Use the target host's project-local discovery directory: `.claude/skills/` for Claude, `.agents/skills/` for Codex or Pi, `.cursor/skills/` for Cursor, and `.cline/skills/` for Cline.
+For other hosts, use their documented project skill directory rather than assuming Claude's path.
+This document uses `.claude/skills/verify-<app>/` in examples; substitute the selected directory throughout.
+Read [host compatibility](../inc-guide/references/host-compatibility.md) for portable invocation and reference loading.
 
 ## 1. Interview the repo, not the user
 

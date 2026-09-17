@@ -7,6 +7,9 @@ disable-model-invocation: false
 
 Review the change set on the current branch: auto-apply safe fixes, surface findings that need the user's call, and write a run artifact. This is the lightweight review tier — a fast single-agent pass without the deep persona fan-out, merge, or dedup machinery. For large or sensitive changes, or to review a GitHub PR, use `inc:review-deep-3b` instead.
 
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+An independent review agent is required; if the host has no subagent mechanism, stop with that capability gap rather than reviewing your own work and proceeding.
+
 ## Scope
 
 Working-tree only. The review target is the change set on the current branch: `git diff HEAD` plus staged changes (`git diff --cached`), or — when reviewing a whole branch — `git diff <base>...HEAD`. There is no PR mode; reviewing a GitHub PR is `inc:review-deep-3b`'s job.
@@ -17,7 +20,10 @@ Working-tree only. The review target is the change set on the current branch: `g
 
 To do this, follow these steps precisely:
 
-1. Launch a single Sonnet review agent. It reviews the change and returns a list of findings, following the review instructions below verbatim. It locates the relevant CLAUDE.md files on its own (root CLAUDE.md plus any in directories the change touches). Deeper architectural review (the persona fan-out) belongs to `inc:review-deep-3b`, not this tier.
+1. Launch a single independent review agent (Sonnet where supported, otherwise an available equivalent or the inherited model).
+   It reviews the change and returns findings following the instructions below verbatim.
+   It locates relevant AGENTS.md and CLAUDE.md files on its own, including scoped files in changed directories.
+   Deeper architectural review (the persona fan-out) belongs to `inc:review-deep-3b`, not this tier.
 
    **Review instructions (give to the agent verbatim):**
 

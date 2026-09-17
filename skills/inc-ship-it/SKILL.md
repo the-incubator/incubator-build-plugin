@@ -1,7 +1,6 @@
 ---
 name: inc:ship-it
 description: End-to-end ship pipeline. Runs inc:review-and-pr (tiered review gate → commit-push-PR → watch CI + AI reviewers → resolve feedback, stopping at a feedback-clean PR), then inc:merge-pr-5 to run the merge gates, squash-merge, and observe the deploy. Use when the user says "ship it end to end", "full ship", "commit through merge", "/inc:ship-it", or wants the whole working-changes-to-merged-and-deployed flow as one command.
-allowed-tools: Skill, Bash(gh *), Bash(git *), Read
 ---
 
 # Ship It: review → PR → resolve feedback → merge, end to end
@@ -11,7 +10,11 @@ Orchestrates two existing skills in sequence so the user runs one command instea
 1. `inc:review-and-pr` — review the working tree (tiered light/deep), commit-push-PR, watch CI + AI reviewers, resolve feedback in a loop, and stop at a feedback-clean PR.
 2. `inc:merge-pr-5` — run the merge gates, squash-merge, and observe the deploy.
 
-This skill **does not reimplement** any underlying logic — it hands off via the `Skill` tool and waits. The confirmation gates the underlying skills enforce (review gate, commit-push-pr's intent interview, merge-pr's gates) are preserved. Feedback resolution runs **unattended** inside commit-push-pr's watch loop — only `needs-human` items pause it. So the chain still stops at its real decision points (review findings, a `needs-human` thread, merge gates); it is not fully hands-off, but feedback fixes no longer prompt per-thread.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+This skill does not reimplement child workflows: use native skill invocation when available, otherwise read and follow each linked sibling inline before continuing.
+Preserve the review gate, intent interview, merge gates, and all stop conditions.
+Feedback resolution runs unattended inside commit-push-pr's watch loop; only `needs-human` items pause that resolver.
+Missing required capabilities stop this chain, not silently skip a stage.
 
 `inc:review-and-pr` already contains the commit → watch → resolve loop, so this skill is thin: run it, and if it reached PR-ready, merge.
 
@@ -23,7 +26,10 @@ This skill **does not reimplement** any underlying logic — it hands off via th
 
 ## Asking the user — make "waiting on you" unambiguous
 
-This chain interleaves long passive waits (watcher polling, resolve-pr-feedback running) with explicit decision points. Whenever this skill needs the user to choose between concrete options, use the platform's blocking question tool — `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini. **Never** present the choice as numbered prose — the user can't tell whether you're waiting or watching. Status updates and one-sentence confirmations are not decisions; keep those as prose.
+This chain interleaves passive waits with explicit decision points.
+Use the platform's blocking question tool when available.
+Otherwise present the question inline, say `Waiting for your answer`, and stop until the user replies.
+Status updates are not decisions; never treat silence as consent.
 
 Most forks live inside the underlying skills. This skill's own fork is the Step 3 `MERGE: BLOCK` case below.
 
@@ -35,9 +41,7 @@ Set expectations, then proceed (no question — the user invoked the chain knowi
 
 ## Step 2 — Run inc:review-and-pr
 
-```
-Skill: inc:review-and-pr
-```
+Run [inc:review-and-pr](../inc-review-and-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
 
 This runs the whole front of the pipeline: tier-selected review gate → commit-push-PR → watch CI + AI reviewers → resolve-feedback loop → stop at PR-ready. It owns all the watching and feedback resolution; this skill just waits for it to return.
 
@@ -51,9 +55,7 @@ This runs the whole front of the pipeline: tier-selected review gate → commit-
 
 ## Step 3 — Run inc:merge-pr-5
 
-```
-Skill: inc:merge-pr-5
-```
+Run [inc:merge-pr-5](../inc-merge-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
 
 merge-pr runs its own pre-flight (branch freshness), the merge gates (new env vars; PR health; schema drift for repos that expose a `db:check-drift` script; plus a deploy-window check that respects the team's configured window rules - default when none are set is risk-adaptive: low-risk changes just ship, riskier ones prompt a quick confirm), the squash-merge, and active deploy observation. Wait for it to return.
 

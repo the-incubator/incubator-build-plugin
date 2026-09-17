@@ -20,6 +20,13 @@ Pick the shape, answer from this guide, and stop.
    Only if the user wants implementation-level detail the map doesn't cover, read that skill's own `SKILL.md` (path in the map) and summarize - the guide is the entry point, the sources are the follow-up.
 3. **Situation** ("I just finished a small fix", "this touches auth", "my PR got review comments") - recommend the one skill that fits and stop.
 
+## Multi-host installation and invocation
+
+Use the [plugin-root README](../../README.md) for the install matrix covering Claude, Codex app/CLI, Cursor, Pi, and additional hosts.
+Use [host compatibility and composition](references/host-compatibility.md) for install-root paths, sibling skills, persona assets, arguments, and missing-capability behavior.
+The examples below retain `/inc:*` notation; Codex uses `$inc:*`, Pi/OMP use `/skill:inc:*`, and hosts without a matching command can read and follow the mapped `SKILL.md` explicitly.
+Distribution does not imply hook or PR-gate parity on every host.
+
 ## Codex installation and updates
 
 For installation, authentication, hook trust, local development, or updating an older Codex install, use the plugin-root `README.md` as the canonical plugin-local guide.
