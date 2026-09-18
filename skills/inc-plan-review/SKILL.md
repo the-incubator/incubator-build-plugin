@@ -8,6 +8,11 @@ disable-model-invocation: false
 
 Review a plan or design proposal **before** any implementation begins. The goal is to catch missing edge cases, unnecessary complexity, ambiguous requirements, and architectural risk while changes are still cheap.
 
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+All `agents/...` paths below are relative to the installed plugin root, not the project being reviewed.
+Pass persona file contents to general-purpose subagents when named agents are unavailable, and inherit the host model if Sonnet/Haiku selectors are unsupported.
+Stop if independent subagents are unavailable.
+
 ## When to use
 
 - A PRD, design doc, or technical plan is ready and you want a skeptical pass before writing code

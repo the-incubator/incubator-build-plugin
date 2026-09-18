@@ -4,9 +4,17 @@ on:
   pull_request:
     paths:
       - "skills/**"
-      - "scripts/validate-skills.mjs"
+      - "agents/**"
+      - "scripts/**"
+      - "tests/**"
+      - "plugin.json"
+      - ".*-plugin/**"
+      - ".agents/plugins/**"
+      - ".pi/**"
+      - ".opencode/**"
+      - ".cline/**"
+      - ".agy/**"
       - "hooks/**"
-      - "scripts/toggle-local.sh"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/validate-skills.yml"
@@ -22,6 +30,6 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-      - run: npm install --no-audit --no-fund
-      - run: npm run test:skills
-      - run: npm run test:hooks
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm pack --dry-run

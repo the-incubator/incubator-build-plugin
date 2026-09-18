@@ -1,12 +1,31 @@
 {
   "name": "incubator-build-plugin",
+  "version": "0.21.0",
+  "description": "Incubator Build skills for coding agents",
   "private": true,
   "type": "module",
+  "main": ".opencode/plugins/incubator-build.js",
+  "repository": "https://github.com/the-incubator/incubator-build-plugin",
+  "keywords": ["pi-package"],
+  "pi": {
+    "skills": ["./skills"],
+    "extensions": ["./.pi/extensions/incubator-build.js"]
+  },
+  "files": [
+    "skills/", "agents/", "hooks/", "scripts/", "notes/", "workflow/test-plans/", "plugin.json",
+    ".claude-plugin/", ".codex-plugin/", ".cursor-plugin/", ".agents/plugins/",
+    ".pi/extensions/", ".opencode/", ".omp-plugin/", ".kimi-plugin/",
+    ".grok-plugin/", ".devin-plugin/", ".cline/", ".agy/"
+  ],
   "scripts": {
+    "test": "npm run test:skills && npm run test:distribution && npm run test:hooks",
+    "manifests:sync": "node scripts/sync-manifests.mjs",
+    "smoke:pi": "node scripts/smoke-pi.mjs",
+    "test:distribution": "node scripts/sync-manifests.mjs --check && node --test tests/distribution.test.mjs",
     "test:skills": "node scripts/validate-skills.mjs",
     "test:hooks": "node --test hooks/*.test.mjs"
   },
-  "devDependencies": {
+  "dependencies": {
     "js-yaml": "^4.1.0"
   }
 }

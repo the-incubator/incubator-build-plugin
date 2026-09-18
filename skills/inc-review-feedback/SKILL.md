@@ -13,7 +13,8 @@ Turn raw product feedback into structured evidence for downstream agents. Feedba
 
 Either way, transcription runs **locally with whisper.cpp** by default — no `OPENAI_API_KEY`, no per-clip cost, and the audio never leaves the machine. (Adapted from the upstream `ce-riffrec-feedback-analysis` skill; the local backend, collector fetch, and timestamped frame selection are the incubator additions. The OpenAI API path is still available via an env flag — see "Local transcription" below.)
 
-**Plugin scripts:** Commands below use `<plugin root>`, the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
 
 ## Resolve the input
 

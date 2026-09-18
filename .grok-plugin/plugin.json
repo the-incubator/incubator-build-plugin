@@ -14,5 +14,6 @@
     "debugging",
     "planning",
     "developer-tools"
-  ]
+  ],
+  "skills": "./skills/"
 }

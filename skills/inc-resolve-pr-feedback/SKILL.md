@@ -9,7 +9,10 @@ allowed-tools: Bash(gh *), Bash(git *), Read, Skill
 
 Evaluate and fix PR review feedback, then reply and resolve threads. Spawns parallel agents for each thread.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
+The resolver persona is [inc-pr-comment-resolver](../../agents/inc-pr-comment-resolver.agent.md); pass its contents to a general-purpose subagent if the host has no registered agent by that name.
+Stop with a capability gap if required independent resolver agents are unavailable.
 
 > **Confirm before you mutate.** This skill does two mutating transitions: edits → commit, and commit → push + reply. The user sees the plan before edits happen, and the diff before commit/push happens. Do not chain fix → commit → push → reply without checkpoints, even when every finding looks obviously valid.
 >
@@ -94,7 +97,7 @@ OVERLAP=$(printf '%s\n' "$OUT" | sed -n 's/^OVERLAP=//p')
 
 If `$OVERLAP` is non-empty, ask the user whether to update before resolving feedback. Show the overlapping paths so they can judge — a comment on `src/auth.ts` when `src/auth.ts` also changed on `main` is a much stronger signal than an overlap in, say, a lockfile.
 
-If the user says yes, invoke the `inc:update-code` skill via the `Skill` tool — it handles stash/restore and routes conflicts to `git-merge-expert`. After it returns cleanly, continue to Full Mode Step 1 or Targeted Mode Step 1.
+If the user says yes, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — it handles stash/restore and routes conflicts to `git-merge-expert`. After it returns cleanly, continue to Full Mode Step 1 or Targeted Mode Step 1.
 
 If `$OVERLAP` is empty or the user declines, continue without updating. This check runs in both Full and Targeted modes.
 

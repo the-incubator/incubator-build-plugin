@@ -80,7 +80,7 @@ Capture the exit code and output.
 **If conflicts are reported** (exit code non-zero, output mentions `CONFLICT`, or `git status` shows `Unmerged paths`):
 
 1. Stop. Do not attempt to resolve conflicts inline.
-2. Invoke the `git-merge-expert` skill via the `Skill` tool, passing context about the in-progress operation:
+2. Run [git-merge-expert](../git-merge-expert/SKILL.md) through native skill invocation or read and follow that file inline, passing context about the in-progress operation:
    - which branch is being updated
    - merge vs. rebase
    - the conflicting files (`git diff --name-only --diff-filter=U`)

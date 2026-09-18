@@ -15,7 +15,11 @@ One skill for the whole worktree lifecycle in a repo, solving two chronic proble
    The fix is PR-state-based pruning: a worktree is stale when a merged PR's head is exactly its branch tip.
    Pruning runs opportunistically on every worktree creation (no cron, no manual step) and on demand via this skill.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve the installed plugin root and set `PLUGIN_ROOT` to that absolute path before running the snippets below.
+**Host boundary:** automatic `WorktreeCreate` wiring in Init is Claude Code-specific.
+On other hosts, explicit Status and Prune work through the script; with no argument default to Status, not Init.
+If asked to initialize another host, stop and explain that hook integration needs a host-specific follow-up rather than writing `.claude/settings.json`.
 
 ## User-invocable
 
@@ -39,7 +43,7 @@ Either case routes to repair, not Status.
 
 - Neither present: run **Init**.
 - Both present: run **Status**, and offer **Prune** if there are candidates.
-  Also diff the installed script against the plugin template (`diff scripts/worktree-setup.sh "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh"`); if it is an older or custom version, offer migration to the current template (Step 1 of Init governs how to ask).
+  Also diff the installed script against the plugin template (`diff scripts/worktree-setup.sh "$PLUGIN_ROOT/skills/inc-worktree/templates/worktree-setup.sh"`); if it is an older or custom version, offer migration to the current template (Step 1 of Init governs how to ask).
 - One present without the other (half-installed or a custom setup): report exactly what exists, then confirm with the user before repairing via **Init**.
 
 ## Init - install the worktree infrastructure
@@ -57,7 +61,7 @@ Two facts to state when asking:
 
 ```bash
 mkdir -p scripts
-cp "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" scripts/worktree-setup.sh
+cp "$PLUGIN_ROOT/skills/inc-worktree/templates/worktree-setup.sh" scripts/worktree-setup.sh
 chmod +x scripts/worktree-setup.sh
 ```
 
@@ -126,7 +130,7 @@ git worktree list
 if grep -qxF '# worktree-setup-capability: prune' scripts/worktree-setup.sh 2>/dev/null; then
   bash scripts/worktree-setup.sh --prune --dry-run
 else
-  bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
+  bash "$PLUGIN_ROOT/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
 fi
 ```
 
@@ -139,13 +143,13 @@ For a disk-usage figure, `du -sh` the prunable paths (run in the background if t
 Works in any repo, even one that never ran Init: the template script anchors itself via the git common dir, so it can run straight from the plugin:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
+bash "$PLUGIN_ROOT/skills/inc-worktree/templates/worktree-setup.sh" --prune --dry-run
 ```
 
 (Prefer the repo's installed `scripts/worktree-setup.sh` only when `grep -qxF '# worktree-setup-capability: prune' scripts/worktree-setup.sh` confirms support - an exact capability marker, not a substring search, because a legacy script that merely mentions `--prune` in a comment or usage string would be handed the flags and treat them as hook mode.)
 
 1. **Dry-run first.** Run with `--prune --dry-run` and present the plan: every `WOULD-PRUNE` line (with PR number) and every `KEEP` line (with reason).
-2. **Confirm.** Deleting worktrees is destructive; confirm with AskUserQuestion before applying, showing the count and, when cheap to compute, the disk it frees.
+2. **Confirm.** Deleting worktrees is destructive; confirm with the host's question tool (or ask inline and wait) before applying, showing the count and, when cheap to compute, the disk it frees.
    Never skip this confirmation.
 3. **Apply.** Run `--prune` (no `--dry-run`) and report the `PRUNED` lines.
 4. **Explain what was kept.** `KEEP` reasons are: uncommitted changes, assume-unchanged/skip-worktree entries, no merged PR for the branch, local commits after the PR merged, active within the last hour, or detached HEAD.

@@ -63,9 +63,9 @@ Every hard rule below is a consequence of this principle; if a rule and the prin
 
 ## Command setup
 
-Set `PLUGIN_ROOT` to the installed plugin root.
-In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`.
-In Codex, use the plugin root resolved from this skill directory.
+Read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Set `PLUGIN_ROOT` to the installed plugin root resolved from the real path of this skill directory.
+Claude Code may provide the same path as `${CLAUDE_PLUGIN_ROOT}`.
 
 ```bash
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin-root>}"

@@ -7,7 +7,9 @@ description: Commit, push, and open a PR with an adaptive, value-first descripti
 
 Go from working changes to an open pull request, or rewrite an existing PR description. PR descriptions are intent-focused — tight, high-signal, and never a kitchen sink of file lists or code narration.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
+Use native sibling-skill invocation when available, otherwise read and follow the linked file inline.
 
 **Asking the user:** When this skill says "ask the user", use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If unavailable, present the question and wait for a reply.
 
@@ -182,7 +184,7 @@ OUT=$(bash "$PLUGIN_ROOT/scripts/branch-freshness")
 BEHIND=$(printf '%s\n' "$OUT" | sed -n 's/^BEHIND=//p')
 ```
 
-If `BEHIND` ≥ **10**, ask the user whether to update the branch before pushing. If yes, invoke the `inc:update-code` skill via the `Skill` tool — the working tree is clean at this point so it can proceed without stashing. After it returns cleanly, continue. If it hands off to `git-merge-expert` for conflicts, let that finish first.
+If `BEHIND` ≥ **10**, ask the user whether to update the branch before pushing. If yes, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — the working tree is clean at this point so it can proceed without stashing. After it returns cleanly, continue. If it hands off to `git-merge-expert` for conflicts, let that finish first.
 
 If the user declines or `BEHIND` < 10, continue.
 
@@ -524,7 +526,7 @@ bash "$PLUGIN_ROOT/skills/inc-commit-push-pr/scripts/watch-pr-activity" "$PR" 36
 **Drive the loop — auto-resolve once reviews are in.** The watcher streams events; act on them as follows:
 
 - **Proceed to resolve when** `CI_GREEN` (or `CI_NONE`) has fired **and** every announced `AI_REVIEW: <bot>` has its matching `AI_REVIEW_DONE: <bot>`. Submission is atomic, so all inline comments are attached — do **not** wait for `WATCH_QUIET` (that only signals the watcher can stop). Fallbacks: if `CI_GREEN` fired but no `AI_REVIEW` ever did, proceed at `WATCH_QUIET` or 3 min after `CI_GREEN`, whichever is first; if an `AI_REVIEW` never gets its `AI_REVIEW_DONE`, fall back to `WATCH_QUIET` or 5 min of no new events.
-- **Auto-resolve, unattended.** Invoke `inc:resolve-pr-feedback` via the `Skill` tool with the `--auto` argument (e.g. `Skill: inc:resolve-pr-feedback` with arg `--auto`). In this mode it fixes → commits → pushes → replies → resolves every item its resolver agents can confidently handle, with **no confirmation pause**. It leaves only `needs-human` items open and returns them.
+- **Auto-resolve, unattended.** Run [inc:resolve-pr-feedback](../inc-resolve-pr-feedback/SKILL.md) with the explicit `--auto` argument, through native invocation or by reading and following that file inline. In this mode it fixes → commits → pushes → replies → resolves every item its resolver agents can confidently handle, with **no confirmation pause**. It leaves only `needs-human` items open and returns them.
 - **Loop.** If the resolve pass pushed new commits, those re-trigger CI and may prompt re-review — re-arm the watcher (same Monitor call) and repeat: wait for green + reviewers, run `--auto` resolve again on any new feedback. Continue until a resolve pass makes no changes and no new feedback remains.
 - **Stop the loop and surface (do not auto-invoke anything further) when:**
   - a resolve pass returns `needs-human` items — present them (the resolver already posted holding replies and left the threads open) and stop; the user decides, then re-runs resolve or merge,

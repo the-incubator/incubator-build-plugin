@@ -1,0 +1,17 @@
+{
+  "name": "incubator",
+  "owner": {
+    "name": "The Incubator",
+    "email": "austin@theincubator.xyz"
+  },
+  "plugins": [
+    {
+      "name": "incubator-build",
+      "description": "Curated skills for planning, code review, debugging, and shipping pull requests with coding agents.",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/the-incubator/incubator-build-plugin.git"
+      }
+    }
+  ]
+}

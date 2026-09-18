@@ -1,12 +1,14 @@
 ---
 name: inc:review-and-pr
 description: Review working-tree changes (tiered light/deep), then commit-push-PR — which watches CI + AI reviewers and auto-resolves feedback — stopping at a feedback-clean PR ready for a human to merge. Use when the user says "review and PR", "review then ship to PR", "/inc:review-and-pr", or wants working changes vetted and turned into a PR without merging.
-allowed-tools: Skill, Bash(gh *), Bash(git *), Read
 ---
 
 # Review and PR: review → commit/push/PR (watches + resolves feedback), stopping at PR-ready
 
-Orchestrates existing skills so the user runs one command. This skill **does not reimplement** their logic — it hands off via the `Skill` tool and waits at the right points. It ends at a feedback-clean PR; it never merges (use `inc:ship-it` for merge + deploy).
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Orchestrates existing skills without reimplementing their logic.
+Use a native skill tool when available; on Cursor, Pi, or any host without one, read and follow the linked sibling skill inline, preserving every gate and stop condition.
+It ends at a feedback-clean PR and never merges (use `inc:ship-it` for merge + deploy).
 
 The chain: **review gate → commit-push-PR → stop.** `inc:commit-push-pr-4` now owns the post-open work — it watches CI + AI reviewers and auto-resolves feedback in a loop before returning. If any stage blocks, surface the result and stop; the user resumes manually.
 
@@ -35,7 +37,9 @@ Stamp the time **before** running the review, so the gate can tell a fresh artif
 REVIEW_STAMP=$(mktemp)
 ```
 
-Run the selected tier on the working tree via the `Skill` tool — `inc:review-3a` or `inc:review-deep-3b`. It auto-applies safe fixes and writes its synthesized findings to `.context/incubator/inc-review/<run-id>/findings.json`.
+Run [inc:review-3a](../inc-review/SKILL.md) or [inc:review-deep-3b](../inc-review-deep/SKILL.md) on the working tree using native invocation or the inline composition rule above.
+It auto-applies safe fixes and writes its synthesized findings to `.context/incubator/inc-review/<run-id>/findings.json`.
+If independent review cannot run on this host, stop; do not substitute a self-review or continue without its artifact.
 
 Then read the gate signal — and **fail closed** if the review produced no fresh artifact (it may have exited early, e.g. `No changes to review`, or errored). Do not default a missing artifact to "0 → proceed":
 
@@ -55,7 +59,10 @@ rm -f "$REVIEW_STAMP"
 
 ## Step 2 — Commit + open/refresh PR, then watch + auto-resolve
 
-`Skill: inc:commit-push-pr-4`. It runs its own intent interview, commits (the review's auto-fixes + the user's code), opens/refreshes the PR, and then — in its Step 14 loop — watches CI + AI reviewers and **auto-resolves feedback** in unattended mode (fix → push → resolve, only `needs-human` items pause it). This chain just waits for it to return.
+Run [inc:commit-push-pr-4](../inc-commit-push-pr/SKILL.md) using native invocation or by reading and following that file inline.
+It runs its intent interview, commits the review's auto-fixes plus the user's code, opens/refreshes the PR, and watches CI plus AI reviewers in its Step 14 loop.
+Its [feedback resolver](../inc-resolve-pr-feedback/SKILL.md) receives `--auto` explicitly, including on file-based hosts.
+Wait for the complete watch/resolve loop, not merely a PR URL, before continuing.
 
 It (and therefore this chain) stops short when:
 - the intent interview aborted or there was nothing to push (no PR opened),

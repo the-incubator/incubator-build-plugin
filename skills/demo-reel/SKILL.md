@@ -9,7 +9,8 @@ argument-hint: "[what to capture, e.g. 'the new settings page' or 'CLI output of
 
 Detect project type, recommend a capture tier, record visual evidence, and deliver it for PR inclusion — either as a **local artifact the caller attaches into the PR body** (`gh --attach`, GitHub CLI 2.99.0+) or, as a fallback, as a **permanent public URL** on a third-party host.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
 
 **Evidence means USING THE PRODUCT, not running tests.** "I ran npm test" is test evidence. Evidence capture is running the actual CLI command, opening the web app, making the API call, or triggering the feature. The distinction is absolute -- test output is never labeled "Demo" or "Screenshots."
 

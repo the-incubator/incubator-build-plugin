@@ -2,12 +2,6 @@
   "name": "incubator-build",
   "version": "0.21.0",
   "description": "Curated skills for planning, code review, debugging, and shipping pull requests with coding agents.",
-  "author": {
-    "name": "The Incubator",
-    "email": "austin@theincubator.xyz"
-  },
-  "homepage": "https://github.com/the-incubator/incubator-build-plugin",
-  "repository": "https://github.com/the-incubator/incubator-build-plugin",
   "keywords": [
     "code-review",
     "pull-request",
@@ -15,23 +9,14 @@
     "planning",
     "developer-tools"
   ],
+  "author": "The Incubator",
+  "homepage": "https://github.com/the-incubator/incubator-build-plugin",
   "skills": "./skills/",
   "interface": {
     "displayName": "Incubator Build",
     "shortDescription": "Curated skills for planning, code review, debugging, and shipping PRs.",
     "longDescription": "Curated skills for planning, code review, debugging, and shipping pull requests with coding agents.",
     "developerName": "The Incubator",
-    "websiteURL": "https://github.com/the-incubator/incubator-build-plugin",
-    "category": "Development",
-    "capabilities": [
-      "Interactive",
-      "Read",
-      "Write"
-    ],
-    "defaultPrompt": [
-      "Use Incubator Build to plan this change",
-      "Review this PR with Incubator Build",
-      "Ship this PR with Incubator Build"
-    ]
+    "websiteURL": "https://github.com/the-incubator/incubator-build-plugin"
   }
 }

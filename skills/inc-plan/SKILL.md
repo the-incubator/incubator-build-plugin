@@ -7,7 +7,9 @@ disable-model-invocation: false
 
 Create a plan so the user can approve an approach before you write code.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory. In Claude Code, use `${CLAUDE_PLUGIN_ROOT}`. In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
+Read bundled persona files from the plugin-root `agents/` directory and pass their contents to native general-purpose subagents where named agents are unavailable.
 
 ## Pre-flight: Report branch freshness (notify only)
 

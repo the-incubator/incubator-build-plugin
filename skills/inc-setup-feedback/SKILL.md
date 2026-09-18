@@ -14,9 +14,9 @@ This skill runs **from the target app's root** (the app being previewed), not fr
 For a new install, it mints a per-project token, runs the self-contained installer, mounts one component at the app root, and verifies the build.
 For an existing install, it safely refreshes the canonical client files without minting a replacement token or overwriting dirty customizations.
 
-**Plugin scripts:** Commands that use `<plugin root>` need the installed `incubator-build` plugin directory.
-In Claude Code, use `${CLAUDE_PLUGIN_ROOT}` (set automatically).
-In Codex, resolve it from the loaded skill path: the plugin root is two directories above this `SKILL.md`.
+Read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+Resolve `<plugin root>` from the real path of this installed skill, not the target app directory.
+Claude Code may provide the same path as `${CLAUDE_PLUGIN_ROOT}`.
 
 **What it composes** (you don't need to know the internals, but for grounding):
 [Agentation](https://github.com/benjitaylor/agentation) for click-to-annotate + [Riffrec](https://github.com/kieranklaassen/riffrec) for screen/voice recording on desktop + [rrweb](https://github.com/rrweb-io/rrweb) (with fflate) for the mobile DOM-recording path, all mounted under one `<PreviewFeedbackMount />` wrapper that auto-picks **local** mode in dev (no token, no collector — just you + Claude) and **remote** mode when the preview enable flag is set (branded submit panel → collector).

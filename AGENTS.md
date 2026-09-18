@@ -1,6 +1,10 @@
 
 Deploy config: see deploy.md (managed by /inc:setup-deploy).
 
+Distribution and host limits: see README.md and notes/multi-host-distribution.md.
+Keep `skills/` root-native; edit shared metadata in `plugin.json`, then run `npm run manifests:sync` and refresh the package lock.
+Run `npm test` for skill, distribution, and hook checks; `npm run smoke:pi` optionally verifies native discovery without model calls.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
