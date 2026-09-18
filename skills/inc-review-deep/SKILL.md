@@ -90,18 +90,18 @@ The reviewer sub-agents can run on a different AI engine than the platform hosti
 
 1. `engine:<name>` argument token
 2. `INC_REVIEW_ENGINE` environment variable
-3. Default: the host platform's own engine, whatever the host is -- i.e., native dispatch (running in Claude Code -> `claude`; running in Codex -> `codex`; any other host -> its own native sub-agent mechanism). The default never goes through engine-name validation, so a review with no override always runs.
+3. <!-- LOCAL CUSTOMIZATION (jesse): default engine is `codex` so reviewers run on gpt-5.6-sol @ medium (pinned in references/cross-engine-dispatch.md). Pass `engine:claude` to run the reviewers natively on the host instead. Revert this item to the upstream default below if you remove the customization. --> Default: `codex`. Reviewer sub-agents dispatch to the Codex CLI (see cross-engine-dispatch), while the orchestrator stays native on the host. The default never goes through engine-name validation, so a review with no override always runs. _(Upstream default was: the host platform's own engine -- native dispatch on whatever host is running.)_
 
 **Dispatch rule:**
 
-- **Host == engine (the default):** native dispatch, exactly as Stage 4 describes. In Claude Code that is the Agent tool; in Codex, its native sub-agent mechanism. Nothing changes.
-- **Host != engine:** dispatch each selected reviewer (persona and CE) as a subprocess of the engine's CLI. Read `references/cross-engine-dispatch.md` for the runner recipes -- do not read it when host and engine match. The prompt content each reviewer receives is identical to native dispatch; only the transport and the artifact-write responsibility change (cross-engine reviewers run read-only and return full JSON; the orchestrator writes their artifact files).
+- **Host == engine:** native dispatch, exactly as Stage 4 describes. In Claude Code that is the Agent tool; in Codex, its native sub-agent mechanism. Nothing changes. (With the local `codex` default above, this branch is taken only when the host is already Codex, or when `engine:claude` is passed on a Claude host.)
+- **Host != engine (the local default when hosting in Claude Code):** dispatch each selected reviewer (persona and CE) as a subprocess of the engine's CLI. Read `references/cross-engine-dispatch.md` for the runner recipes -- do not read it when host and engine match. The prompt content each reviewer receives is identical to native dispatch; only the transport and the artifact-write responsibility change (cross-engine reviewers run read-only and return full JSON; the orchestrator writes their artifact files).
 
 **What never moves engines:** the orchestrator itself (scope, intent, selection, merge, synthesis) always runs on the host platform, and so does the After Review fixer sub-agent -- it mutates the working tree, which cross-engine sandboxes forbid.
 
-**Invalid engine name:** applies only to explicit overrides (an `engine:` token or `INC_REVIEW_ENGINE` value). If the override is not a recognized name, stop before dispatching agents. In `mode:headless`, emit `Review failed (headless mode). Reason: unknown review engine <name>. Valid engines: claude, codex.` Otherwise emit the generic form without the headless prefix. The no-override default is exempt -- it always resolves to native dispatch on the host, even on hosts that are neither Claude Code nor Codex.
+**Invalid engine name:** applies only to explicit overrides (an `engine:` token or `INC_REVIEW_ENGINE` value). If the override is not a recognized name, stop before dispatching agents. In `mode:headless`, emit `Review failed (headless mode). Reason: unknown review engine <name>. Valid engines: claude, codex.` Otherwise emit the generic form without the headless prefix. The no-override default is exempt -- it resolves to the local `codex` default (a fixed, recognized engine name), so a review with no override always runs.
 
-**Missing engine CLI:** if the resolved engine's CLI is not installed, fall back to native dispatch and note the fallback in Coverage. A working review on the host engine beats a broken dispatch.
+**Missing / unusable engine:** before cross-engine dispatch, run the engine preflight in `references/cross-engine-dispatch.md`. For `codex`, that is `bash references/check-codex-ready.sh` (binary + login + live usage/rate-limit headroom). If the CLI is missing, the user is not logged in, the subscription/session is dead, or usage is exhausted (`rate_limit.allowed=false`, limit reached, spend control hit), fall back to native dispatch on the host and note the reason in Coverage. Do not spawn reviewer subprocesses that will all fail. A working review on the host engine beats a broken dispatch.
 
 ## Severity Scale
 
@@ -412,7 +412,7 @@ Persona sub-agents do focused, scoped work and should use a fast mid-tier model 
 
 Use the platform's mid-tier model for all persona and CE sub-agents. In Claude Code, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
 
-In cross-engine dispatch, omit the model override entirely and let the engine's configured default apply, unless the user explicitly named a model. The same rule -- working review beats broken dispatch -- applies doubly when the model catalog belongs to another vendor's CLI.
+In cross-engine dispatch, the model is set by the runner recipe in `references/cross-engine-dispatch.md`. <!-- LOCAL CUSTOMIZATION (jesse): that recipe pins the codex reviewers to gpt-5.6-sol @ medium. --> Unless the user explicitly names a different model at invocation (in which case pass that), use the recipe as written. The same rule -- working review beats broken dispatch -- applies doubly when the model catalog belongs to another vendor's CLI.
 
 CE always-on agents (inc-agent-native-reviewer, inc-learnings-researcher) and CE conditional agents (inc-schema-drift-detector, inc-deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
 

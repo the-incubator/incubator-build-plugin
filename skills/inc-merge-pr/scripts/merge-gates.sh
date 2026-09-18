@@ -265,7 +265,13 @@ else
     "$THREADCACHE_BIN" get "$OWNER" "$REPO" "$PR_NUMBER" >"$THREAD_MAP_FILE" 2>/dev/null && THREAD_MAP_OK=1 || THREAD_MAP_OK=0
     THREAD_MAP=$(cat "$THREAD_MAP_FILE" 2>/dev/null || echo "[]"); rm -f "$THREAD_MAP_FILE"
     [ -z "$THREAD_MAP" ] && THREAD_MAP="[]"
-    REVIEW_COMMENTS=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments" --paginate 2>/dev/null || echo "[]")
+    # Shrink to only the fields the jq programs below read, and truncate bodies:
+    # review-heavy PRs (large bot comments) can push the raw payload past 1 MB,
+    # and passing that via --argjson exceeds the OS per-argument size limit,
+    # making jq's exec fail -> THREADS: count=error (a false fail-safe block).
+    REVIEW_COMMENTS=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments" --paginate 2>/dev/null \
+      | jq -c 'map({node_id, id, in_reply_to_id, path, created_at, user: {login: (.user.login // null)}, body: ((.body // "") | .[0:200])})' 2>/dev/null \
+      || echo "[]")
     [ -z "$REVIEW_COMMENTS" ] && REVIEW_COMMENTS="[]"
 
     AI_REGEX='^(greptile-apps|greptileai|coderabbitai|copilot-pull-request-reviewer|github-copilot|claude|anthropic|cursor|.+-ai|.+-review[^/]*)\[bot\]$'

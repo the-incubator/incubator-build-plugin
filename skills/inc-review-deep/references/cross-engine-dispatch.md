@@ -13,14 +13,37 @@ When host and engine match, ignore this file entirely and use the native sub-age
 
 ## Preflight
 
-Before dispatching, verify the engine CLI is available:
+Before dispatching, verify the engine is actually usable - not just that a binary exists.
+
+### Codex engine
+
+Run the ready check (binary + login + live usage/rate-limit headroom):
 
 ```bash
-command -v codex   # or: command -v claude
+bash references/check-codex-ready.sh
+# exit 0 = ready; exit 1 + stderr reason = not ready
 ```
 
-If the CLI is missing, fall back to native dispatch on the host platform and record the fallback in the Coverage section of the report.
-A working review on the host engine is better than a broken dispatch.
+What it covers:
+
+- `codex` not on PATH
+- not logged in / expired session (`codex login status`)
+- missing `~/.codex/auth.json` credentials
+- ChatGPT-auth accounts: live `codex/usage` probe - fails when `rate_limit.allowed` is false, `limit_reached`, spend-control hit, subscription expired, or primary `used_percent >= INC_CODEX_USAGE_MAX_PCT` (default 100)
+- API-key-only installs: login + credentials only (no ChatGPT usage endpoint)
+
+If the check fails for any reason, fall back to native dispatch on the host platform and record the reason in Coverage (example: `Cross-engine codex unavailable (rate limit reached (primary used_percent=100)); fell back to native host reviewers`).
+Do not spawn reviewer subprocesses that will all die.
+
+A working review on the host engine beats a broken cross-engine dispatch.
+
+### Claude engine
+
+```bash
+command -v claude
+```
+
+If the CLI is missing, fall back to native dispatch and note it in Coverage.
 If the CLI exists but every subprocess fails (for example, not logged in), the existing failed-reviewer and degraded-review paths apply.
 
 ## Prompt assembly
@@ -51,7 +74,8 @@ WORK_DIR=$(mktemp -d)
 One subprocess per selected reviewer:
 
 ```bash
-codex --ask-for-approval never exec \
+codex --model gpt-5.6-sol -c model_reasoning_effort="medium" \
+  --ask-for-approval never exec \
   --ephemeral \
   -C "$(git rev-parse --show-toplevel)" \
   -s read-only \
@@ -65,7 +89,7 @@ Notes:
 - `-s read-only` plus `--ask-for-approval never` runs fully unattended with no mutation risk.
 - `--output-schema` enforces the findings schema at the engine level, so malformed returns are rare.
 - `--output-last-message` writes the reviewer's final JSON to a file the orchestrator reads back.
-- Omit `--model`. Let the user's configured Codex default apply. Only pass `--model` when the user explicitly named one.
+- **LOCAL CUSTOMIZATION (jesse):** reviewers are pinned to `--model gpt-5.6-sol -c model_reasoning_effort="medium"` — a scoped review model that leaves the global `~/.codex/config.toml` default (used by every other Codex session) untouched. If the user explicitly names a different model at invocation, pass that instead. To revert to upstream behavior, drop both flags and omit `--model` so the user's configured Codex default applies. Pass the same two flags to the CE-agent invocations below so the whole review runs on one model.
 
 ## Runner: claude engine (host is Codex or another non-Claude platform)
 
@@ -83,7 +107,7 @@ Notes:
 
 - `--print` with `--output-format json` emits a JSON envelope on stdout. Extract the reviewer's findings object from the envelope's result field before validating.
 - The `--allowedTools` list grants read-only inspection consistent with the native reviewers' non-mutating contract.
-- Omit `--model` by default, same rule as the codex runner. `--model sonnet` is a reasonable mid-tier override when the user asks for cost control.
+- Omit `--model` by default (this is the reverse-direction runner — Claude reviewers dispatched from a Codex host — so the local `gpt-5.6-sol` pin on the codex runner does not apply here). `--model sonnet` is a reasonable mid-tier override when the user asks for cost control.
 
 ## CE agents (unstructured output)
 
