@@ -1,6 +1,6 @@
 ---
-name: inc:update-code
-description: Use when the user wants to pull the latest code from main into their current working branch. Triggers on "update code", "update from main", "sync with main", "pull main", "merge main in", "catch up to main", "rebase on main", or "/inc:update-code". Handles fetch, merge, and conflict-handoff to the merge expert.
+name: inc-update-code
+description: Use when the user wants to pull the latest code from main into their current working branch. Triggers on "update code", "update from main", "sync with main", "pull main", "merge main in", "catch up to main", "rebase on main", or "/inc-update-code". Handles fetch, merge, and conflict-handoff to the merge expert.
 allowed-tools: Bash(git *), Bash(gh *), Read, Grep, Glob, Skill, AskUserQuestion
 argument-hint: "[optional: 'rebase' to rebase instead of merge]"
 ---

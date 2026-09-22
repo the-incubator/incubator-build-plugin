@@ -24,16 +24,16 @@ Loading prose never authorizes bypassing a hook or claiming a gate passed.
 
 | Workflow name | File relative to plugin root |
 | --- | --- |
-| `inc:review-and-pr` | [skills/inc-review-and-pr/SKILL.md](../../inc-review-and-pr/SKILL.md) |
-| `inc:review-3a` | [skills/inc-review/SKILL.md](../../inc-review/SKILL.md) |
-| `inc:review-deep-3b` | [skills/inc-review-deep/SKILL.md](../../inc-review-deep/SKILL.md) |
-| `inc:commit-push-pr-4` | [skills/inc-commit-push-pr/SKILL.md](../../inc-commit-push-pr/SKILL.md) |
-| `inc:resolve-pr-feedback` | [skills/inc-resolve-pr-feedback/SKILL.md](../../inc-resolve-pr-feedback/SKILL.md) |
-| `inc:merge-pr-5` | [skills/inc-merge-pr/SKILL.md](../../inc-merge-pr/SKILL.md) |
-| `inc:ship-it` | [skills/inc-ship-it/SKILL.md](../../inc-ship-it/SKILL.md) |
-| `inc:update-code` | [skills/inc-update-code/SKILL.md](../../inc-update-code/SKILL.md) |
+| `inc-review-and-pr` | [skills/inc-review-and-pr/SKILL.md](../../inc-review-and-pr/SKILL.md) |
+| `inc-review` | [skills/inc-review/SKILL.md](../../inc-review/SKILL.md) |
+| `inc-review-deep` | [skills/inc-review-deep/SKILL.md](../../inc-review-deep/SKILL.md) |
+| `inc-commit-push-pr` | [skills/inc-commit-push-pr/SKILL.md](../../inc-commit-push-pr/SKILL.md) |
+| `inc-resolve-pr-feedback` | [skills/inc-resolve-pr-feedback/SKILL.md](../../inc-resolve-pr-feedback/SKILL.md) |
+| `inc-merge-pr` | [skills/inc-merge-pr/SKILL.md](../../inc-merge-pr/SKILL.md) |
+| `inc-ship-it` | [skills/inc-ship-it/SKILL.md](../../inc-ship-it/SKILL.md) |
+| `inc-update-code` | [skills/inc-update-code/SKILL.md](../../inc-update-code/SKILL.md) |
 | `git-merge-expert` | [skills/git-merge-expert/SKILL.md](../../git-merge-expert/SKILL.md) |
-| `inc:setup-deploy` | [skills/inc-setup-deploy/SKILL.md](../../inc-setup-deploy/SKILL.md) |
+| `inc-setup-deploy` | [skills/inc-setup-deploy/SKILL.md](../../inc-setup-deploy/SKILL.md) |
 | `pr-description` | [skills/pr-description/SKILL.md](../../pr-description/SKILL.md) |
 
 For other names, read the frontmatter of `skills/*/SKILL.md` in this installation.

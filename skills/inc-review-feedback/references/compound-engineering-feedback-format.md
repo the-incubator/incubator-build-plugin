@@ -105,7 +105,7 @@ topic: <topic>
 
 ## Next Steps
 
--> /inc:plan to confirm, correct, and regroup the captured requirements before implementation planning.
+-> /inc-plan to confirm, correct, and regroup the captured requirements before implementation planning.
 ```
 
 ## Evidence Rules

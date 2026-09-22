@@ -1,5 +1,5 @@
 ---
-name: inc:commit-push-pr-4
+name: inc-commit-push-pr
 description: Commit, push, and open a PR with an adaptive, value-first description, then watch CI + AI reviewers and auto-resolve feedback in a loop until the PR is feedback-clean (pausing only for items needing a human call; skip with "just PR"/"don't watch"). Use when the user says "commit and PR", "push and open a PR", "ship this", "create a PR", "open a pull request", "commit push PR", or wants to go from working changes to an open pull request in one step. Also use when the user says "update the PR description", "refresh the PR description", "freshen the PR", or wants to rewrite an existing PR description. Produces PR descriptions that scale in depth with the complexity of the change, avoiding cookie-cutter templates.
 ---
 
@@ -184,7 +184,7 @@ OUT=$(bash "$PLUGIN_ROOT/scripts/branch-freshness")
 BEHIND=$(printf '%s\n' "$OUT" | sed -n 's/^BEHIND=//p')
 ```
 
-If `BEHIND` ≥ **10**, ask the user whether to update the branch before pushing. If yes, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — the working tree is clean at this point so it can proceed without stashing. After it returns cleanly, continue. If it hands off to `git-merge-expert` for conflicts, let that finish first.
+If `BEHIND` ≥ **10**, ask the user whether to update the branch before pushing. If yes, run [inc-update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — the working tree is clean at this point so it can proceed without stashing. After it returns cleanly, continue. If it hands off to `git-merge-expert` for conflicts, let that finish first.
 
 If the user declines or `BEHIND` < 10, continue.
 
@@ -479,17 +479,17 @@ Skip the rewrite **only** in these cases:
 
 Print the PR URL.
 
-**Next.** Step 14 now owns the post-open loop: it watches CI + AI reviewers and, once they're done, **auto-resolves feedback** without stopping for you (only `needs-human` items pause it). When the loop ends with a feedback-clean PR, run `/inc:merge-pr-5` to ship — or use `/inc:ship-it` to chain merge on automatically from the start.
+**Next.** Step 14 now owns the post-open loop: it watches CI + AI reviewers and, once they're done, **auto-resolves feedback** without stopping for you (only `needs-human` items pause it). When the loop ends with a feedback-clean PR, run `/inc-merge-pr` to ship — or use `/inc-ship-it` to chain merge on automatically from the start.
 
 ### Step 14: Watch CI + AI reviews, then auto-resolve feedback
 
 Run this step whenever **new commits were pushed** in Step 6 — that includes both newly-created PRs and existing PRs that just received commits. New commits re-trigger CI and may prompt AI reviewers to re-review.
 
-This step does two things as one loop: (1) **watch** CI + AI reviewers via the background watcher, then (2) once they finish, **auto-resolve** the feedback by invoking `inc:resolve-pr-feedback` in unattended mode — fix → commit → push → reply → resolve, no confirmation pause. The only thing that stops the loop is a `needs-human` item (a finding the resolver can't confidently action) or a CI failure. This is on by default.
+This step does two things as one loop: (1) **watch** CI + AI reviewers via the background watcher, then (2) once they finish, **auto-resolve** the feedback by invoking `inc-resolve-pr-feedback` in unattended mode — fix → commit → push → reply → resolve, no confirmation pause. The only thing that stops the loop is a `needs-human` item (a finding the resolver can't confidently action) or a CI failure. This is on by default.
 
 Skip this step **only** when:
 - No new commits were pushed (e.g., the Description Update workflow took only a body edit and no `git push` ran).
-- The user opted out in conversation — e.g. "don't watch this one", "just open the PR", "just PR", "don't auto-resolve". In that case print the PR and stop; the user drives `/inc:resolve-pr-feedback` and `/inc:merge-pr-5` themselves.
+- The user opted out in conversation — e.g. "don't watch this one", "just open the PR", "just PR", "don't auto-resolve". In that case print the PR and stop; the user drives `/inc-resolve-pr-feedback` and `/inc-merge-pr` themselves.
 
 **Announce and start. Do not ask.** After Step 13, emit one sentence like *"Watching CI and AI reviews on PR #N in the background — I'll notify you on failures or when a reviewer weighs in."* Then launch the watcher via the `Monitor` tool with `run_in_background: true`, `timeout_ms: 3600000`, `persistent: false`.
 
@@ -526,16 +526,16 @@ bash "$PLUGIN_ROOT/skills/inc-commit-push-pr/scripts/watch-pr-activity" "$PR" 36
 **Drive the loop — auto-resolve once reviews are in.** The watcher streams events; act on them as follows:
 
 - **Proceed to resolve when** `CI_GREEN` (or `CI_NONE`) has fired **and** every announced `AI_REVIEW: <bot>` has its matching `AI_REVIEW_DONE: <bot>`. Submission is atomic, so all inline comments are attached — do **not** wait for `WATCH_QUIET` (that only signals the watcher can stop). Fallbacks: if `CI_GREEN` fired but no `AI_REVIEW` ever did, proceed at `WATCH_QUIET` or 3 min after `CI_GREEN`, whichever is first; if an `AI_REVIEW` never gets its `AI_REVIEW_DONE`, fall back to `WATCH_QUIET` or 5 min of no new events.
-- **Auto-resolve, unattended.** Run [inc:resolve-pr-feedback](../inc-resolve-pr-feedback/SKILL.md) with the explicit `--auto` argument, through native invocation or by reading and following that file inline. In this mode it fixes → commits → pushes → replies → resolves every item its resolver agents can confidently handle, with **no confirmation pause**. It leaves only `needs-human` items open and returns them.
+- **Auto-resolve, unattended.** Run [inc-resolve-pr-feedback](../inc-resolve-pr-feedback/SKILL.md) with the explicit `--auto` argument, through native invocation or by reading and following that file inline. In this mode it fixes → commits → pushes → replies → resolves every item its resolver agents can confidently handle, with **no confirmation pause**. It leaves only `needs-human` items open and returns them.
 - **Loop.** If the resolve pass pushed new commits, those re-trigger CI and may prompt re-review — re-arm the watcher (same Monitor call) and repeat: wait for green + reviewers, run `--auto` resolve again on any new feedback. Continue until a resolve pass makes no changes and no new feedback remains.
 - **Stop the loop and surface (do not auto-invoke anything further) when:**
   - a resolve pass returns `needs-human` items — present them (the resolver already posted holding replies and left the threads open) and stop; the user decides, then re-runs resolve or merge,
   - `CI_FAIL` fires — surface the failing checks verbatim and stop; CI failures are out of scope here,
   - `PREVIEW_FAIL` fires (not `PREVIEW_SKIPPED`) — surface and ask (blocking question) whether to continue, since preview failures are sometimes ignorable,
   - `WATCH_TIMEOUT` fires before `CI_GREEN` — surface and ask whether to re-arm or stop.
-- **When the loop ends clean** (CI green, threads resolved except any `needs-human`), print the PR as ready and point to `/inc:merge-pr-5`. Send a `PushNotification` at each stop/finish so the user knows the background loop wants attention.
+- **When the loop ends clean** (CI green, threads resolved except any `needs-human`), print the PR as ready and point to `/inc-merge-pr`. Send a `PushNotification` at each stop/finish so the user knows the background loop wants attention.
 
-Human reviewer events are intentionally not watched here; those arrive async and aren't a post-open concern. To carry on through merge + deploy automatically, `/inc:ship-it` chains merge on after this loop.
+Human reviewer events are intentionally not watched here; those arrive async and aren't a post-open concern. To carry on through merge + deploy automatically, `/inc-ship-it` chains merge on after this loop.
 
 **Render `PREVIEW_*` names verbatim.** When a `PREVIEW_*` event carries a `: <projects>` suffix, include the project names exactly as emitted in the rendered "Noted:" message (e.g. *"Noted: PREVIEW_SKIPPED for **api, worker** — monorepo path filter skipped these projects. Informational, watcher still running."*) so the user can tell which app the signal is about. A bare event (no suffix) means the bot's comment wasn't in a parseable format — render generically as before.
 
@@ -543,7 +543,7 @@ Human reviewer events are intentionally not watched here; those arrive async and
 
 **Strategic polling.** The watcher waits **6 minutes** before the first poll (CI and AI reviewers rarely have useful signal that early — polls in the first few minutes just waste quota on "still pending" responses), then polls every **3 minutes for 6 minutes** (active window), then every **5 minutes for 10 minutes** (steady tail), then **exponential backoff** (10 → 20 → 40 min) until the deadline. Once `CI_GREEN` or `CI_NONE` has fired and **two consecutive ticks at the current tier** pass with zero new events, it exits clean with `WATCH_QUIET` — no longer gated on the 600s slow tier, which used to impose a ~22-minute floor even when CI greened at minute 5. Worst case over an hour: ~12 polls, down from ~240 in the old fixed-60s scheme.
 
-**Dual-mode API budget.** The watcher picks REST or GraphQL at startup based on which has more headroom via the free `gh api rate_limit` call, and emits `MODE_FLIP: <mode>` mid-watch if the active mode's quota gets exhausted. The other budget stays untouched, so a watch never bricks other skills (`inc:resolve-pr-feedback`'s review-thread fetch, `inc:merge-pr-5` Gate 2c) regardless of which budget gets hit.
+**Dual-mode API budget.** The watcher picks REST or GraphQL at startup based on which has more headroom via the free `gh api rate_limit` call, and emits `MODE_FLIP: <mode>` mid-watch if the active mode's quota gets exhausted. The other budget stays untouched, so a watch never bricks other skills (`inc-resolve-pr-feedback`'s review-thread fetch, `inc-merge-pr` Gate 2c) regardless of which budget gets hit.
 
 This watch only survives the current Claude session. If the user closes the terminal, the background bash dies; that is acceptable for a same-session "ship then wait" flow. Cross-session watching is out of scope here.
 

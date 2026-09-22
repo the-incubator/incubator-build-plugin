@@ -155,7 +155,7 @@ test("captured Claude activation still allows and current Codex unrelated activa
 test("frontmatter identity resolves current and intentional legacy names in both hosts", () => {
   const identity = prWorkflowSkill();
   const names = [identity.name, `incubator-build:${identity.name}`, "inc-commit-push-pr", "incubator-build:inc-commit-push-pr"];
-  assert.equal(identity.name, "inc:commit-push-pr-4");
+  assert.equal(identity.name, "inc-commit-push-pr");
   for (const name of names) {
     assert.equal(identity.matches(name), true);
     const records = structuredClone(capturedCodex);
@@ -165,7 +165,7 @@ test("frontmatter identity resolves current and intentional legacy names in both
     withTranscript([{ message: { content: [{ type: "tool_use", name: "Skill", input: { skill: name } }] } }],
       (result) => assert.equal(result, null), prPayload());
   }
-  for (const name of ["inc:review-3a", "inc-commit-push-pr-extra", "prefixinc-commit-push-pr", undefined]) {
+  for (const name of ["inc-review", "inc-commit-push-pr-extra", "prefixinc-commit-push-pr", undefined]) {
     assert.equal(identity.matches(name), false);
   }
 });
@@ -174,12 +174,12 @@ test("identity load fails CLOSED on an exotic or unreadable name, and binds a ca
   // The gate reads only the canonical simple scalar form. Any other YAML-legal
   // spelling must NOT parse here — validate-skills.mjs rejects it at CI, and if one
   // ever reached the runtime the gate must fail closed rather than fail open.
-  assert.equal(parseSkillName("name: inc:commit-push-pr-4"), "inc:commit-push-pr-4");
+  assert.equal(parseSkillName("name: inc-commit-push-pr"), "inc-commit-push-pr");
   for (const exotic of [
-    'name: "inc:commit-push-pr-4"',
-    "name: 'inc:commit-push-pr-4'",
-    "name: inc:commit-push-pr-4 # workflow",
-    "name: >\n  inc:commit-push-pr-4",
+    'name: "inc-commit-push-pr"',
+    "name: 'inc-commit-push-pr'",
+    "name: inc-commit-push-pr # workflow",
+    "name: >\n  inc-commit-push-pr",
     "description: no name here",
   ]) {
     assert.equal(parseSkillName(exotic), undefined, `exotic form must not parse: ${JSON.stringify(exotic)}`);
@@ -192,12 +192,12 @@ test("identity load fails CLOSED on an exotic or unreadable name, and binds a ca
   // An unreadable identity file (loader throws) also fails closed.
   assert.equal(loadPrWorkflowSkill(() => { throw new Error("ENOENT"); }), null);
   // A canonical name resolves, binds current + legacy spellings, and loads for real.
-  const canonical = prWorkflowSkill("---\nname: inc:commit-push-pr-4\ndescription: x\n---\n");
-  assert.equal(canonical.name, "inc:commit-push-pr-4");
-  assert.equal(canonical.matches("incubator-build:inc:commit-push-pr-4"), true);
+  const canonical = prWorkflowSkill("---\nname: inc-commit-push-pr\ndescription: x\n---\n");
+  assert.equal(canonical.name, "inc-commit-push-pr");
+  assert.equal(canonical.matches("incubator-build:inc-commit-push-pr"), true);
   assert.equal(canonical.matches("inc-commit-push-pr"), true);
   assert.ok(loadPrWorkflowSkill());
-  assert.equal(loadPrWorkflowSkill().name, "inc:commit-push-pr-4");
+  assert.equal(loadPrWorkflowSkill().name, "inc-commit-push-pr");
   // With a valid identity and an available transcript, a session that never activated
   // the skill is still denied — enforcement is not weakened by the fail-closed change.
   withTranscript(capturedCodex.slice(0, -1), (result) => {
@@ -208,7 +208,7 @@ test("identity load fails CLOSED on an exotic or unreadable name, and binds a ca
 test("available Codex transcript without activation denies with a Codex instruction", () => {
   withTranscript(capturedCodex.slice(0, -1), (result) => {
     assert.equal(result?.hookSpecificOutput?.permissionDecision, "deny");
-    assert.match(result.hookSpecificOutput.permissionDecisionReason, /\$inc:commit-push-pr-4/);
+    assert.match(result.hookSpecificOutput.permissionDecisionReason, /\$inc-commit-push-pr/);
     assert.doesNotMatch(result.hookSpecificOutput.permissionDecisionReason, /Skill tool/);
   });
   withTranscript([], (result) => assert.doesNotMatch(result.hookSpecificOutput.permissionDecisionReason, /Skill tool/));
@@ -236,11 +236,11 @@ test("Codex evidence from another session or inherited turn cannot authorize", (
 
 test("mentions, exact XML pastes, file reads, unrelated skills and wrong metadata never activate", () => {
   for (const mutate of [
-    (record) => { record.payload.content[0].text = "Please use inc:commit-push-pr-4"; },
+    (record) => { record.payload.content[0].text = "Please use inc-commit-push-pr"; },
     (record) => { record.payload.internal_chat_message_metadata_passthrough.content_item_kinds = ["user.text"]; },
     (record) => { delete record.payload.internal_chat_message_metadata_passthrough; },
     (record) => { record.payload.role = "assistant"; },
-    (record) => { record.payload.content[0].text = record.payload.content[0].text.replace(/<name>.*<\/name>/, "<name>inc:review-3a</name>"); },
+    (record) => { record.payload.content[0].text = record.payload.content[0].text.replace(/<name>.*<\/name>/, "<name>inc-review</name>"); },
     (record) => { record.payload.content.unshift({ type: "input_text", text: "unrelated" }); },
     (record) => { record.payload.content[0].text = "example:\n" + record.payload.content[0].text; },
     (record) => { record.payload = { type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd: "cat skills/inc-commit-push-pr/SKILL.md" }) }; },
@@ -276,7 +276,7 @@ test("Claude text, pasted tool examples and explicitly foreign records deny", ()
     { sessionId: "foreign", message: { content: [{ type: "tool_use", name: "Skill", input: { skill: "inc-commit-push-pr" } }] } },
     { message: { content: [{ type: "tool_use", name: "Read", input: { skill: "inc-commit-push-pr" } }] } },
   ]) expectDenied([record], { ...prPayload(), session_id: "claude-session" });
-  withTranscript([], (result) => assert.match(result.hookSpecificOutput.permissionDecisionReason, /Skill tool, skill: "inc:commit-push-pr-4"/), prPayload());
+  withTranscript([], (result) => assert.match(result.hookSpecificOutput.permissionDecisionReason, /Skill tool, skill: "inc-commit-push-pr"/), prPayload());
 });
 
 test("existing unreadable transcripts deny; malformed stdin and unexpected errors still fail open", () => {

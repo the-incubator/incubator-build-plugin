@@ -26,7 +26,7 @@ Keep it focused and short. Include only what the recording supports:
 - **Steps to reproduce** — bullet list reconstructed from clicks and transcript.
 - **Expected vs. actual** — what the user said should happen vs. what happened.
 - **Evidence** — transcript quote(s) with timestamps, plus 0–2 screenshot references.
-- **Suggested next step** — single sentence: file an issue, open `inc:debug`, or escalate to extensive analysis if more issues surfaced.
+- **Suggested next step** — single sentence: file an issue, open `inc-debug`, or escalate to extensive analysis if more issues surfaced.
 
 ## Source mapping (optional, only if obvious)
 
@@ -35,7 +35,7 @@ If the workspace is the product source code AND the broken surface is named clea
 ## What to skip
 
 - No `problem-analysis.md`, no `requirements-kickoff.md`, no Visual / Functional / Requirement / UX category split.
-- No automatic handoff to `inc:plan`. The quick path ends with the bug report.
+- No automatic handoff to `inc-plan`. The quick path ends with the bug report.
 - No commit of `raw/` or `frames/` — they live only in the temp dir and are discarded by the OS.
 - No source-mapping pass across the codebase.
 

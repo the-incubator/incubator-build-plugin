@@ -2,7 +2,7 @@
 # branch-freshness — compute freshness signals (behind count, ahead count,
 # path overlap) between a head-side ref and the remote default branch.
 #
-# Shared by inc:merge-pr, inc:commit-push-pr, inc:resolve-pr-feedback, inc:plan.
+# Shared by inc-merge-pr, inc-commit-push-pr, inc-resolve-pr-feedback, inc-plan.
 # Each caller applies its own policy (block / ask / notify) on the same signal.
 #
 # Usage:
@@ -11,7 +11,7 @@
 #   --pr-branch <name>  Compare origin/<name> against origin/<base>. Fetches
 #                       the PR branch first so a stale local tip can't produce
 #                       a false "no overlap". Use this in PR-review contexts
-#                       (inc:merge-pr).
+#                       (inc-merge-pr).
 #   --base <branch>     Override the remote default branch resolution. Rare.
 #
 # Output (stable KV, one per line on stdout):

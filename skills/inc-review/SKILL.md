@@ -1,18 +1,18 @@
 ---
-name: inc:review-3a
-description: Review the uncommitted/branch changes in the working tree — auto-apply safe fixes, surface findings that need your call, write a run artifact. Lightweight tier; escalate to inc:review-deep-3b for large or sensitive changes.
+name: inc-review
+description: Review the uncommitted/branch changes in the working tree — auto-apply safe fixes, surface findings that need your call, write a run artifact. Lightweight tier; escalate to inc-review-deep for large or sensitive changes.
 allowed-tools: Bash(git diff:*), Bash(git status:*), Bash(git rev-parse:*), Bash(git log:*), Bash(git blame:*), Bash(git remote:*), Bash(mkdir:*), Edit, Write, Read, Grep, Glob, Agent, Bash
 disable-model-invocation: false
 ---
 
-Review the change set on the current branch: auto-apply safe fixes, surface findings that need the user's call, and write a run artifact. This is the lightweight review tier — a fast single-agent pass without the deep persona fan-out, merge, or dedup machinery. For large or sensitive changes, or to review a GitHub PR, use `inc:review-deep-3b` instead.
+Review the change set on the current branch: auto-apply safe fixes, surface findings that need the user's call, and write a run artifact. This is the lightweight review tier — a fast single-agent pass without the deep persona fan-out, merge, or dedup machinery. For large or sensitive changes, or to review a GitHub PR, use `inc-review-deep` instead.
 
 First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
 An independent review agent is required; if the host has no subagent mechanism, stop with that capability gap rather than reviewing your own work and proceeding.
 
 ## Scope
 
-Working-tree only. The review target is the change set on the current branch: `git diff HEAD` plus staged changes (`git diff --cached`), or — when reviewing a whole branch — `git diff <base>...HEAD`. There is no PR mode; reviewing a GitHub PR is `inc:review-deep-3b`'s job.
+Working-tree only. The review target is the change set on the current branch: `git diff HEAD` plus staged changes (`git diff --cached`), or — when reviewing a whole branch — `git diff <base>...HEAD`. There is no PR mode; reviewing a GitHub PR is `inc-review-deep`'s job.
 
 **No-changes guard:** if `git status --porcelain` is empty (and no branch diff was requested), stop with `No changes to review.` and do not proceed.
 
@@ -23,7 +23,7 @@ To do this, follow these steps precisely:
 1. Launch a single independent review agent (Sonnet where supported, otherwise an available equivalent or the inherited model).
    It reviews the change and returns findings following the instructions below verbatim.
    It locates relevant AGENTS.md and CLAUDE.md files on its own, including scoped files in changed directories.
-   Deeper architectural review (the persona fan-out) belongs to `inc:review-deep-3b`, not this tier.
+   Deeper architectural review (the persona fan-out) belongs to `inc-review-deep`, not this tier.
 
    **Review instructions (give to the agent verbatim):**
 
@@ -57,7 +57,7 @@ To do this, follow these steps precisely:
 
 2. **Auto-apply safe fixes.** For every `auto_apply` finding, apply the fix to the working tree (Edit/Write). Then verify: run the affected tests/lint (targeted; broaden if fixes span files). If a fix fails verification, revert that one fix and re-route it as `ask_user`. Never leave the tree red. A finding whose fix needs validation is not done until that check runs.
 
-3. **Write the run artifact.** Generate a run id (`date +%Y%m%d-%H%M%S`-rand) and `mkdir -p .context/incubator/inc-review/<run-id>/`. Write the finding set to `.context/incubator/inc-review/<run-id>/findings.json` as a JSON array (each object: `autofix_class`, `severity`, `file`, `line`, `title`, `why_it_matters`, optional `suggested_fix`). Write `metadata.json` with `{run_id, branch, head_sha, completed_at, ask_user_count}`. This `findings.json` is the gate signal downstream skills (e.g. `inc:review-and-pr`) read.
+3. **Write the run artifact.** Generate a run id (`date +%Y%m%d-%H%M%S`-rand) and `mkdir -p .context/incubator/inc-review/<run-id>/`. Write the finding set to `.context/incubator/inc-review/<run-id>/findings.json` as a JSON array (each object: `autofix_class`, `severity`, `file`, `line`, `title`, `why_it_matters`, optional `suggested_fix`). Write `metadata.json` with `{run_id, branch, head_sha, completed_at, ask_user_count}`. This `findings.json` is the gate signal downstream skills (e.g. `inc-review-and-pr`) read.
 
 4. **Present, then stop.** Render the report per `references/review-output-template.md`: a one-line situation summary (risk + what was auto-applied + what needs the user), then the `ask_user` findings as "Needs your call" prose, then the auto-applied fixes, then `fyi` informational. Cite each finding by `file:line`. Then stop — do not ask what to do next; the `ask_user` findings are the user's to act on.
 

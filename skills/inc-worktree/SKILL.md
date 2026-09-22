@@ -1,6 +1,6 @@
 ---
-name: inc:worktree
-description: Manage git worktrees in a repo - bootstrap the worktree infrastructure when missing (a WorktreeCreate hook plus scripts/worktree-setup.sh that branches fresh from origin's default branch, symlinks .env files, installs dependencies, and prunes stale worktrees on every creation), show worktree status, and prune worktrees whose PRs have merged (squash-merge aware; PR state is the source of truth, so this cleans up worktrees that "could not be removed" by the harness). Triggers on "setup worktrees", "init worktrees", "worktree setup", "initialize worktrees for this repo", "clean up worktrees", "prune worktrees", "remove old worktrees", "stale worktrees", "worktree status", "my worktrees are behind main", "worktree could not be removed", or "/inc:worktree".
+name: inc-worktree
+description: Manage git worktrees in a repo - bootstrap the worktree infrastructure when missing (a WorktreeCreate hook plus scripts/worktree-setup.sh that branches fresh from origin's default branch, symlinks .env files, installs dependencies, and prunes stale worktrees on every creation), show worktree status, and prune worktrees whose PRs have merged (squash-merge aware; PR state is the source of truth, so this cleans up worktrees that "could not be removed" by the harness). Triggers on "setup worktrees", "init worktrees", "worktree setup", "initialize worktrees for this repo", "clean up worktrees", "prune worktrees", "remove old worktrees", "stale worktrees", "worktree status", "my worktrees are behind main", "worktree could not be removed", or "/inc-worktree".
 allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(git *), Bash(gh *), Bash(jq *), Bash(bash *), Bash(cp *), Bash(chmod *), Bash(mkdir *), Bash(cat *), Bash(printf *), Bash(du *), Bash(test *)
 argument-hint: "[init|status|prune] (default: auto-detect)"
 ---
@@ -23,7 +23,7 @@ If asked to initialize another host, stop and explain that hook integration need
 
 ## User-invocable
 
-When the user types `/inc:worktree`, run this skill.
+When the user types `/inc-worktree`, run this skill.
 An optional argument picks the mode directly: `init`, `status`, or `prune`.
 
 ## Mode routing
@@ -117,7 +117,7 @@ If the repo has a large dependency tree, warn the user the smoke test runs a rea
 ### Step 6 - Report
 
 List the files added or changed (`scripts/worktree-setup.sh`, `.claude/settings.json`, `.gitignore`) and the smoke test result.
-Do not commit; the user lands changes through their normal flow (for example `/inc:review-and-pr`).
+Do not commit; the user lands changes through their normal flow (for example `/inc-review-and-pr`).
 If the repo needs extra per-worktree setup beyond env files and dependency install (codegen, database prep), point the user at the `scripts/worktree-post-setup.sh` extension point instead of editing the installed script.
 
 ## Status

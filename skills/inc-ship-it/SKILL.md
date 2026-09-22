@@ -1,14 +1,14 @@
 ---
-name: inc:ship-it
-description: End-to-end ship pipeline. Runs inc:review-and-pr (tiered review gate → commit-push-PR → watch CI + AI reviewers → resolve feedback, stopping at a feedback-clean PR), then inc:merge-pr-5 to run the merge gates, squash-merge, and observe the deploy. Use when the user says "ship it end to end", "full ship", "commit through merge", "/inc:ship-it", or wants the whole working-changes-to-merged-and-deployed flow as one command.
+name: inc-ship-it
+description: End-to-end ship pipeline. Runs inc-review-and-pr (tiered review gate → commit-push-PR → watch CI + AI reviewers → resolve feedback, stopping at a feedback-clean PR), then inc-merge-pr to run the merge gates, squash-merge, and observe the deploy. Use when the user says "ship it end to end", "full ship", "commit through merge", "/inc-ship-it", or wants the whole working-changes-to-merged-and-deployed flow as one command.
 ---
 
 # Ship It: review → PR → resolve feedback → merge, end to end
 
 Orchestrates two existing skills in sequence so the user runs one command instead of several:
 
-1. `inc:review-and-pr` — review the working tree (tiered light/deep), commit-push-PR, watch CI + AI reviewers, resolve feedback in a loop, and stop at a feedback-clean PR.
-2. `inc:merge-pr-5` — run the merge gates, squash-merge, and observe the deploy.
+1. `inc-review-and-pr` — review the working tree (tiered light/deep), commit-push-PR, watch CI + AI reviewers, resolve feedback in a loop, and stop at a feedback-clean PR.
+2. `inc-merge-pr` — run the merge gates, squash-merge, and observe the deploy.
 
 First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
 This skill does not reimplement child workflows: use native skill invocation when available, otherwise read and follow each linked sibling inline before continuing.
@@ -16,12 +16,12 @@ Preserve the review gate, intent interview, merge gates, and all stop conditions
 Feedback resolution runs unattended inside commit-push-pr's watch loop; only `needs-human` items pause that resolver.
 Missing required capabilities stop this chain, not silently skip a stage.
 
-`inc:review-and-pr` already contains the commit → watch → resolve loop, so this skill is thin: run it, and if it reached PR-ready, merge.
+`inc-review-and-pr` already contains the commit → watch → resolve loop, so this skill is thin: run it, and if it reached PR-ready, merge.
 
 ## When to use this vs the pieces
 
-- **`/inc:ship-it`** — go all the way to merged + deployed.
-- **`/inc:review-and-pr`** — stop at a feedback-clean PR for a human to merge.
+- **`/inc-ship-it`** — go all the way to merged + deployed.
+- **`/inc-review-and-pr`** — stop at a feedback-clean PR for a human to merge.
 - **The individual skills** — stop after one specific step.
 
 ## Asking the user — make "waiting on you" unambiguous
@@ -37,38 +37,38 @@ Most forks live inside the underlying skills. This skill's own fork is the Step 
 
 Set expectations, then proceed (no question — the user invoked the chain knowing what it does):
 
-> Ready to ship via `/inc:ship-it`. This will: review your working changes (auto-applying safe fixes), open/refresh the PR, wait for CI + AI reviewers, auto-resolve feedback (pausing only for items that need your call), then run the merge gates and observe the deploy. Natural pause points are between phases — say "stop" anytime and the chain ends cleanly. Continuing now.
+> Ready to ship via `/inc-ship-it`. This will: review your working changes (auto-applying safe fixes), open/refresh the PR, wait for CI + AI reviewers, auto-resolve feedback (pausing only for items that need your call), then run the merge gates and observe the deploy. Natural pause points are between phases — say "stop" anytime and the chain ends cleanly. Continuing now.
 
-## Step 2 — Run inc:review-and-pr
+## Step 2 — Run inc-review-and-pr
 
-Run [inc:review-and-pr](../inc-review-and-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
+Run [inc-review-and-pr](../inc-review-and-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
 
 This runs the whole front of the pipeline: tier-selected review gate → commit-push-PR → watch CI + AI reviewers → resolve-feedback loop → stop at PR-ready. It owns all the watching and feedback resolution; this skill just waits for it to return.
 
 **It stops short** (and so does this chain — surface its message and stop) when:
 - the review gate found `ask_user` findings (the user must address them and re-run),
-- `inc:commit-push-pr-4` opened no PR (intent interview aborted, or nothing to push),
+- `inc-commit-push-pr` opened no PR (intent interview aborted, or nothing to push),
 - CI failed in a way the chain can't pass, or
 - resolve-pr-feedback hit a thread needing human attention it couldn't progress past.
 
 **Only when it reaches PR-ready** — CI green, AI-reviewer threads addressed, PR printed with "Ready for human merge" — proceed to Step 3.
 
-## Step 3 — Run inc:merge-pr-5
+## Step 3 — Run inc-merge-pr
 
-Run [inc:merge-pr-5](../inc-merge-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
+Run [inc-merge-pr](../inc-merge-pr/SKILL.md) through the native skill tool, or read and follow the file inline.
 
 merge-pr runs its own pre-flight (branch freshness), the merge gates (new env vars; PR health; schema drift for repos that expose a `db:check-drift` script; plus a deploy-window check that respects the team's configured window rules - default when none are set is risk-adaptive: low-risk changes just ship, riskier ones prompt a quick confirm), the squash-merge, and active deploy observation. Wait for it to return.
 
 One timing exception: skills execute inline in this same session - merge-pr is not a blocking subprocess, and the same agent runs both. When merge-pr's Step 4c reports deploy **Ready** and the **first health check** result, emit the Step 4 report at that moment, mid-observation, then let merge-pr's remaining observation (log scan, watch outcomes) continue below it exactly as Step 4 describes.
 
 - **`MERGE: GO`** and a successful deploy observation → the chain is complete.
-- **`MERGE: BLOCK`** → surface the blocking gate(s) verbatim. If a gate is a user-judgment call (not a hard fail), ask (blocking question) whether to retry-after-fix or stop. The user resolves the gate and either re-runs `/inc:merge-pr-5` directly or `/inc:ship-it` from the top.
+- **`MERGE: BLOCK`** → surface the blocking gate(s) verbatim. If a gate is a user-judgment call (not a hard fail), ask (blocking question) whether to retry-after-fix or stop. The user resolves the gate and either re-runs `/inc-merge-pr` directly or `/inc-ship-it` from the top.
 
 ## Step 4 — Final report
 
 The report's #1 job is to answer one question at a glance: **is this deployed to production or not?** Never bury that under CI/preview detail. Preview deploys are *not* production — never let "app deploy pending" or a green preview read as "shipped."
 
-**When the report drops (deployed path):** the moment `inc:merge-pr-5` reports the deploy **Ready** and the **first health check** passes, emit the report. Do **not** hold it for the 3-min log scan or the 10-minute post-deploy watch - stage 8's detail reflects only what is confirmed at drop time (`Ready in <t>, health <code>`; the log-scan result isn't known yet, so never claim it). merge-pr arms its watch at that same moment, so its `👀` watch line lands immediately under the report - making it unambiguous that monitoring is still active. Later results (the 3-min scan checkpoint, then the closing `👀 Post-deploy watch: ✅ CLEAN - …` or 🚨 issue line) post on their own below - don't re-render the report. If the first health check **fails** instead, still drop the report at that moment - with the `⛔ DEPLOYED - health check failed` form below, never a `✅`.
+**When the report drops (deployed path):** the moment `inc-merge-pr` reports the deploy **Ready** and the **first health check** passes, emit the report. Do **not** hold it for the 3-min log scan or the 10-minute post-deploy watch - stage 8's detail reflects only what is confirmed at drop time (`Ready in <t>, health <code>`; the log-scan result isn't known yet, so never claim it). merge-pr arms its watch at that same moment, so its `👀` watch line lands immediately under the report - making it unambiguous that monitoring is still active. Later results (the 3-min scan checkpoint, then the closing `👀 Post-deploy watch: ✅ CLEAN - …` or 🚨 issue line) post on their own below - don't re-render the report. If the first health check **fails** instead, still drop the report at that moment - with the `⛔ DEPLOYED - health check failed` form below, never a `✅`.
 
 Render the full pipeline as a stage checklist so the user can see exactly how far the run got and where it stopped. Every stage carries one status glyph:
 
@@ -95,7 +95,7 @@ Production: NOT DEPLOYED — stopped at merge gates
   ⬜ 8. Deployed to production      not reached
 
 PR: https://github.com/org/repo/pull/194
-Blocked: clear the merge gate above, then re-run /inc:ship-it.
+Blocked: clear the merge gate above, then re-run /inc-ship-it.
 ```
 
 Deployed path — the report drops at deploy Ready + first health pass, with the watch line directly below it:
@@ -124,7 +124,7 @@ Fill each stage's glyph and detail from what actually happened; set stages the r
 
 The `Production:` line is the single source of truth. It takes exactly one of these forms — pick by what stages 7 (Merged) and 8 (Deployed) actually show, and never collapse "merged but unobserved" into "not deployed":
 
-- `✅ DEPLOYED to production` — **only** when stages 7 and 8 are both `✅` (the merge landed **and** `inc:merge-pr-5` observed the deploy reach `Ready` **and** the first health check passed). The 10-minute post-deploy watch may still be running when this drops - its outcome lands later as a standalone `👀` line, never by holding the report back.
+- `✅ DEPLOYED to production` — **only** when stages 7 and 8 are both `✅` (the merge landed **and** `inc-merge-pr` observed the deploy reach `Ready` **and** the first health check passed). The 10-minute post-deploy watch may still be running when this drops - its outcome lands later as a standalone `👀` line, never by holding the report back.
 - `⏳ MERGED — deploy unconfirmed (<skipped | timed out | no deploy step>)` — stage 7 is `✅` but stage 8 never reached a confirmed `Ready`: the deploy observation was skipped or timed out, or the repo has no deploy step. The merge may already have triggered a rollout, so this is **not** `NOT DEPLOYED` — report the state as unconfirmed and name why.
 - `⛔ DEPLOYED — health check failed (<code>)` — stage 7 is `✅` and the deploy reached `Ready`, but the first health check returned non-2xx/3xx. The new code is live but not serving healthily; stage 8 shows `⛔` with the health code, and merge-pr's rollback advisory stands. Never render this as `✅`.
 - `⛔ NOT DEPLOYED — deploy failed` — stage 7 is `✅` but the observed deploy (stage 8) failed. The new code did not go live; treat as rollback territory.

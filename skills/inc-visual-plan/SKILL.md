@@ -1,5 +1,5 @@
 ---
-name: inc:visual-plan
+name: inc-visual-plan
 description: Create and iterate hosted visual plans for coherent feature work, using the live block catalog and the Incubator Build REST API.
 allowed-tools: Read, Bash
 ---

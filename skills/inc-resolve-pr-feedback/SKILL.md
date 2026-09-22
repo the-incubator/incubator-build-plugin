@@ -1,5 +1,5 @@
 ---
-name: inc:resolve-pr-feedback
+name: inc-resolve-pr-feedback
 description: Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.
 argument-hint: "[PR number, comment URL, or blank for current branch's PR] [--auto for unattended mode]"
 allowed-tools: Bash(gh *), Bash(git *), Read, Skill
@@ -20,7 +20,7 @@ Stop with a capability gap if required independent resolver agents are unavailab
 
 ## Unattended mode (`--auto`)
 
-When invoked with `--auto` in the arguments (the `inc:commit-push-pr-4` watch loop passes this), run **without the confirmation checkpoints**: skip the Step 4 plan confirmation and the Step 7 pre-commit/push confirmation, and chain fix → commit → push → reply → resolve directly. This is the deliberate exception to the "Confirm before you mutate" rule above — the caller has opted into hands-off resolution.
+When invoked with `--auto` in the arguments (the `inc-commit-push-pr` watch loop passes this), run **without the confirmation checkpoints**: skip the Step 4 plan confirmation and the Step 7 pre-commit/push confirmation, and chain fix → commit → push → reply → resolve directly. This is the deliberate exception to the "Confirm before you mutate" rule above — the caller has opted into hands-off resolution.
 
 The autonomy boundary in this mode is the **`needs-human` verdict**: any item a resolver agent returns as `fixed`, `fixed-differently`, `replied`, or `not-addressing` is applied, pushed, and resolved automatically. Only `needs-human` items pause — post their holding reply, leave the thread open, and surface them to the caller (do not resolve). Everything else (freshness check, validation in Step 6, reply/resolve in Step 8, the verify loop in Step 9) runs unchanged.
 
@@ -97,7 +97,7 @@ OVERLAP=$(printf '%s\n' "$OUT" | sed -n 's/^OVERLAP=//p')
 
 If `$OVERLAP` is non-empty, ask the user whether to update before resolving feedback. Show the overlapping paths so they can judge — a comment on `src/auth.ts` when `src/auth.ts` also changed on `main` is a much stronger signal than an overlap in, say, a lockfile.
 
-If the user says yes, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — it handles stash/restore and routes conflicts to `git-merge-expert`. After it returns cleanly, continue to Full Mode Step 1 or Targeted Mode Step 1.
+If the user says yes, run [inc-update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline — it handles stash/restore and routes conflicts to `git-merge-expert`. After it returns cleanly, continue to Full Mode Step 1 or Targeted Mode Step 1.
 
 If `$OVERLAP` is empty or the user declines, continue without updating. This check runs in both Full and Targeted modes.
 
@@ -524,4 +524,4 @@ After confirmation, spawn a single `inc-pr-comment-resolver` agent for the threa
 - Threads resolved via GraphQL (except `needs-human`)
 - Empty result from get-pr-comments on verify (minus intentionally-open threads)
 
-**Next.** Once any pushed fixes have re-greened CI, run `/inc:merge-pr-5` to ship. When you don't invoke this skill directly, `/inc:commit-push-pr-4`'s watch loop runs it for you in unattended (`--auto`) mode after a PR is opened, and `/inc:ship-it` carries on through merge + deploy from there.
+**Next.** Once any pushed fixes have re-greened CI, run `/inc-merge-pr` to ship. When you don't invoke this skill directly, `/inc-commit-push-pr`'s watch loop runs it for you in unattended (`--auto`) mode after a PR is opened, and `/inc-ship-it` carries on through merge + deploy from there.

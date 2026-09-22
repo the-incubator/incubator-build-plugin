@@ -52,7 +52,7 @@ The [manual acceptance checklist](../workflow/test-plans/test-plan-multi-host-di
 
 No full Codex PR-gate rewrite or new-host hook parity is included.
 Codex selected-skill metadata remains distinct from an ordinary file read; a nested file-based closeout can therefore hit the existing PR gate despite following the right prose.
-Use direct native `$inc:commit-push-pr-4` activation when needed, and stop/report any denial without altering hooks or transcripts.
+Use direct native `$inc-commit-push-pr` activation when needed, and stop/report any denial without altering hooks or transcripts.
 Follow-up: capture authorized live Codex closeout behavior, then design compositional activation evidence independently of distribution.
 
 Some compatibility hosts may discover the existing root hook bundle automatically.

@@ -203,7 +203,7 @@ async function main() {
         "frontmatter name from skills/inc-commit-push-pr/SKILL.md, so it cannot verify " +
         "that the skill was activated. This is a plugin-integrity problem, not a normal " +
         "denial — set that skill's frontmatter `name` to a plain unquoted scalar " +
-        "(for example `name: inc:commit-push-pr-4`) and retry.",
+        "(for example `name: inc-commit-push-pr`) and retry.",
     );
     return 0;
   }

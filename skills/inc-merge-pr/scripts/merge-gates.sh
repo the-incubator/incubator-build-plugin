@@ -91,7 +91,7 @@ run_bounded() {
 
 # Normalize to the repository root so every relative path (package.json,
 # deploy.md, `git status`, schema paths) resolves the same way regardless of the
-# subdirectory `/inc:merge-pr-5` was invoked from. Git reports repo-root-relative
+# subdirectory `/inc-merge-pr` was invoked from. Git reports repo-root-relative
 # paths, so the working-tree lookups must run from the root too. The plugin-helper
 # paths above are absolute and unaffected.
 MG_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
@@ -350,7 +350,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # Gate 3: deployment window - the policy is team-configured, not hardcoded.
-# /inc:setup-deploy persists a one-line `Deploy window:` rule into deploy.md
+# /inc-setup-deploy persists a one-line `Deploy window:` rule into deploy.md
 # (falling back to DEPLOY.md / CLAUDE.md). This script does NOT interpret the
 # rule - matching a natural-language policy ("Mon-Thu after 1pm ET; freeze
 # during the Dec holiday") against the clock is the orchestrator's job. The

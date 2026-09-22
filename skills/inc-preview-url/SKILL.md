@@ -1,6 +1,6 @@
 ---
-name: inc:preview-url
-description: Use when the user wants a public URL to reach their locally-running app from another device or share it with someone. Spins up a Cloudflare quick tunnel (cloudflared) that maps a *.trycloudflare.com URL to a local port — no Cloudflare account or domain required. Triggers on "preview url", "share my app", "expose my app", "public URL for localhost", "share my local app", "access the app remotely", "tunnel", "ngrok-style URL", "cloudflare tunnel", or "/inc:preview-url".
+name: inc-preview-url
+description: Use when the user wants a public URL to reach their locally-running app from another device or share it with someone. Spins up a Cloudflare quick tunnel (cloudflared) that maps a *.trycloudflare.com URL to a local port — no Cloudflare account or domain required. Triggers on "preview url", "share my app", "expose my app", "public URL for localhost", "share my local app", "access the app remotely", "tunnel", "ngrok-style URL", "cloudflare tunnel", or "/inc-preview-url".
 allowed-tools: Read, Grep, Glob, AskUserQuestion, Bash(cloudflared *), Bash(lsof *), Bash(which *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(npm *), Bash(pnpm *), Bash(yarn *), Bash(bun *), Bash(pkill *), Bash(kill *)
 argument-hint: "[optional: port or local URL, e.g. 5173 or http://localhost:5173]"
 ---
@@ -17,8 +17,8 @@ the user isn't surprised.
 
 ## User-invocable
 
-When the user types `/inc:preview-url`, run this skill. An optional argument is the port or local URL to
-expose (e.g. `/inc:preview-url 5173` or `/inc:preview-url http://localhost:3000`) — use it to skip detection.
+When the user types `/inc-preview-url`, run this skill. An optional argument is the port or local URL to
+expose (e.g. `/inc-preview-url 5173` or `/inc-preview-url http://localhost:3000`) — use it to skip detection.
 
 ## Step 1 — Determine the local target
 
@@ -60,7 +60,7 @@ Then **ask with `AskUserQuestion`** — don't auto-launch a long-running process
 - A) **Start `<script>` for me** → run `npm run <script>` (or the repo's pm: `pnpm`/`yarn`/`bun`) with
   `run_in_background: true`, then poll `lsof`/`curl` until the port is listening (give it ~20–30s;
   dev servers take a moment to boot). Once up, continue to Step 2.
-- B) **I'll start it myself** → tell them the command and stop; they re-run `/inc:preview-url` after.
+- B) **I'll start it myself** → tell them the command and stop; they re-run `/inc-preview-url` after.
 
 If `package.json` has no usable script (or there's no `package.json`), say so and ask the user for the
 start command or port rather than guessing. Note the dev server stays running in the background after

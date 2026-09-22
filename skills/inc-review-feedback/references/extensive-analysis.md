@@ -1,6 +1,6 @@
 # Extensive analysis path
 
-Use this path when the input is a longer recording (over ~60 seconds), contains multiple issues, requirements, or workflow walkthroughs, or the user explicitly wants requirements material. The goal is a full structured artifact set that feeds the `inc:plan` skill.
+Use this path when the input is a longer recording (over ~60 seconds), contains multiple issues, requirements, or workflow walkthroughs, or the user explicitly wants requirements material. The goal is a full structured artifact set that feeds the `inc-plan` skill.
 
 ## Workflow
 
@@ -162,9 +162,9 @@ Use this path when the input is a longer recording (over ~60 seconds), contains 
    supersedes any `triage.md` carrying a different id (renaming it to `triage.superseded-*.md`) -
    an approval only counts for the analysis it was made against.
 
-9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc:plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces on `report.html` as done, tried, asked, answered, waiting, or queued (intent at step 8d, outcome at step 11).
+9. Always continue into planning. Once `analysis.md`, `problem-analysis.md`, `source-materials.md`, `requirements-kickoff.md`, and the approved `triage.md` exist, say "Analysis complete. Ready to plan the findings." Then immediately load the `inc-plan` skill with the generated `requirements-kickoff.md` and `triage.md`, unless the user explicitly asked only to extract or analyze artifacts. The buckets scope the plan: `change` and `try` items are the implementation work (each `try` carrying its stated approach and open question); `discuss` items produce mocks, options, or a short brief instead of code; `respond` items get their written answer into the closing report; `blocked` items are tracked dependencies with a named owner; `defer` items get a backlog pointer. No bucket is silently dropped - every item resurfaces on `report.html` as done, tried, asked, answered, waiting, or queued (intent at step 8d, outcome at step 11).
 
-10. When `inc:plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
+10. When `inc-plan` starts, first confirm the captured requirements with the user: "Did this capture the requirements correctly, and what is missing, wrong, or grouped badly?" (The triage table approval in step 8d usually doubles as this confirmation - do not re-ask what the user already adjusted.) Do not move into implementation planning until the requirements have been confirmed or corrected.
 
     **If the confirmation changes the requirement set, the triage gate reopens for what changed.**
     A requirement that was added, split, merged, or materially reworded has no approved bucket -
@@ -203,9 +203,9 @@ Do not end the workflow after extraction in normal use. The intended sequence is
 2. Read `source-materials.md` so the planner has direct links to raw feedback, transcript, frames, and analysis artifacts.
 3. Inspect or refine `problem-analysis.md` when the evidence needs human-visible interpretation.
 4. Triage every item into a bucket and get the user's approval of the table (step 8d, `references/feedback-triage.md`).
-5. Load the `inc:plan` skill with `requirements-kickoff.md` and `triage.md`.
+5. Load the `inc-plan` skill with `requirements-kickoff.md` and `triage.md`.
 6. Ask the user to confirm, correct, or regroup the captured requirements (skip when the step-4 triage approval already covered it - do not re-ask what the user adjusted).
-7. Let `inc:plan` produce the durable plan/requirements doc, scoped by the buckets.
+7. Let `inc-plan` produce the durable plan/requirements doc, scoped by the buckets.
 8. Once the `change` / `try` work lands, close the report with the outcomes (step 11) and send it back to the reviewer.
 
 Only stop after step 1 or 2 when the user asks specifically for raw artifacts, transcript, screenshots, or analysis without planning.

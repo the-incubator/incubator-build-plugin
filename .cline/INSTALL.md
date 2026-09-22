@@ -14,7 +14,7 @@ Repeated installation of the same checkout is safe.
 Manual-only skills are omitted unless `--include-manual` is passed; Cline may auto-activate them when included.
 Revoking that opt-in requires removing the previously installed manual-only links explicitly.
 
-Start a new task and ask to use `inc:guide`.
+Start a new task and ask to use `inc-guide`.
 If a strict name validator omits the legacy colon-named skills, explicitly ask to read and follow the absolute `skills/inc-guide/SKILL.md` path in the checkout.
 Update with `git pull --ff-only`, rerun the installer to link new skills, and start a new task.
 Remove only this installer's skill symlinks to uninstall, not the shared `.cline/skills/` directory.
