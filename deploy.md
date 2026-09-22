@@ -1,6 +1,6 @@
 # Deploy
 
-## Deploy Configuration (managed by /inc:setup-deploy)
+## Deploy Configuration (managed by /inc-setup-deploy)
 
 - Platform: custom (does-not-deploy)
 - Production branch: main
@@ -21,7 +21,7 @@ merge skill's wait loop only recognizes real deployment states, so a dummy comma
 with unrecognized output drives it to `parse-error` after four polls instead of skipping — which
 reads as a broken deploy watch rather than the no-op it actually is.
 
-`inc:merge-pr-5` / `inc:ship-it`: treat this block as `OBSERVATION_READY=skip`, print
+`inc-merge-pr` / `inc-ship-it`: treat this block as `OBSERVATION_READY=skip`, print
 `Observation: skipped - plugin source repo, no runtime deploy`, and finish. Do not probe, do not
 poll, do not run the post-deploy watch. The absence of a deploy is the expected outcome here, not
 a failed observation.
@@ -37,4 +37,4 @@ The real post-merge verification is on the consumer side: a user's plugin update
 The two-channel model (`main` = stable pinned, `beta` = auto-ship, promotion via
 `scripts/release.sh`) is **proposed but not yet in place** - there is no `beta` branch on origin and
 no `scripts/release.sh` on `main`. Until that lands, ship plugin work as ordinary PRs into `main`
-with a `version` bump in the same PR. Re-run `/inc:setup-deploy` once the channel model merges.
+with a `version` bump in the same PR. Re-run `/inc-setup-deploy` once the channel model merges.

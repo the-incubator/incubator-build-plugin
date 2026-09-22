@@ -1083,7 +1083,7 @@ def write_requirements_kickoff(
         "",
         "> Heuristic keyword hits and observed events. A heuristic-signal is frequently a"
         " non-issue (design-direction feedback trips the keyword scan). These are a"
-        " starting glance only; never carry them into `inc:plan` as R-items.",
+        " starting glance only; never carry them into `inc-plan` as R-items.",
         "",
     ]
 
@@ -1108,7 +1108,7 @@ def write_requirements_kickoff(
             "## Success Criteria",
             "",
             "- A human reviewer can understand what went wrong without rewatching the entire recording.",
-            "- `inc:plan` can confirm requirements from linked source evidence before any planning begins.",
+            "- `inc-plan` can confirm requirements from linked source evidence before any planning begins.",
             "",
             "---",
             "",
@@ -1123,7 +1123,7 @@ def write_requirements_kickoff(
             "## Key Decisions",
             "",
             "- Evidence first: Requirements should cite moments and screenshots before moving to planning.",
-            "- Plan from evidence: Use `inc:plan` to refine product behavior when the recording reveals ambiguity.",
+            "- Plan from evidence: Use `inc-plan` to refine product behavior when the recording reveals ambiguity.",
             "",
             "---",
             "",
@@ -1160,7 +1160,7 @@ def write_requirements_kickoff(
                 if analysis_id
                 else "   Stamp the approved `triage.md` with the `Analysis:` id printed by the analyzer."
             ),
-            "-> Then resume `/inc:plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
+            "-> Then resume `/inc-plan` to confirm candidate findings and replace generic R-items with product-specific requirements.",
         ]
     )
     output_path.write_text("\n".join(lines) + "\n")
@@ -2042,7 +2042,7 @@ def main() -> int:
     print(f"Triage gate: bucket every requirement (change/try/discuss/respond/blocked/defer) and get the table approved as triage.md before planning.")
     print(f"Triage rules: {triage_rules}")
     print(f"  Stamp the approved triage.md with a first line of 'Analysis: {analysis_id}' so a later rerun can tell it apart from a stale approval.")
-    print(f"Planning handoff: after triage approval, load inc:plan with {display_path(kickoff_md, repo_root)} and triage.md")
+    print(f"Planning handoff: after triage approval, load inc-plan with {display_path(kickoff_md, repo_root)} and triage.md")
     print("Planning should first confirm whether the captured requirements are complete and correctly grouped.")
     return 0
 

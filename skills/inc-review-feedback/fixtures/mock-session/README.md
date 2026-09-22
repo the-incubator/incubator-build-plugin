@@ -1,6 +1,6 @@
 # Mock feedback session — triage test fixture
 
-A deterministic input for exercising the `inc:review-feedback` extensive path end to end, over and over, without a recording, transcription, or a live collector session.
+A deterministic input for exercising the `inc-review-feedback` extensive path end to end, over and over, without a recording, transcription, or a live collector session.
 It simulates a reviewer session on a fictional "Recipe Box" dashboard and is deliberately built so every triage bucket and every cross-cutting rule in `references/feedback-triage.md` appears at least once.
 
 ## Contents

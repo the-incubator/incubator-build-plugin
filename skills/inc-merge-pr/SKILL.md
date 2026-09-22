@@ -1,12 +1,12 @@
 ---
-name: inc:merge-pr-5
-description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments; schema drift, for repos that expose a db:check-drift script and PRs that touch schema) plus a deploy-window check that respects the team's deploy-window rules configured via /inc:setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
+name: inc-merge-pr
+description: Use when the user says "ship it", "ship this PR", "ship pr", "deploy check", "ready to deploy", "merge and deploy", or is about to merge a PR that triggers a production deploy. Runs a pre-flight branch-freshness check, then blocking gates (new env vars; PR health - not draft, CI green, no unresolved review threads including AI reviewer comments; schema drift, for repos that expose a db:check-drift script and PRs that touch schema) plus a deploy-window check that respects the team's deploy-window rules configured via /inc-setup-deploy (default when none are set, risk-adaptive - low-risk changes just ship, riskier ones prompt a quick confirm). If all gates pass, squash-merges the PR into main, deletes the branch (local + remote), and checks out main. If any gate fails, the merge is blocked. After merge, actively observes the deploy via the detected platform's CLI (Vercel, Netlify, Fly.io, Railway, Google Cloud, GitHub Actions) and scans the first 3 minutes of logs for errors before completing.
 allowed-tools: Read, Bash(git *), Bash(gh *), Bash(date *), Bash(TZ=* date *), Bash(./scripts/*), Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(jq *), Bash(grep *), Bash(sleep *), Bash(curl *), Bash(mktemp), Glob, Grep, Skill, Monitor, PushNotification, TaskStop
 ---
 
 # Merge PR: Production Deploy Readiness Check
 
-Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health), plus a conditional **schema-drift** gate that hard-blocks only when the target repo exposes a drift check and this PR touches schema; the deploy-window gate respects the team's deploy-window rules configured via `/inc:setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
+Gates every PR must pass before it merges into a branch that deploys to production. Any failure **blocks the merge**. Merging a red gate is a ship-stopping violation, not a warning. Two gates are always hard blocks (env vars, PR health), plus a conditional **schema-drift** gate that hard-blocks only when the target repo exposes a drift check and this PR touches schema; the deploy-window gate respects the team's deploy-window rules configured via `/inc-setup-deploy`. **With no window rule configured, the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm first.
 
 First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
 Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
@@ -39,7 +39,7 @@ Commit count is a noisy proxy for staleness - 50 commits on files this branch do
 
 - `ok` - pre-flight OK. If `BEHIND > 0` with `OVERLAP_COUNT=0`, note "`<BEHIND>` commits behind `main`, no path overlap" in the report and continue.
 - `block_default_branch` - **stop.** You're on the default branch, so there's no PR to merge. Tell the user to check out the PR's feature branch and re-run.
-- `block_overlap` - **block the merge**, regardless of `BEHIND`. List the `OVERLAP=` paths so the collision is visible. If the user is on the PR branch locally, run [inc:update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc:merge-pr-5`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
+- `block_overlap` - **block the merge**, regardless of `BEHIND`. List the `OVERLAP=` paths so the collision is visible. If the user is on the PR branch locally, run [inc-update-code](../inc-update-code/SKILL.md) through native invocation or by reading and following that file inline (conflicts route to `git-merge-expert` automatically). After it returns cleanly, remind the user they must `git push` and wait for CI to re-run green before re-invoking `/inc-merge-pr`. Do not push or bypass CI from this skill. If they're not on the PR branch, tell them to switch and re-run.
 - `error` - **freshness BLOCK (unverifiable).** Freshness couldn't be computed - not a git repo, detached HEAD, or the `branch-freshness` helper crashed / returned no usable output. The script fail-safes this to a block rather than emitting a false "ok" that could let a merge through without checking path overlap. Surface the reason and stop.
 
 **Success criteria:** No files changed on both the branch and on `main` since divergence - or the user has updated the branch and CI is re-running before re-invocation.
@@ -50,7 +50,7 @@ Commit count is a noisy proxy for staleness - 50 commits on files this branch do
 
 Run this **only when the gates block did not hard-BLOCK** (verdict GO or NEEDS_DECISION) - there's no point probing deploy auth for a merge that can't happen. Resolve the deploy configuration and probe the read-only auth command **now**, before the merge. The point is to surface "I won't be able to observe the deploy" as a decision the user makes upfront - not as a frustrating denial after the merge has already happened. The harness sandbox can classify a CLI read (e.g., `railway whoami`, `vercel whoami`) as a "Production Reads" action and auto-deny without prompting; this step catches that early.
 
-**Step 0a - Resolve the deploy configuration.** This skill does **not** carry platform-detection tables or per-platform command knowledge - that lives in `/inc:setup-deploy`, which persists it to a `## Deploy Configuration` block in **`deploy.md`** (with a one-line pointer in `CLAUDE.md`). Read that block, preferring deploy.md and falling back to a legacy block in CLAUDE.md:
+**Step 0a - Resolve the deploy configuration.** This skill does **not** carry platform-detection tables or per-platform command knowledge - that lives in `/inc-setup-deploy`, which persists it to a `## Deploy Configuration` block in **`deploy.md`** (with a one-line pointer in `CLAUDE.md`). Read that block, preferring deploy.md and falling back to a legacy block in CLAUDE.md:
 
 ```bash
 grep -A 80 "## Deploy Configuration" deploy.md 2>/dev/null \
@@ -59,26 +59,26 @@ grep -A 80 "## Deploy Configuration" deploy.md 2>/dev/null \
   || echo "NO_DEPLOY_CONFIG"
 ```
 
-(`DEPLOY.md` is the legacy filename - redundant on macOS's case-insensitive filesystem, needed on Linux. `/inc:setup-deploy` migrates it to `deploy.md` on its next run.)
+(`DEPLOY.md` is the legacy filename - redundant on macOS's case-insensitive filesystem, needed on Linux. `/inc-setup-deploy` migrates it to `deploy.md` on its next run.)
 
 - **Block present** (in either file) → parse `Platform`, the `CLI auth check` command, the deploy-status / wait-for-Ready / early-log-scan commands, and the health-check URL. Record `$PLATFORM` and treat these persisted commands as the source of truth for the rest of the skill. Continue to Step 0b.
 - **Block absent (`NO_DEPLOY_CONFIG`)** → setup-deploy has not been run. Ask via AskUserQuestion (do not silently skip):
 
-  > **No deploy configuration found.** `/inc:setup-deploy` hasn't been run for this repo, so I have no parse-safe commands to watch the deploy with. How do you want to proceed?
-  > 1. **Run `/inc:setup-deploy` now** (recommended) - I'll invoke it to detect the platform and persist the status/log commands, then continue the gates. *(It writes a `## Deploy Configuration` block to `deploy.md` plus a one-line pointer in `CLAUDE.md`; commit those separately.)*
+  > **No deploy configuration found.** `/inc-setup-deploy` hasn't been run for this repo, so I have no parse-safe commands to watch the deploy with. How do you want to proceed?
+  > 1. **Run `/inc-setup-deploy` now** (recommended) - I'll invoke it to detect the platform and persist the status/log commands, then continue the gates. *(It writes a `## Deploy Configuration` block to `deploy.md` plus a one-line pointer in `CLAUDE.md`; commit those separately.)*
   > 2. **Skip deploy observation** - run the gates and merge, but I won't wait for Ready or scan logs. You watch the dashboard yourself.
   > 3. **Abort** - don't run the gates.
 
   Resolve:
-  - **Run setup-deploy** → run [inc:setup-deploy](../inc-setup-deploy/SKILL.md) through native invocation or by reading and following that file inline, then re-read the block (the grep above) and continue to Step 0b with the persisted config.
-  - **Skip** → set `OBSERVATION_READY=skip` with reason "no deploy configuration; user declined /inc:setup-deploy", continue to the gate interpretation below.
+  - **Run setup-deploy** → run [inc-setup-deploy](../inc-setup-deploy/SKILL.md) through native invocation or by reading and following that file inline, then re-read the block (the grep above) and continue to Step 0b with the persisted config.
+  - **Skip** → set `OBSERVATION_READY=skip` with reason "no deploy configuration; user declined /inc-setup-deploy", continue to the gate interpretation below.
   - **Abort** → stop the skill entirely.
 
 **Step 0b - Probe the auth check.** Run the read-only `CLI auth check` command from the Deploy Configuration block (e.g. `vercel whoami`, `railway whoami`, `netlify status`, `fly auth whoami`, `gcloud auth list ...`, `gh auth status`). Three outcomes:
 
 - **Probe succeeds** → `OBSERVATION_READY=1`. Note "`<platform>` CLI authed as `<account>`" in the report. Continue to the gate interpretation below.
 - **CLI missing or unauthed** (non-zero exit, "command not found", "not logged in", token expired) → don't silently skip; this is usually fixable in seconds and observation is the skill's whole back half. Print the actual error **plus the fix command**: the `Reauth` line from the Deploy Configuration block, falling back to the platform default (`vercel login`, `netlify login`, `fly auth login`, `railway login`, `gcloud auth login`, `gh auth login`; for a missing CLI, the install command, e.g. `npm i -g vercel`). **Never run install/login yourself** - logins are interactive and the account choice is the user's. Suggest they run it as `! <command>` (runs inside this session so the auth lands here). Then ask (AskUserQuestion):
-  1. **Fixed - re-probe** → re-run the auth check; on success set `OBSERVATION_READY=1` and continue to the gate interpretation below. If the CLI was **missing** (not just unauthed) and the user installed it, also re-run `/inc:setup-deploy` (through native invocation or by reading and following its file inline) before proceeding - the persisted commands were verified against a CLI version that wasn't this one, and flags drift between majors.
+  1. **Fixed - re-probe** → re-run the auth check; on success set `OBSERVATION_READY=1` and continue to the gate interpretation below. If the CLI was **missing** (not just unauthed) and the user installed it, also re-run `/inc-setup-deploy` (through native invocation or by reading and following its file inline) before proceeding - the persisted commands were verified against a CLI version that wasn't this one, and flags drift between majors.
   2. **Skip observation** → `OBSERVATION_READY=skip` with the actual error recorded. Note in the report and continue to the gate interpretation below.
 - **Probe denied by sandbox** (denial message mentioning "Production Reads", "permission for this action has been denied", or similar harness-level refusal that is *not* a CLI-level error) → **STOP. Do not proceed to gates.** Surface the choice:
 
@@ -156,13 +156,13 @@ Read `GATE2_HEALTH:`:
     > Address each (fix + reply, or explicitly resolve with a reason). AI threads count the same as human threads. Re-run after resolving.
 
   - `THREADS: ... mode=error` → the thread query produced a non-numeric count (jq errored on a malformed payload). The script fail-safes to a block - it does **not** report zero threads. Tell the user thread state couldn't be verified and to re-run.
-  - `MERGEABLE=dirty` → **conflicts.** Invoke `inc:update-code` to rebase/merge `main` in, then push and re-run. `blocked` → branch-protection rule unsatisfied (the specific reason usually overlaps with draft/CI/threads; if not, surface the raw status). `behind` → branch behind target; update from `main` and re-run. `unknown` → GitHub computes mergeability lazily; surface the status and block (re-running the gates a moment later usually resolves it).
+  - `MERGEABLE=dirty` → **conflicts.** Invoke `inc-update-code` to rebase/merge `main` in, then push and re-run. `blocked` → branch-protection rule unsatisfied (the specific reason usually overlaps with draft/CI/threads; if not, surface the raw status). `behind` → branch behind target; update from `main` and re-run. `unknown` → GitHub computes mergeability lazily; surface the status and block (re-running the gates a moment later usually resolves it).
 - `skipped` → pre-flight blocked before a PR could be resolved (see the freshness line); this fail-safes to a block too. Resolve the freshness/branch problem first.
 - `error` → **Gate 2 BLOCK (unverifiable).** Owner/repo couldn't be parsed from the git remote, so PR health couldn't be checked at all. The script blocks rather than merging unchecked. Surface and stop.
 
 **Thread mode.** `mode=precise` means the cached GraphQL thread state was available (the authoritative `isResolved` / `isOutdated` signal). `mode=degraded` means GraphQL was unavailable and the script fell back to a "latest commenter isn't the PR author" heuristic - best-effort. `mode=error` means the thread query failed outright (treated as a block). When you see `mode=degraded`, surface this banner before the thread list:
 
-> ⚠️ **Thread-resolution state unavailable** (GraphQL quota/auth). Falling back to "latest commenter isn't PR author" heuristic. The precise state restores itself on the next run once the GraphQL quota resets or auth is restored - re-run `/inc:merge-pr-5` then.
+> ⚠️ **Thread-resolution state unavailable** (GraphQL quota/auth). Falling back to "latest commenter isn't PR author" heuristic. The precise state restores itself on the next run once the GraphQL quota resets or auth is restored - re-run `/inc-merge-pr` then.
 
 The AI detection covers the common cases (Greptile, CodeRabbit, Copilot, Claude, Cursor) plus a fallback for any bot login ending in `-ai[bot]` or `-review*[bot]`. If the user has a custom AI reviewer bot, they can extend the pattern in `merge-gates.sh`.
 
@@ -181,7 +181,7 @@ A schema change must never squash-merge while production's database still lacks 
 
 Any repo without that script, or any PR that changes no DB-schema file, is a **clean no-op** (`GATE4_DRIFT: skip`). Non-schema PRs are deliberately never run through the check: they cannot introduce drift, and forcing every merge to reach a live database would block unrelated work in credential-less environments for no safety gain.
 
-**What a green check proves - and its one blind spot.** The check confirms the schema matches **whatever database the environment's `DATABASE_URL` points at**. It cannot itself prove that connection targets *production* - if `/inc:merge-pr-5` runs in a shell whose `DATABASE_URL` points at a local, preview, or staging database, a `pass` confirms only that that database is in sync. When you merge a schema change, make sure the environment's `DATABASE_URL` is the production one (or run the check with the production connection yourself). This gate closes the "code merged, prod DB never updated" hole; it does not police which database you pointed it at.
+**What a green check proves - and its one blind spot.** The check confirms the schema matches **whatever database the environment's `DATABASE_URL` points at**. It cannot itself prove that connection targets *production* - if `/inc-merge-pr` runs in a shell whose `DATABASE_URL` points at a local, preview, or staging database, a `pass` confirms only that that database is in sync. When you merge a schema change, make sure the environment's `DATABASE_URL` is the production one (or run the check with the production connection yourself). This gate closes the "code merged, prod DB never updated" hole; it does not police which database you pointed it at.
 
 **Security posture.** This is the one gate that executes the **repo's own code** (the `db:check-drift` script and what it imports) with whatever `DATABASE_URL` the environment carries. When you merge a schema PR from an **untrusted contributor**, review the checker-script and schema changes before running the gate - an unmerged PR could change the checker to exfiltrate that credential or touch production. When the PR modifies the checker's own code, the gate emits a `NOTE=` line flagging exactly that. The gate is a local, maintainer-run merge tool by design; it does not sandbox the check.
 
@@ -197,7 +197,7 @@ Read the `GATE4_DRIFT:` line from the gates block. Per-workspace results appear 
   > ```
   > Merge is blocked until production and the schema agree. **How to remediate depends on the *kind* of drift - read the lines above before acting:**
   >
-  > - **Additive / backward-compatible** (a new nullable column, a new table/index the deployed code doesn't yet require): safe to bring production up first. Run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc:merge-pr-5`) to confirm green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
+  > - **Additive / backward-compatible** (a new nullable column, a new table/index the deployed code doesn't yet require): safe to bring production up first. Run the repo's documented production schema push (e.g. `pnpm db:push` against the production `DATABASE_URL`), then re-run `db:check-drift` (and `/inc-merge-pr`) to confirm green. Pushing to production rewrites live constraints and is a human call - do not run it from this skill.
   > - **Destructive / contract-changing** (dropping or renaming a column/table, narrowing a type, adding a NOT NULL or other incompatible constraint): **do NOT just push to production first** - the currently-deployed code still depends on the old shape, so applying the change pre-merge causes the exact 500s this gate exists to prevent. Use an **expand-contract** rollout: ship and deploy code that tolerates both shapes, migrate/backfill, then contract in a later change. The gate can't tell additive from destructive - that judgment is yours from the drift lines.
   >
   > (Because the underlying check is an exact-match comparison, a deliberately-retained legacy object mid-expand-contract can itself read as drift; that's a case to resolve at the app's checker, not by mutating production.)
@@ -222,7 +222,7 @@ Do not proceed past this gate on `drift` or `unverifiable`. "I'll push the schem
 
 ## Gate 3: Deployment Window
 
-The deploy window is **team-configured policy, not a built-in rule**. `/inc:setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window - the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
+The deploy window is **team-configured policy, not a built-in rule**. `/inc-setup-deploy` asks whether the team restricts when deploys may go out and, if so, persists a one-line `Deploy window:` rule into the `## Deploy Configuration` block in `deploy.md`. This gate reads that rule and respects it. **When no rule is configured, there is no fixed window - the default is risk-adaptive:** a low-risk change just ships, while a change carrying risk signals (schema/migration, backfill, large diff) gets a quick confirm before it merges.
 
 The gates script does **not** interpret a window rule (matching a natural-language policy like "Mon–Thu after 1pm ET; freeze during the Dec holiday" against the clock is your job). It detects whether a rule exists, emits the current Eastern time as ground truth, classifies the change's risk (`RISK=low|elevated`), and lists the risk signals. Read the `GATE3_WINDOW:` line, the `RISK=` sub-line, and the `SIGNALS=` / `DIFFSTAT=` sub-lines from the block:
 
@@ -326,7 +326,7 @@ MERGE: <GO | BLOCK - gate(s) N, M>
 
 If `MERGE: BLOCK`, stop. Do not merge. Do not suggest workarounds that skip a gate.
 
-If `MERGE: GO`, squash-merge the PR into `main`. Use the `PR_NUMBER` from the gates block's `GATE2_HEALTH:` section rather than re-querying, and **pin the merge to the exact commit the gates evaluated** with `--match-head-commit` using the `GATE4_EVAL_HEAD:` SHA from the gates block. Between the gate pass and this command a new commit could be pushed to the PR branch; without the pin, `gh pr merge` would merge that newer, **unchecked** head. The flag makes GitHub refuse the merge if the head moved - re-run `/inc:merge-pr-5` if it does.
+If `MERGE: GO`, squash-merge the PR into `main`. Use the `PR_NUMBER` from the gates block's `GATE2_HEALTH:` section rather than re-querying, and **pin the merge to the exact commit the gates evaluated** with `--match-head-commit` using the `GATE4_EVAL_HEAD:` SHA from the gates block. Between the gate pass and this command a new commit could be pushed to the PR branch; without the pin, `gh pr merge` would merge that newer, **unchecked** head. The flag makes GitHub refuse the merge if the head moved - re-run `/inc-merge-pr` if it does.
 
 ```bash
 gh pr merge "$PR_NUMBER" --squash --delete-branch --match-head-commit "$GATE4_EVAL_HEAD"
@@ -344,7 +344,7 @@ If this returns the default branch (the one resolved during pre-flight), continu
 
 If `gh pr merge` fails, report the error verbatim, then branch on the cause:
 
-- **Merge conflicts** - hand off to the `git-merge-expert` skill to resolve conflicts (update the branch from `main`, resolve, push), then re-run `/inc:merge-pr-5`. Do not resolve conflicts in this skill.
+- **Merge conflicts** - hand off to the `git-merge-expert` skill to resolve conflicts (update the branch from `main`, resolve, push), then re-run `/inc-merge-pr`. Do not resolve conflicts in this skill.
 - **Required checks not green / branch protection / anything else** - stop. Do not retry, do not pass force flags.
 
 After a successful merge, run **Active Deploy Observation** below - do not declare the skill complete until observation has produced a result.
@@ -357,12 +357,12 @@ After `gh pr merge` returns success, watch the deploy through to a live healthy 
 
 ### Step 4a - Use the resolved deploy configuration
 
-Platform detection and the exact status/log commands were already resolved in **Pre-flight Step 0a** from the `## Deploy Configuration` block (`/inc:setup-deploy`). Do not re-detect here.
+Platform detection and the exact status/log commands were already resolved in **Pre-flight Step 0a** from the `## Deploy Configuration` block (`/inc-setup-deploy`). Do not re-detect here.
 
 - If pre-flight set `OBSERVATION_READY=1` → you already have `$PLATFORM`, the production URL, and the persisted **deploy-status**, **wait-for-Ready**, and **early-log-scan** commands. Use them verbatim in Steps 4b–4c. CLI auth doesn't change between pre-flight and post-merge, so no re-probe.
-- If pre-flight set `OBSERVATION_READY=skip` → **skip observation.** Print exactly `Observation: skipped - <reason>` (the reason recorded in pre-flight, e.g. "no deploy configuration; user declined /inc:setup-deploy", "vercel CLI not installed", "gcloud not authed"). Without a platform/health command there's nothing to auto-watch, so fall through to the "Still the user's" reminder in Step 4f and hand the dashboards to the user. Do not guess at commands.
+- If pre-flight set `OBSERVATION_READY=skip` → **skip observation.** Print exactly `Observation: skipped - <reason>` (the reason recorded in pre-flight, e.g. "no deploy configuration; user declined /inc-setup-deploy", "vercel CLI not installed", "gcloud not authed"). Without a platform/health command there's nothing to auto-watch, so fall through to the "Still the user's" reminder in Step 4f and hand the dashboards to the user. Do not guess at commands.
 
-If a needed detail (service name, region, site ID, deploy URL) isn't in the persisted block or obvious from config files, ask the user once before polling - or re-run `/inc:setup-deploy` to capture it.
+If a needed detail (service name, region, site ID, deploy URL) isn't in the persisted block or obvious from config files, ask the user once before polling - or re-run `/inc-setup-deploy` to capture it.
 
 ### Step 4b - Wait for the deployment to finish
 
@@ -370,7 +370,7 @@ Watch the deploy triggered by this merge until it reaches a terminal state. Iden
 
 **Use the `Monitor` tool, not a foreground or `run_in_background` Bash call.** A Bash tool call is capped at 10 minutes by the harness - too short for many deploys. The `Monitor` tool runs the poll script *outside* that cap (`timeout_ms` up to **3,600,000 = 60 min**, or `persistent: true` for no limit) and turns each stdout line into a heartbeat notification - so you get mid-run progress without spamming, and long builds run to completion. Run **one Monitor per deploy** (in the multi-deploy case: backend service + frontend apps from the same merge) so each lands independently and a slow one can't delay the others.
 
-Use the **wait-for-Ready** command persisted in the Deploy Configuration block as the probe (parse-safe, version-correct, verified by `/inc:setup-deploy`). The loop is platform-agnostic - it emits a heartbeat on state change or every ~90s, and exits the moment it has a terminal result:
+Use the **wait-for-Ready** command persisted in the Deploy Configuration block as the probe (parse-safe, version-correct, verified by `/inc-setup-deploy`). The loop is platform-agnostic - it emits a heartbeat on state change or every ~90s, and exits the moment it has a terminal result:
 
 ```bash
 # Run via Monitor(timeout_ms=900000, persistent=false) - 15 min; raise toward
@@ -403,7 +403,7 @@ Branch on the result:
 
 - `RESULT=ready` / `RESULT=failed` → the Outcomes below.
 - **Monitor hits `timeout_ms`** with no terminal line → not done yet. Re-arm with a longer window or hand off to manual monitoring. Do not declare success.
-- `RESULT=parse-error` / `RESULT=probe-error` → **stop watching that deploy** and run the probe once in the foreground to see the real output. **If it's an auth error** ("not logged in", "unauthorized", 401, token expired - auth can lapse mid-watch even though pre-flight passed), print the `Reauth` command from the Deploy Configuration block (or the platform default, e.g. `vercel login`) for the **user** to run themselves - never run `login` for them; suggest `! <command>` - and re-arm the watch once they confirm. Otherwise fix the Deploy Configuration command against the installed CLI (re-run `/inc:setup-deploy`), or fall back to the health-check URL (`curl -s -o /dev/null -w '%{http_code}'`) to at least confirm the app serves. Don't re-arm a probe you know is misparsing.
+- `RESULT=parse-error` / `RESULT=probe-error` → **stop watching that deploy** and run the probe once in the foreground to see the real output. **If it's an auth error** ("not logged in", "unauthorized", 401, token expired - auth can lapse mid-watch even though pre-flight passed), print the `Reauth` command from the Deploy Configuration block (or the platform default, e.g. `vercel login`) for the **user** to run themselves - never run `login` for them; suggest `! <command>` - and re-arm the watch once they confirm. Otherwise fix the Deploy Configuration command against the installed CLI (re-run `/inc-setup-deploy`), or fall back to the health-check URL (`curl -s -o /dev/null -w '%{http_code}'`) to at least confirm the app serves. Don't re-arm a probe you know is misparsing.
 
 If the persisted block instead gives a **blocking** command (`vercel inspect <url> --wait`, `gh run watch <id> --exit-status`), it produces no intermediate output - no heartbeats - so it only suits a fast deploy you don't need progress on. Run it under Monitor and set its own timeout to the full window (e.g. `--wait --timeout 15m`), not a sub-10-min value. Prefer the poll loop above when you want heartbeats.
 
@@ -441,11 +441,11 @@ If the persisted block instead gives a **blocking** command (`vercel inspect <ur
 
 This phase starts *after* the ✅ DEPLOY LIVE checkpoint from Step 4b.
 
-**First health check - run it before the log scan.** Run the persisted **Health check** command from the Deploy Configuration block once in the foreground. It is already a complete command that prints an HTTP status code (e.g. `curl -sf -o /dev/null -w '%{http_code}' <PROD_URL>`) - run it verbatim; do **not** wrap it in another `curl`. A 2xx/3xx is the **first-health-pass** signal: together with deploy Ready it confirms the app is live and serving, and callers key off it - `inc:ship-it` drops its INC BUILD REPORT the moment both land, while monitoring continues below it. A non-2xx/3xx here is treated exactly like a `🚨` outcome in Step 4f (surface it, one `PushNotification`, advise rollback) - and still continue observing; the Step 4f Monitor's first poll will re-report the same unhealthy state, which is the **same incident**, not a new one - don't send a second `PushNotification` for it. Record the result either way: it feeds the 4c outcomes, the 4d record, and ship-it's `Production:` line.
+**First health check - run it before the log scan.** Run the persisted **Health check** command from the Deploy Configuration block once in the foreground. It is already a complete command that prints an HTTP status code (e.g. `curl -sf -o /dev/null -w '%{http_code}' <PROD_URL>`) - run it verbatim; do **not** wrap it in another `curl`. A 2xx/3xx is the **first-health-pass** signal: together with deploy Ready it confirms the app is live and serving, and callers key off it - `inc-ship-it` drops its INC BUILD REPORT the moment both land, while monitoring continues below it. A non-2xx/3xx here is treated exactly like a `🚨` outcome in Step 4f (surface it, one `PushNotification`, advise rollback) - and still continue observing; the Step 4f Monitor's first poll will re-report the same unhealthy state, which is the **same incident**, not a new one - don't send a second `PushNotification` for it. Record the result either way: it feeds the 4c outcomes, the 4d record, and ship-it's `Production:` line.
 
-**Arm the 10-minute watch now.** Immediately after the first health check, arm the Step 4f Monitor as a background task (`run_in_background: true`, matching the plugin's other background Monitor usage - it must not block this step) and print its `👀` opening line - before the 3-min log scan below runs. The scan proceeds while the Monitor watches; this also keeps the `👀` line directly adjacent to the report a caller like `inc:ship-it` just dropped. If the Monitor cannot be armed (tool rejected or unavailable), never continue as though the watch is active - print `👀 Post-deploy watch: ⚠️ could not start - watch the platform dashboards yourself for the next 10 minutes` and rely on Step 4f's "Still the user's" handoff. Step 4f documents the watch's script and outcomes - only its arming moment lives here.
+**Arm the 10-minute watch now.** Immediately after the first health check, arm the Step 4f Monitor as a background task (`run_in_background: true`, matching the plugin's other background Monitor usage - it must not block this step) and print its `👀` opening line - before the 3-min log scan below runs. The scan proceeds while the Monitor watches; this also keeps the `👀` line directly adjacent to the report a caller like `inc-ship-it` just dropped. If the Monitor cannot be armed (tool rejected or unavailable), never continue as though the watch is active - print `👀 Post-deploy watch: ⚠️ could not start - watch the platform dashboards yourself for the next 10 minutes` and rely on Step 4f's "Still the user's" handoff. Step 4f documents the watch's script and outcomes - only its arming moment lives here.
 
-The app is up; we are now watching for early-burn errors in its first 3 minutes of real traffic. This is a **first-pass smoke check**, not a substitute for real monitoring. Run the **early-log-scan** command persisted in the Deploy Configuration block (`/inc:setup-deploy` records the correct, version-correct log command per platform), then scan its output for error signals.
+The app is up; we are now watching for early-burn errors in its first 3 minutes of real traffic. This is a **first-pass smoke check**, not a substitute for real monitoring. Run the **early-log-scan** command persisted in the Deploy Configuration block (`/inc-setup-deploy` records the correct, version-correct log command per platform), then scan its output for error signals.
 
 Pipe through `grep -E` for:
 
@@ -544,7 +544,7 @@ done
 echo "✅ POSTDEPLOY_CLEAN - 10 min elapsed, no health failures or new error logs"; rm -f "$SEEN"
 ```
 
-The error-log command **must be bounded and non-streaming** (e.g. `vercel logs … --limit N`, never `--follow` / `tail -f`): the baseline scan runs synchronously before the first health poll, so a command that blocks waiting for more output would hang the entire 10-minute watch before it ever checks health. The commands `/inc:setup-deploy` persists are already bounded. If the platform has no clean machine-readable error-log command (e.g. Railway's text logs), drop the log block and run the health poll alone - health going non-200 is the highest-signal check regardless.
+The error-log command **must be bounded and non-streaming** (e.g. `vercel logs … --limit N`, never `--follow` / `tail -f`): the baseline scan runs synchronously before the first health poll, so a command that blocks waiting for more output would hang the entire 10-minute watch before it ever checks health. The commands `/inc-setup-deploy` persists are already bounded. If the platform has no clean machine-readable error-log command (e.g. Railway's text logs), drop the log block and run the health poll alone - health going non-200 is the highest-signal check regardless.
 
 Outcomes (each rendered as a `👀` line so it visually pairs with the opening watch line):
 - **A `🚨` line lands** → surface it immediately as `👀 Post-deploy watch: 🚨 ISSUE at <Nm>/10 min - <health code | error signal>`, send a `PushNotification` (`Post-deploy alert: <health code | error signal>`), and tell the user: "App went red in the post-deploy window - roll back rather than debug live." The skill does **not** auto-rollback.
@@ -558,7 +558,7 @@ Outcomes (each rendered as a `👀` line so it visually pairs with the opening w
 ## What This Skill Does NOT Do
 
 - Does not run the deploy. Merging the PR triggers whatever pipeline is wired to the target branch.
-- Does not detect the platform or carry per-platform commands. That knowledge lives in `/inc:setup-deploy`, which persists it to the `## Deploy Configuration` block in `deploy.md` (pointer in `CLAUDE.md`) that this skill reads. If that block is missing, pre-flight prompts to run `/inc:setup-deploy`.
+- Does not detect the platform or carry per-platform commands. That knowledge lives in `/inc-setup-deploy`, which persists it to the `## Deploy Configuration` block in `deploy.md` (pointer in `CLAUDE.md`) that this skill reads. If that block is missing, pre-flight prompts to run `/inc-setup-deploy`.
 - Does not resolve review threads on the user's behalf. Reviewer comments (human or AI) must be addressed before the skill will let the PR merge.
 - Does not replace code review or CI. Assume those already passed.
 - Does not force-merge. If branch protection, required checks, or conflicts block `gh pr merge`, the skill surfaces the error and stops.

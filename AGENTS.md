@@ -1,5 +1,5 @@
 
-Deploy config: see deploy.md (managed by /inc:setup-deploy).
+Deploy config: see deploy.md (managed by /inc-setup-deploy).
 
 Distribution and host limits: see README.md and notes/multi-host-distribution.md.
 Keep `skills/` root-native; edit shared metadata in `plugin.json`, then run `npm run manifests:sync` and refresh the package lock.

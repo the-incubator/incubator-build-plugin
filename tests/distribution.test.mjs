@@ -58,21 +58,21 @@ test("Pi registers exactly the installed root corpus for startup and reload", as
 test("OpenCode registers all visible commands, preserves configuration, and is idempotent", async () => {
   const plugin = await openCodePlugin();
   const custom = { template: "My guide command" };
-  const config = { skills: { paths: ["/my/skills"], urls: ["https://example.com/skills"] }, command: { "inc:guide": custom, custom: { template: "Keep me" } } };
+  const config = { skills: { paths: ["/my/skills"], urls: ["https://example.com/skills"] }, command: { "inc-guide": custom, custom: { template: "Keep me" } } };
   await plugin.config(config);
   await plugin.config(config);
   assert.deepEqual(config.skills.paths, ["/my/skills", join(root, "skills/")]);
   assert.deepEqual(config.skills.urls, ["https://example.com/skills"]);
-  assert.equal(config.command["inc:guide"], custom);
+  assert.equal(config.command["inc-guide"], custom);
   assert.equal(config.command.custom.template, "Keep me");
-  for (const skill of skills.filter((s) => s["user-invocable"] !== false && s.name !== "inc:guide")) {
+  for (const skill of skills.filter((s) => s["user-invocable"] !== false && s.name !== "inc-guide")) {
     assert.ok(config.command[skill.name].template.includes(JSON.stringify(join(root, skill.path))));
     assert.ok(config.command[skill.name].template.endsWith("$ARGUMENTS"));
     assert.equal(config.command[skill.name].description, skill.description);
   }
   const empty = {};
   await plugin.config(empty);
-  assert.ok(empty.command["inc:review-and-pr"]);
+  assert.ok(empty.command["inc-review-and-pr"]);
 });
 
 test("installed adapters resolve package resources independently of cwd and spaces", async (t) => {
@@ -94,7 +94,7 @@ test("installed adapters resolve package resources independently of cwd and spac
   const config = {};
   await (await relocatedOpenCode()).config(config);
   assert.deepEqual(config.skills.paths, [join(unpacked, "skills/")]);
-  assert.ok(config.command["inc:guide"].template.includes(join(unpacked, "skills", "inc-guide", "SKILL.md")));
+  assert.ok(config.command["inc-guide"].template.includes(join(unpacked, "skills", "inc-guide", "SKILL.md")));
 });
 
 test("skill links, composition map, and referenced persona assets exist at install root", () => {
@@ -134,7 +134,7 @@ test("closeout composition retains fail-closed gates and explicit inline handoff
   const review = read("skills/inc-review-and-pr/SKILL.md");
   assert.ok(review.includes("ASK_USER=ERROR"));
   assert.ok(review.includes('**`ASK_USER` > 0 → STOP.**'));
-  assert.ok(review.includes("Do **not** run `inc:merge-pr-5`"));
+  assert.ok(review.includes("Do **not** run `inc-merge-pr`"));
   assert.ok(review.includes("../inc-commit-push-pr/SKILL.md"));
   assert.ok(read("skills/inc-commit-push-pr/SKILL.md").includes("with the explicit `--auto` argument"));
 });

@@ -1,5 +1,5 @@
 // The picker and this gate share the skill's frontmatter as their source of truth.
-// Keep the historical directory/tool alias here, not in transcript adapters.
+// Keep the historical name aliases here, not in transcript adapters.
 import { readFileSync } from "node:fs";
 
 // The gate reads only the canonical simple frontmatter form: a plain unquoted
@@ -21,13 +21,15 @@ export function prWorkflowSkill(source) {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
   const name = parseSkillName(frontmatter);
   if (!name) throw new Error("PR workflow skill frontmatter name is unreadable");
-  const legacyAlias = "inc-commit-push-pr";
+  // Colon-era names from releases before 0.23.0. Transcripts and hosts that
+  // activated the skill under those names must still satisfy the gate.
+  const legacyAliases = ["inc:commit-push-pr-4", "inc:commit-push-pr"];
   return {
     name,
     matches(value) {
       if (typeof value !== "string") return false;
       // Preserve Claude's existing plugin-qualified legacy-name recognition.
-      return [name, legacyAlias].some((alias) => value === alias || value.endsWith(`:${alias}`));
+      return [name, ...legacyAliases].some((alias) => value === alias || value.endsWith(`:${alias}`));
     },
   };
 }

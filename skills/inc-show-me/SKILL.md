@@ -1,5 +1,5 @@
 ---
-name: inc:show-me
+name: inc-show-me
 description: Always produce and open one focused HTML report that explains the current topic visually — ordered intent-first (plain-language what/why at the top, mechanics below) and composing pseudocode, call trees, component trees, file trees, numbered Mermaid diagrams, diffs, and code blocks as the content rendered inside the page.
 ---
 
@@ -8,7 +8,7 @@ Help the user understand the current topic of conversation visually. Every invoc
 ## Every invocation
 
 1. **Answer briefly in chat.** One or two plain-text sentences that state the key point, then the path/link to the report. The depth lives in the page — do not paste a wall of prose, diagrams, or long code into the chat.
-2. **Build one HTML file and open it.** Write it to a temp location so you never dirty the working copy — the repo convention is a `/tmp` directory (see `inc:visual-plan`); a `mktemp -d` directory is fine. Keep the `show-me-{description}.html` naming. Tell the user where it is written.
+2. **Build one HTML file and open it.** Write it to a temp location so you never dirty the working copy — the repo convention is a `/tmp` directory (see `inc-visual-plan`); a `mktemp -d` directory is fine. Keep the `show-me-{description}.html` naming. Tell the user where it is written.
 3. **Open it** in the harness's own in-app/preview browser when it has one, otherwise the OS default browser:
 
 ```
@@ -40,7 +40,7 @@ Concrete worked example — the diagram and the list share one numbering:
 sequenceDiagram
     autonumber
     participant You
-    participant Skill as /inc:show-me
+    participant Skill as /inc-show-me
     participant Page as HTML report
     You->>Skill: ask to see how something works
     Skill->>Skill: pick the smallest set of shapes
@@ -50,7 +50,7 @@ sequenceDiagram
 </pre>
 <ol>
   <li><strong>You ask to understand something.</strong>
-      The user invokes <code>/inc:show-me</code> on the current topic.</li>
+      The user invokes <code>/inc-show-me</code> on the current topic.</li>
   <li><strong>Keep only what answers the question.</strong>
       The skill selects the few shapes that make the point — no padding.</li>
   <li><strong>Everything lands in one page.</strong>

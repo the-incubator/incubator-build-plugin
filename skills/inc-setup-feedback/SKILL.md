@@ -1,6 +1,6 @@
 ---
-name: inc:setup-feedback
-description: Use when the user wants to wire or refresh the incubator preview-feedback client in an app so external reviewers can annotate a deployed preview and the feedback lands in the incubator app. Triggers on "setup feedback", "set up the feedback tool", "install the preview feedback client", "update the preview feedback client", "wire up preview feedback", "add the review annotation tool", "mint a feedback token", or "/inc:setup-feedback". Safely refreshes clean existing installs, mints a scoped feedback token for new installs, mounts <PreviewFeedbackMount /> at the app root, keeps the enable flag off locally, verifies the 8-minute recording safety contract, and confirms the app still builds.
+name: inc-setup-feedback
+description: Use when the user wants to wire or refresh the incubator preview-feedback client in an app so external reviewers can annotate a deployed preview and the feedback lands in the incubator app. Triggers on "setup feedback", "set up the feedback tool", "install the preview feedback client", "update the preview feedback client", "wire up preview feedback", "add the review annotation tool", "mint a feedback token", or "/inc-setup-feedback". Safely refreshes clean existing installs, mints a scoped feedback token for new installs, mounts <PreviewFeedbackMount /> at the app root, keeps the enable flag off locally, verifies the 8-minute recording safety contract, and confirms the app still builds.
 allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(node *), Bash(curl *), Bash(jq *), Bash(cat *), Bash(ls *), Bash(test *), Bash(pnpm *), Bash(npm *), Bash(yarn *), Bash(mktemp *), Bash(grep *), Bash(head *), Bash(tail *), Bash(echo *), Bash(set *), Bash(cp *), Bash(cmp *), Bash(rm *), Bash(find *), Bash(dirname *), Bash(git status *), Bash(git check-ignore *), Bash(git ls-files *), Bash(git grep *)
 argument-hint: "[optional: project slug, e.g. 'my-app-preview']"
 ---
@@ -33,8 +33,8 @@ It is low-privilege, but still treat it like a secret in the session: mint and i
 
 ## User-invocable
 
-When the user types `/inc:setup-feedback`, run this skill.
-An optional argument is the project slug (e.g. `/inc:setup-feedback my-app-preview`) — use it to skip the slug prompt.
+When the user types `/inc-setup-feedback`, run this skill.
+An optional argument is the project slug (e.g. `/inc-setup-feedback my-app-preview`) — use it to skip the slug prompt.
 
 ## Step 1 — Preflight the target app
 

@@ -1,5 +1,5 @@
 ---
-name: inc:plan-1
+name: inc-plan
 description: Create a reviewable implementation plan before any edits. In Claude Code, enters plan mode; in Codex or other agents, presents the plan and waits for approval. Use when the user says "plan this", "plan the implementation", "how should we build X", or wants an alignment step before coding.
 argument-hint: "[task description, or blank to plan the current conversation's task]"
 disable-model-invocation: false
@@ -25,7 +25,7 @@ BEHIND=$(printf '%s\n' "$OUT" | sed -n 's/^BEHIND=//p')
 
 If `$BEHIND` is > 0 **and** `$REF` is not the default branch, surface it to the user in one line before entering plan mode:
 
-> Heads up: this branch is **$BEHIND commits behind `$DEFAULT`**. Run `/inc:update-code` first if you want the plan to reflect the latest `$DEFAULT`.
+> Heads up: this branch is **$BEHIND commits behind `$DEFAULT`**. Run `/inc-update-code` first if you want the plan to reflect the latest `$DEFAULT`.
 
 Do not block, prompt, or update on the user's behalf — they may intentionally be planning against their current base. Skip this notice silently when the branch is up to date, on the default branch, or not in a git repo.
 

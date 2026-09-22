@@ -12,26 +12,26 @@ Adapters and bundled Node scripts require Node.js 20.11+; workflow-specific tool
 
 | Host | Install | Invoke / smoke check |
 | --- | --- | --- |
-| Claude Code | `/plugin marketplace add the-incubator/incubator-build-plugin`, then `/plugin install incubator-build@incubator` | `/inc:guide` |
-| Codex app | Plugins → Create menu → Add marketplace: source `the-incubator/incubator-build-plugin`, Git ref `main`, sparse paths blank; install **Incubator Build** | Restart, then `$inc:guide` |
-| Codex CLI | `codex plugin marketplace add the-incubator/incubator-build-plugin --ref main`, then `codex plugin add incubator-build@incubator` | `$inc:guide`; see detailed onboarding below |
-| Cursor | Link a retained checkout using `node /absolute/path/to/incubator-build-plugin/scripts/install-skills.mjs cursor --project` from the target project | Start a new chat, select `inc:guide` in `/` skills, or ask to read its installed `SKILL.md` |
-| Pi | `pi install git:github.com/the-incubator/incubator-build-plugin` | `/reload`, then `/skill:inc:guide` |
-| oh-my-pi (OMP) | `omp plugin marketplace add the-incubator/incubator-build-plugin`, then `omp plugin install incubator-build@incubator` | `/reload-plugins`, then `/skill:inc:guide` |
-| Kimi Code CLI | `/plugins install https://github.com/the-incubator/incubator-build-plugin` | `/reload`, then ask to use `inc:guide` |
-| Grok Build CLI | `grok plugin install the-incubator/incubator-build-plugin` | Restart; ask to use `inc:guide` |
+| Claude Code | `/plugin marketplace add the-incubator/incubator-build-plugin`, then `/plugin install incubator-build@incubator` | `/inc-guide` |
+| Codex app | Plugins → Create menu → Add marketplace: source `the-incubator/incubator-build-plugin`, Git ref `main`, sparse paths blank; install **Incubator Build** | Restart, then `$inc-guide` |
+| Codex CLI | `codex plugin marketplace add the-incubator/incubator-build-plugin --ref main`, then `codex plugin add incubator-build@incubator` | `$inc-guide`; see detailed onboarding below |
+| Cursor | Link a retained checkout using `node /absolute/path/to/incubator-build-plugin/scripts/install-skills.mjs cursor --project` from the target project | Start a new chat, select `inc-guide` in `/` skills, or ask to read its installed `SKILL.md` |
+| Pi | `pi install git:github.com/the-incubator/incubator-build-plugin` | `/reload`, then `/skill:inc-guide` |
+| oh-my-pi (OMP) | `omp plugin marketplace add the-incubator/incubator-build-plugin`, then `omp plugin install incubator-build@incubator` | `/reload-plugins`, then `/skill:inc-guide` |
+| Kimi Code CLI | `/plugins install https://github.com/the-incubator/incubator-build-plugin` | `/reload`, then ask to use `inc-guide` |
+| Grok Build CLI | `grok plugin install the-incubator/incubator-build-plugin` | Restart; ask to use `inc-guide` |
 | Devin CLI | `devin plugins install the-incubator/incubator-build-plugin` | `devin plugins info incubator-build`; select the guide under `/incubator-build:` |
-| OpenCode | Add `"incubator-build-plugin@git+https://github.com/the-incubator/incubator-build-plugin.git"` to `opencode.json`'s `plugin` array | Restart, then `/inc:guide` |
-| Cline | Enable **Settings → Features → Enable Skills**; run `node /absolute/path/to/incubator-build-plugin/scripts/install-skills.mjs cline --project` | New task: ask to use `inc:guide` |
-| VS Code Copilot | `Chat: Install Plugin from Source` → `the-incubator/incubator-build-plugin` → `incubator-build` | New chat: ask to use `inc:guide` |
-| Copilot CLI | `copilot plugin marketplace add the-incubator/incubator-build-plugin`, then `copilot plugin install incubator-build@incubator` | New session: ask to use `inc:guide` |
-| Factory Droid | `droid plugin marketplace add https://github.com/the-incubator/incubator-build-plugin`, then `droid plugin install incubator-build@incubator` | New session: ask to use `inc:guide` |
-| Qwen Code | `qwen extensions install the-incubator/incubator-build-plugin:incubator-build` | New session: ask to use `inc:guide` |
-| Antigravity CLI | `agy plugin install https://github.com/the-incubator/incubator-build-plugin` | `agy plugin list`; ask to use `inc:guide` |
+| OpenCode | Add `"incubator-build-plugin@git+https://github.com/the-incubator/incubator-build-plugin.git"` to `opencode.json`'s `plugin` array | Restart, then `/inc-guide` |
+| Cline | Enable **Settings → Features → Enable Skills**; run `node /absolute/path/to/incubator-build-plugin/scripts/install-skills.mjs cline --project` | New task: ask to use `inc-guide` |
+| VS Code Copilot | `Chat: Install Plugin from Source` → `the-incubator/incubator-build-plugin` → `incubator-build` | New chat: ask to use `inc-guide` |
+| Copilot CLI | `copilot plugin marketplace add the-incubator/incubator-build-plugin`, then `copilot plugin install incubator-build@incubator` | New session: ask to use `inc-guide` |
+| Factory Droid | `droid plugin marketplace add https://github.com/the-incubator/incubator-build-plugin`, then `droid plugin install incubator-build@incubator` | New session: ask to use `inc-guide` |
+| Qwen Code | `qwen extensions install the-incubator/incubator-build-plugin:incubator-build` | New session: ask to use `inc-guide` |
+| Antigravity CLI | `agy plugin install https://github.com/the-incubator/incubator-build-plugin` | `agy plugin list`; ask to use `inc-guide` |
 
 The added native manifests are schema/path-validated, not a claim of an end-to-end runtime test on every host.
 Existing Claude/Codex hook runtime evidence is linked below; new-host smoke evidence and limitations are in [distribution notes](notes/multi-host-distribution.md).
-Host naming rules differ: legacy `inc:*` names are intentionally preserved, and some strict loaders may reject the colon or a name/directory mismatch.
+Skill names use a dash prefix (`inc-guide`) and match their directory names, so every host picker shows the same name; colon-era `inc:*` names from releases before 0.23.0 remain recognized by the PR gate as legacy aliases.
 If a picker does not expose a skill, ask the agent to read and follow `<install-root>/skills/inc-guide/SKILL.md` explicitly rather than guessing slash syntax.
 That fallback loads the workflow, not hook activation evidence.
 
@@ -61,8 +61,8 @@ See [OpenCode](.opencode/INSTALL.md), [Cline](.cline/INSTALL.md), and [Antigravi
 
 ### Workflow and host boundaries
 
-- `inc:review-and-pr` reviews, commits, opens/refreshes, watches, and resolves feedback, then **stops before merge**.
-  `inc:ship-it` additionally runs merge/deploy gates and should only be invoked when merging is intended.
+- `inc-review-and-pr` reviews, commits, opens/refreshes, watches, and resolves feedback, then **stops before merge**.
+  `inc-ship-it` additionally runs merge/deploy gates and should only be invoked when merging is intended.
 - Cursor/Pi and other hosts without a nested Skill tool read and follow linked sibling `SKILL.md` files inline.
   Every child gate, confirmation, stop condition, and explicit argument remains binding.
   See [composition rules](skills/inc-guide/references/host-compatibility.md).
@@ -74,10 +74,10 @@ See [OpenCode](.opencode/INSTALL.md), [Cline](.cline/INSTALL.md), and [Antigravi
   If a compatibility host imports `hooks/hooks.json`, leave unsupported hooks disabled using that host's controls, or use a skills-only discovery path instead.
   Do not treat content installation as gate parity.
 - Codex's existing PR gate recognizes host-written selected-skill activation, not arbitrary file reads.
-  A file-based closeout may require directly invoking `$inc:commit-push-pr-4` on Codex; if denied, stop and report the gap.
+  A file-based closeout may require directly invoking `$inc-commit-push-pr` on Codex; if denied, stop and report the gap.
   A full Codex closeout/gate rewrite and per-host hook parity are follow-ups, not part of this distribution.
-- `inc:setup-claude-status-line` intentionally configures Claude only.
-  `inc:worktree`'s automatic WorktreeCreate setup is Claude-specific; its status/prune script is portable.
+- `inc-setup-claude-status-line` intentionally configures Claude only.
+  `inc-worktree`'s automatic WorktreeCreate setup is Claude-specific; its status/prune script is portable.
   Service-backed skills still require their actual credentials and tools.
 
 ## Install on Codex
@@ -179,7 +179,7 @@ npm run smoke:pi
 `npm test` validates skill metadata/links, generated manifest parity, install-root paths, packaged resource declarations, adapter discovery, link-install safety, composition/persona references, and the existing hook suite.
 After installation, load only the read-only guide first and verify it resolves its sibling and persona files from the installed corpus while the current directory is an unrelated project.
 Do not use a ship or merge workflow as an installation smoke test.
-For a later authorized closeout test, use a disposable branch and confirm a missing review artifact or required subagent stops the chain; `inc:review-and-pr` must never invoke merge.
+For a later authorized closeout test, use a disposable branch and confirm a missing review artifact or required subagent stops the chain; `inc-review-and-pr` must never invoke merge.
 
 Shared release metadata lives in `plugin.json`; after changing it, run `npm run manifests:sync` and `npm install --package-lock-only`.
 The check rejects drift across host manifests, package version, and OMP's versioned catalog.

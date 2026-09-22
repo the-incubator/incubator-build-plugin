@@ -1,5 +1,5 @@
 ---
-name: inc:review-feedback
+name: inc-review-feedback
 description: Review product feedback — pull a submission from the incubator collector (feedback left via the preview annotation tool) or analyze a local recording, transcribed LOCALLY with whisper.cpp (no API key, no per-clip cost, audio never leaves the machine). ALWAYS load when the user asks to review/pull/find feedback a reviewer submitted, passes an incubator feedback link (`.../f/<sessionId>`), names a reviewer ("get nick's feedback"), asks for the latest preview feedback on the current branch/project, posts a `riffrec-*.zip`, an `ibf-mobile-*.zip` (mobile DOM-recording bundle with `rrweb-events.json`), or a bundle with `session.json` + `events.json` + `recording.webm` + `voice.webm`, posts a video/audio recording for product feedback, or asks how to capture and share sessions. Routes between setup, quick bug report, and extensive analysis.
 argument-hint: "[a feedback link (.../f/<id>) / reviewer name / \"branch\", or a path to a riffrec-*.zip, video, audio, or notes file]"
 ---
@@ -64,7 +64,7 @@ Route to the matching reference based on the input. Read only that reference; do
 
 - **Setup** — user has no recording yet and asks how to install Riffrec, capture a session, or share feedback. Read `references/install-riffrec.md`.
 - **Quick bug report** — input is a short recording (under ~60 seconds), the user describes a single specific issue, or asks for "quick", "small", or "just transcribe". Read `references/quick-bug-report.md`. Emit one concise bug report; skip the full artifact set and the planning handoff.
-- **Extensive analysis** — input is a longer recording, contains multiple issues / requirements / workflow walkthroughs, or the user wants requirements or planning material. Read `references/extensive-analysis.md`. After synthesis, every item is triaged into one of six buckets - `change` / `try` / `discuss` / `respond` / `blocked` / `defer` (see `references/feedback-triage.md`) - and the user approves the table before anything executes. Always continue into the `inc:plan` skill.
+- **Extensive analysis** — input is a longer recording, contains multiple issues / requirements / workflow walkthroughs, or the user wants requirements or planning material. Read `references/extensive-analysis.md`. After synthesis, every item is triaged into one of six buckets - `change` / `try` / `discuss` / `respond` / `blocked` / `defer` (see `references/feedback-triage.md`) - and the user approves the table before anything executes. Always continue into the `inc-plan` skill.
 
 When the input is ambiguous (e.g., a zip arrived without context), inspect the recording length and event count before choosing. If still unclear, ask the user which path applies before running anything heavy.
 

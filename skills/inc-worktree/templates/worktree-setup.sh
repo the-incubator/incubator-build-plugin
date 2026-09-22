@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Worktree infrastructure for this repo. Installed by /inc:worktree (incubator-build).
+# Worktree infrastructure for this repo. Installed by /inc-worktree (incubator-build).
 # Self-contained on purpose: collaborators without the plugin get the same behavior.
 #
 # Two modes:

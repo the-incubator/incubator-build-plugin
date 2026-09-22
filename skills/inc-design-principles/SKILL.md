@@ -1,6 +1,6 @@
 ---
-name: inc:design-principles
-description: Design principles to apply before designing, prototyping, building, or reviewing any visual web or mobile interface. Covers page layout (shared gutters, max-width, edge-bleed carousels), empty states, mobile responsiveness, subtraction and not overexplaining, AI tells, pushing past safe default design, and a critique loop. Use when the user says "design principles", "/inc:design-principles", asks to build or polish UI, or wants a design reviewed.
+name: inc-design-principles
+description: Design principles to apply before designing, prototyping, building, or reviewing any visual web or mobile interface. Covers page layout (shared gutters, max-width, edge-bleed carousels), empty states, mobile responsiveness, subtraction and not overexplaining, AI tells, pushing past safe default design, and a critique loop. Use when the user says "design principles", "/inc-design-principles", asks to build or polish UI, or wants a design reviewed.
 ---
 
 # Design principles

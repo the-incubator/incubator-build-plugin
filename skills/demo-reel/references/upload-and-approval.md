@@ -4,7 +4,7 @@ Upload a temporary preview for the user to review, then deliver the approved evi
 
 **Two delivery modes.** The caller chooses where the evidence ultimately lives (see the "Delivery mode" argument in `SKILL.md`):
 
-- **`github-attachment`** — the caller (e.g. `inc:commit-push-pr-4`) will upload the file into the PR body itself via `gh --attach` (GitHub CLI **2.99.0+**). The **permanent** evidence involves no third-party host — it lives on GitHub as a `user-attachments` asset. demo-reel returns the **local artifact path(s)** and leaves the files in place for the caller to attach.
+- **`github-attachment`** — the caller (e.g. `inc-commit-push-pr`) will upload the file into the PR body itself via `gh --attach` (GitHub CLI **2.99.0+**). The **permanent** evidence involves no third-party host — it lives on GitHub as a `user-attachments` asset. demo-reel returns the **local artifact path(s)** and leaves the files in place for the caller to attach.
 - **`hosted`** (default) — demo-reel promotes the approved file to a permanent public host (catbox) and returns that URL. This is the behavior for callers that cannot attach to a PR body.
 
 The preview upload and approval gate below are identical for both modes — they happen before any PR exists and are the right review step regardless of final destination.

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Code Review Findings",
-  "description": "Output schema for the inc:review single-agent pass. The findings.json artifact is a JSON array of finding objects.",
+  "description": "Output schema for the inc-review single-agent pass. The findings.json artifact is a JSON array of finding objects.",
   "type": "array",
   "items": {
     "type": "object",

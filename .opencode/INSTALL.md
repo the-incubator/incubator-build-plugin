@@ -13,6 +13,6 @@ For local development, point the plugin array at the absolute file URL of `.open
 Restart OpenCode after configuration changes.
 The package entry point adds root `skills/` to discovery and exposes commands using the actual frontmatter names, preserving any existing same-name commands.
 It never installs hooks or custom agents.
-Read-only smoke: `/inc:guide`, then confirm bundled references resolve from this installation rather than the current project.
+Read-only smoke: `/inc-guide`, then confirm bundled references resolve from this installation rather than the current project.
 Remove only this plugin array entry and restart to uninstall.
 See the [host matrix and limitations](../README.md).

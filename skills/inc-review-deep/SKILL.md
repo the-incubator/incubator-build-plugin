@@ -1,5 +1,5 @@
 ---
-name: inc:review-deep-3b
+name: inc-review-deep
 description: "Structured code review using tiered persona agents, confidence-gated findings, and a merge/dedup pipeline. Use when reviewing code changes before creating a PR."
 argument-hint: "[blank to review current branch, or provide PR link]"
 ---
@@ -664,7 +664,7 @@ Runs in default (interactive), autofix, and headless modes. **Report-only mode s
 ### Step 4: Emit artifacts and downstream handoff
 
 - In interactive, autofix, and headless modes, write a per-run artifact under `.context/incubator/inc-review/<run-id>/` containing:
-  - synthesized findings (merged output from Stage 5) — written as `findings.json`, a JSON array where each object carries at least `autofix_class`, `severity`, `file`, `line`, `title` (plus `why_it_matters` and optional `suggested_fix`). This is the gate signal downstream skills (e.g. `inc:review-and-pr`) read to count `ask_user` findings — the filename is load-bearing, not freeform.
+  - synthesized findings (merged output from Stage 5) — written as `findings.json`, a JSON array where each object carries at least `autofix_class`, `severity`, `file`, `line`, `title` (plus `why_it_matters` and optional `suggested_fix`). This is the gate signal downstream skills (e.g. `inc-review-and-pr`) read to count `ask_user` findings — the filename is load-bearing, not freeform.
   - applied fixes
   - the `ask_user` (your-call) set
   - informational outputs

@@ -1,13 +1,13 @@
 ---
-name: inc:setup-deploy
-description: Use when the user wants to configure deployment so inc:merge-pr-5 / inc:ship-it can observe deploys automatically. Triggers on "setup deploy", "configure deployment", "set up deploy config", "how does merge-pr watch my deploy", "fix the deploy monitor", "set deploy window", "deployment window rules", or "/inc:setup-deploy". Detects the deploy platform (Vercel, Netlify, Fly.io, Railway, Render, Google Cloud Run, GitHub Actions, custom), resolves the production URL and a parse-safe deploy-status command, captures any deploy-window rules (when to allow merges/deploys; default is none = deploy anytime), and writes a Deploy Configuration block to deploy.md (with a one-line pointer in CLAUDE.md) that the merge/ship skills read.
+name: inc-setup-deploy
+description: Use when the user wants to configure deployment so inc-merge-pr / inc-ship-it can observe deploys automatically. Triggers on "setup deploy", "configure deployment", "set up deploy config", "how does merge-pr watch my deploy", "fix the deploy monitor", "set deploy window", "deployment window rules", or "/inc-setup-deploy". Detects the deploy platform (Vercel, Netlify, Fly.io, Railway, Render, Google Cloud Run, GitHub Actions, custom), resolves the production URL and a parse-safe deploy-status command, captures any deploy-window rules (when to allow merges/deploys; default is none = deploy anytime), and writes a Deploy Configuration block to deploy.md (with a one-line pointer in CLAUDE.md) that the merge/ship skills read.
 allowed-tools: Read, Write, Edit, Grep, Glob, AskUserQuestion, Bash(vercel *), Bash(netlify *), Bash(fly *), Bash(flyctl *), Bash(railway *), Bash(gcloud *), Bash(gh *), Bash(jq *), Bash(curl *), Bash(grep *), Bash(cat *), Bash(which *), Bash(test *)
 argument-hint: "[optional: platform name to skip detection, e.g. 'vercel']"
 ---
 
-# Setup Deploy — Persist Deploy Configuration for inc:merge-pr-5
+# Setup Deploy — Persist Deploy Configuration for inc-merge-pr
 
-Configure deployment once so `inc:merge-pr-5` (and `inc:ship-it`) can **observe the deploy
+Configure deployment once so `inc-merge-pr` (and `inc-ship-it`) can **observe the deploy
 automatically** after a merge — wait for Ready, scan early logs — without re-detecting the
 platform or guessing brittle status commands every time.
 
@@ -23,8 +23,8 @@ observation is deterministic. Getting the Vercel commands right is the headline 
 
 ## User-invocable
 
-When the user types `/inc:setup-deploy`, run this skill. An optional argument names the platform
-directly (e.g. `/inc:setup-deploy vercel`) — use it to skip detection.
+When the user types `/inc-setup-deploy`, run this skill. An optional argument names the platform
+directly (e.g. `/inc-setup-deploy vercel`) — use it to skip detection.
 
 ## Step 1 — Check existing configuration
 
@@ -105,7 +105,7 @@ runs it inside this session, so the auth lands here), then ask (AskUserQuestion)
 | GitHub Actions | `brew install gh` | `gh auth login` |
 
 Persist the platform's login command as the `Reauth` line in the Deploy Configuration block
-(Step 4) — that's what `inc:merge-pr-5` prints if auth has lapsed by ship time.
+(Step 4) — that's what `inc-merge-pr` prints if auth has lapsed by ship time.
 
 ### Vercel (get this one right)
 
@@ -149,7 +149,7 @@ Steps:
    `aliases[0]` is usually the cleanest domain (e.g. `tenfold-www.vercel.app`). If the project uses
    a custom domain, that may not appear here — **ask the user to confirm the production URL.**
 
-4. Persist these exact commands (they are what `inc:merge-pr-5` will run):
+4. Persist these exact commands (they are what `inc-merge-pr` will run):
    - **Newest prod deploy state** (for "is a new deploy in flight / done"):
      `vercel list --environment production --format json | jq -r 'if type=="array" then . else .deployments end | .[0].state'`
    - **Wait for a specific deploy to finish.** Preferred for the consumer is the **poll** form, because it emits per-tick state the merge skill turns into heartbeats:
@@ -201,13 +201,13 @@ check / CLI command / GH Actions status / just-load-the-URL). Persist whatever t
 ## Step 3.5 - Deploy window rules (when may deploys go out?)
 
 Some teams restrict *when* a merge that triggers a production deploy is allowed - e.g. only during
-staffed hours so someone can respond if it breaks, or a freeze over a holiday. `inc:merge-pr-5`
+staffed hours so someone can respond if it breaks, or a freeze over a holiday. `inc-merge-pr`
 reads the rule you persist here and evaluates it against the current time before merging.
 
 Ask the user (AskUserQuestion) - **the default is no fixed window**:
 
 - A) **No deploy-window rules** *(default, recommended)* → persist `Deploy window: none`. This does **not**
-  mean "never check" - with no window rule, `inc:merge-pr-5` still does a lightweight risk assessment and
+  mean "never check" - with no window rule, `inc-merge-pr` still does a lightweight risk assessment and
   prompts a quick confirm on a riskier change (schema/migration, backfill, large diff); low-risk changes
   just ship.
 - B) **Yes, there's a time window** → capture the rule in the user's own words as a single concise line,
@@ -229,7 +229,7 @@ Configuration` section or append this at the end. Keep commands **copy-paste run
 merge/ship skills execute them verbatim. Use a fenced block per command so nothing gets reflowed.
 
 ```markdown
-## Deploy Configuration (managed by /inc:setup-deploy)
+## Deploy Configuration (managed by /inc-setup-deploy)
 
 - Platform: <vercel | netlify | fly | railway | render | gcloud-run | github-actions | custom>
 - Production branch: <main>
@@ -268,7 +268,7 @@ exists so any agent can find the config without deploy.md being pre-loaded. If a
 `## Deploy Configuration` block is already there, replace it with this single line; otherwise append:
 
 ```markdown
-Deploy config: see deploy.md (managed by /inc:setup-deploy).
+Deploy config: see deploy.md (managed by /inc-setup-deploy).
 ```
 
 Keep the pointer to one line — the whole point is that CLAUDE.md stays lean and the heavy command
@@ -301,9 +301,9 @@ Status cmd:    <one-line status command>   [verified: ran, returned <state>]
 Health check:  <url>  [<200 | unreachable>]
 Deploy window: <none (deploy anytime) | the one-line rule>
 
-inc:merge-pr-5 and inc:ship-it will now observe deploys with these commands
+inc-merge-pr and inc-ship-it will now observe deploys with these commands
 and respect the deploy window above.
-Re-run /inc:setup-deploy to reconfigure.
+Re-run /inc-setup-deploy to reconfigure.
 ```
 
 ## Rules
