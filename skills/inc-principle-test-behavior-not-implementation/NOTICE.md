@@ -1,6 +1,7 @@
-Adapted from the pstack principle-test-behavior-not-implementation skill (github.com/cursor/plugins), MIT.
+This skill is a rewritten derivative of the pstack principle-test-behavior-not-implementation skill (github.com/cursor/plugins), MIT.
 
-This directory ports the pstack skill `principle-test-behavior-not-implementation` by Lauren Tan.
+The body is native to Incubator Build (naming, voice, structure, and review/test skill references).
+It retains the upstream principle: assert observable behavior against a literal expected value, and reject tests that cannot fail for a defect.
 
 Source: https://github.com/cursor/plugins/tree/main/pstack/skills/principle-test-behavior-not-implementation
 
