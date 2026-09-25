@@ -303,14 +303,18 @@ function padStatePath(id) {
 // Only a missing state file means "no state". Any other failure (corrupt JSON,
 // permissions) is surfaced, so a broken file cannot silently rewind the cursor
 // and re-deliver feedback the agent already handled.
-function readPadState(id) {
+function readPadState(id, { throwOnError = false } = {}) {
   const path = padStatePath(id);
+  const fail = (message) => {
+    if (throwOnError) throw new Error(message);
+    die(message, 4);
+  };
   let raw;
   try {
     raw = readFileSync(path, "utf8");
   } catch (err) {
     if (err?.code === "ENOENT") return {};
-    die(`cannot read pad state ${path}: ${err?.message ?? String(err)}`, 4);
+    fail(`cannot read pad state ${path}: ${err?.message ?? String(err)}`);
   }
   let state;
   try {
@@ -322,7 +326,7 @@ function readPadState(id) {
     state !== null && typeof state === "object" && !Array.isArray(state) &&
     (state.cursor == null || typeof state.cursor === "string") &&
     (state.pending == null || Array.isArray(state.pending));
-  if (!shapeOk) die(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`, 4);
+  if (!shapeOk) fail(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`);
   return state;
 }
 
@@ -330,7 +334,9 @@ function readPadState(id) {
 // truncated JSON file behind.
 function writePadState(id, patch) {
   mkdirSync(PADS_DIR, { recursive: true });
-  const next = { ...readPadState(id), ...patch, updated_at: new Date().toISOString() };
+  // Throw rather than exit here so a caller persisting after a remote mutation
+  // can still report that the server accepted the request.
+  const next = { ...readPadState(id, { throwOnError: true }), ...patch, updated_at: new Date().toISOString() };
   const path = padStatePath(id);
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(next, null, 2));
@@ -414,7 +420,8 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "update") {
     requireArity("update", rest, 2);
     const id = rest[0];
-    const body = padPayload(rest[1], flags.title || readPadState(id).title);
+    const saved = readPadState(id); // validated before the request so corrupt state cannot strand a published revision
+    const body = padPayload(rest[1], flags.title || saved.title);
     const result = await api(creds, "PUT", padPath(id, "/revisions"), { body });
     if (result.revision == null) die("PUT /api/v1/pads/:id/revisions returned no revision - the update was not confirmed", 3);
     process.stdout.write(`revision: ${result.revision}\n`);
@@ -454,16 +461,22 @@ async function padCommand(creds, sub, rest, flags, out) {
     const deadline = Date.now() + timeout * 1000;
     // Short polls only: each request returns immediately, so nothing holds a
     // server connection open between checks.
+    // The first request always happens, so --timeout 0 is a single immediate check.
+    let first = true;
     for (;;) {
       const remaining = deadline - Date.now();
-      if (remaining <= 0) {
+      if (!first && remaining <= 0) {
         out({ items: [], cursor });
         return;
       }
+      first = false;
       const result = await api(creds, "GET", padPath(id, "/feedback"), {
         query: { after: cursor },
-        signal: AbortSignal.timeout(Math.max(1, Math.min(POLL_REQUEST_CAP_MS, remaining))),
+        signal: AbortSignal.timeout(remaining > 0 ? Math.min(POLL_REQUEST_CAP_MS, remaining) : POLL_REQUEST_CAP_MS),
       });
+      if (result.cursor != null && typeof result.cursor !== "string") {
+        die("GET /api/v1/pads/:id/feedback returned a cursor that is not a string - nothing was saved", 3);
+      }
       // A malformed batch must not advance the cursor, or its feedback is skipped for good.
       if (!Array.isArray(result.items)) die("GET /api/v1/pads/:id/feedback returned no items array - nothing was saved", 3);
       const items = result.items;
@@ -499,6 +512,7 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "end") {
     requireArity("end", rest, 1);
     const id = rest[0];
+    readPadState(id); // validated before the request so corrupt state cannot mask a completed end
     const result = await api(creds, "POST", padPath(id, "/end"));
     if (result.ended !== true) die("POST /api/v1/pads/:id/end did not confirm ended: true", 3);
     process.stdout.write("ended: true\n");

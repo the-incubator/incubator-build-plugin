@@ -470,7 +470,8 @@ test("pad poll rejects a zero or negative --interval but allows --timeout 0", as
   assert.equal(requests.length, 0, "a rejected interval never reaches the server");
   const zeroTimeout = await run(h, ["pad", "poll", "pad_1", "--timeout", "0"]);
   assert.equal(zeroTimeout.status, 0, zeroTimeout.stderr);
-  assert.deepEqual(JSON.parse(zeroTimeout.stdout), { items: [], cursor: null });
+  assert.deepEqual(JSON.parse(zeroTimeout.stdout), { items: [], cursor: "c0" });
+  assert.equal(requests.length, 1, "--timeout 0 still performs one immediate check");
 });
 
 test("the first poll sends a bare /feedback path with no stray query marker", async (t) => {
@@ -531,4 +532,42 @@ test("a literal backslash in a POSIX file name is read as-is and uploaded under 
   assert.equal(r.status, 0, r.stderr);
   const odd = requests[0].body.files.find((x) => x.path === "odd\\name.txt");
   assert.equal(Buffer.from(odd.content_base64, "base64").toString(), "literal backslash");
+});
+
+test("pad poll --timeout 0 still performs one immediate check", async (t) => {
+  const items = [{ id: "f1", kind: "chat", text: "hi", selector: null, selected_text: null, created_at: "2026-09-25T00:00:00Z" }];
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items, cursor: "c1" } }));
+  const r = await run(home(t, endpoint), ["pad", "poll", "pad_1", "--timeout", "0"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { items, cursor: "c1" });
+  assert.equal(requests.length, 1);
+});
+
+test("a non-string feedback cursor fails without touching the saved state", async (t) => {
+  const { endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: 42 } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1" }));
+  const r = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /cursor that is not a string/);
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+});
+
+test("corrupt pad state blocks update and end before any request, and never hides a completed create", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { ...created, ended: true, revision: 2 } }));
+  const h = home(t, endpoint);
+  const f = fixtures(t);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), "[]");
+  for (const args of [["pad", "end", "pad_1"], ["pad", "update", "pad_1", f.single, "--title", "T"]]) {
+    const r = await run(h, args);
+    assert.equal(r.status, 4, args.join(" "));
+    assert.match(r.stderr, /corrupt/);
+  }
+  assert.equal(requests.length, 0, "no mutation is sent when local state is corrupt");
+  const create = await run(h, ["pad", "create", f.single]);
+  assert.equal(create.status, 4);
+  assert.match(create.stdout, /padId: pad_1/, "the server-accepted pad is still reported");
+  assert.match(create.stderr, /server accepted the request but local pad state was not saved/);
 });
