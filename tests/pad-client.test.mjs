@@ -443,7 +443,7 @@ test("a replayed batch keeps the ended flag saved with it", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c8" } }));
   const h = home(t, endpoint);
   mkdirSync(join(h, "pads"), { recursive: true });
-  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c8", pending, ended: true }));
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c8", pending, pending_ended: true, ended: true }));
   const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
   assert.equal(replay.status, 0, replay.stderr);
   assert.deepEqual(JSON.parse(replay.stdout), { items: pending, cursor: "c8", ended: true, replayed: true });
@@ -570,4 +570,20 @@ test("corrupt pad state blocks update and end before any request, and never hide
   assert.equal(create.status, 4);
   assert.match(create.stdout, /padId: pad_1/, "the server-accepted pad is still reported");
   assert.match(create.stderr, /server accepted the request but local pad state was not saved/);
+});
+
+test("a replayed batch after --reset is not marked ended by the pad's historical ended flag", async (t) => {
+  const items = [{ id: "h1", kind: "comment", text: "old feedback", selector: "p", selected_text: null, created_at: "2026-09-25T00:00:00Z" }];
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items, cursor: "c1" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c9", ended: true, pending: [], pending_ended: false }));
+  const reset = await run(h, ["pad", "poll", "pad_1", "--once", "--reset"]);
+  assert.deepEqual(JSON.parse(reset.stdout), { items, cursor: "c1" }, "a re-fetched nonterminal batch carries no ended flag");
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).ended, false, "reset clears the historical ended flag");
+  // Simulate an interrupted delivery of that batch: pending saved, historical ended still set.
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", ended: true, pending: items, pending_ended: false }));
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.deepEqual(JSON.parse(replay.stdout), { items, cursor: "c1", replayed: true });
+  assert.equal(requests.length, 1);
 });

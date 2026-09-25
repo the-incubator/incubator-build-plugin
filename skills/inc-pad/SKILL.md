@@ -91,7 +91,8 @@ A directory uploads its `index.html` plus every asset file under their relative 
    ```
    Give the command a tool timeout longer than 540 seconds, or pass a shorter `--timeout` if your harness caps foreground commands.
    An empty `items` array without `"ended": true` means the wait timed out, so just re-run the same command.
-   A result with `"ended": true` means the reviewer ended the review: stop polling, act on any items it carries, and go to step 7.
+   A result with `"ended": true` means the reviewer ended the review: stop polling.
+   If that result carries items, run step 6 once for them (publish the revision and reply) without returning to the poll, then go to step 7.
    If the harness kills the poll, re-run it too.
    The cursor and the fetched batch are saved locally per pad before printing, so a poll killed before or while printing replays the batch on the next run.
    Delivery is complete once the process's stdout write finishes.

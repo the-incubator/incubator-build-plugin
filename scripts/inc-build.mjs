@@ -450,11 +450,13 @@ async function padCommand(creds, sub, rest, flags, out) {
       writePadState(id, { pending: [], pending_ended: false });
     };
     if (flags.reset) {
-      writePadState(id, { cursor: null, pending: [], pending_ended: false });
+      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false });
     } else if ((Array.isArray(state.pending) && state.pending.length) || state.pending_ended === true) {
       // A replayed batch carries the terminal flag saved with it, so the
       // caller learns the review ended even though the original print was lost.
-      await deliver({ items: state.pending, cursor: state.cursor ?? null, ...(state.ended === true ? { ended: true } : {}), replayed: true });
+      // Only the flag saved with this batch decides whether the replay is terminal;
+      // the historical `ended` field may be stale after a --reset re-fetch.
+      await deliver({ items: state.pending ?? [], cursor: state.cursor ?? null, ...(state.pending_ended === true ? { ended: true } : {}), replayed: true });
       return;
     }
     let cursor = flags.reset ? null : flags.after ?? state.cursor ?? null;
