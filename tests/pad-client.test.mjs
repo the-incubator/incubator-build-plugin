@@ -470,3 +470,53 @@ test("pad poll rejects a zero or negative --interval but allows --timeout 0", as
   assert.equal(zeroTimeout.status, 0, zeroTimeout.stderr);
   assert.deepEqual(JSON.parse(zeroTimeout.stdout), { items: [], cursor: null });
 });
+
+test("the first poll sends a bare /feedback path with no stray query marker", async (t) => {
+  const seen = [];
+  const raw = createRawServer((req, res) => {
+    seen.push(req.url);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ items: [], cursor: "c1" }));
+  });
+  await new Promise((r) => raw.listen(0, "127.0.0.1", r));
+  t.after(() => raw.close());
+  const r = await run(home(t, `http://127.0.0.1:${raw.address().port}`), ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(seen, ["/api/v1/pads/pad_1/feedback"]);
+});
+
+test("pad create refuses a symlinked root so a link cannot pull in another directory", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: created }));
+  const f = fixtures(t);
+  const link = join(f.dir, "linked-site");
+  symlinkSync(f.folder, link);
+  const r = await run(home(t, endpoint), ["pad", "create", link]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /is a symlink - pass the real path/);
+  assert.equal(requests.length, 0);
+});
+
+test("an ended review with no items is replayed if its delivery was interrupted", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c9" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c9", pending: [], pending_ended: true, ended: true }));
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.deepEqual(JSON.parse(replay.stdout), { items: [], cursor: "c9", ended: true, replayed: true });
+  assert.equal(requests.length, 0);
+  const again = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.deepEqual(JSON.parse(again.stdout), { items: [], cursor: "c9" });
+  assert.equal(requests.length, 1, "after delivery the terminal batch is not replayed again");
+});
+
+test("a malformed feedback batch fails without advancing the saved cursor", async (t) => {
+  const { endpoint } = await mockServer(t, () => ({ json: { items: "nope", cursor: "advanced" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1" }));
+  const r = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(r.status, 3);
+  assert.match(r.stderr, /no items array/);
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+});

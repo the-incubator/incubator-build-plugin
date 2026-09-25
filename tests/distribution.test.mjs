@@ -168,6 +168,16 @@ test("Cursor/Cline installer is idempotent, project-scoped, and preserves confli
   symlinkSync(foreign, target);
   assert.equal(run("cursor", "--project").status, 1);
   assert.equal(realpathSync(target), foreign);
+  rmSync(target);
+  const retired = join(dir, ".cursor/skills/inc-visual-plan");
+  symlinkSync(join(root, "skills/inc-visual-plan"), retired, "dir");
+  const other = join(dir, ".cursor/skills/other-plugin-skill");
+  symlinkSync(join(dir, "elsewhere/skills/gone"), other, "dir");
+  const pruned = run("cursor", "--project");
+  assert.equal(pruned.status, 0);
+  assert.match(pruned.stdout, /Removed retired link .*inc-visual-plan/);
+  assert.equal(existsSync(retired), false, "a dangling link into this checkout's retired skill is removed");
+  assert.ok(lstatSync(other).isSymbolicLink(), "dangling links into other checkouts are left alone");
   assert.equal(run("unknown", "--project").status, 1);
   assert.equal(run("cursor", "--project", "--global").status, 1);
 });

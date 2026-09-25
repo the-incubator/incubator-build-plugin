@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Link the shared corpus for hosts without a usable direct plugin installation.
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,19 @@ for (const entry of readdirSync(join(root, "skills"), { withFileTypes: true })) 
   }
   symlinkSync(source, target, "dir");
   console.log(`Linked ${target} -> ${source}`);
+}
+// A skill retired from this checkout leaves its old link dangling; remove links
+// that point into this checkout's skills/ but whose target is gone. Links into
+// other checkouts or user-made links are left alone.
+const skillsRoot = join(root, "skills");
+for (const entry of readdirSync(destination, { withFileTypes: true })) {
+  if (!entry.isSymbolicLink()) continue;
+  const link = join(destination, entry.name);
+  const target = resolve(destination, readlinkSync(link));
+  if (target.startsWith(skillsRoot + "/") && !existsSync(target)) {
+    unlinkSync(link);
+    console.log(`Removed retired link ${link} -> ${target}`);
+  }
 }
 if (host === "cline" && args.includes("--include-manual")) console.warn("Manual-only skills included: Cline may auto-activate them.");
 if (conflicts) process.exitCode = 1;

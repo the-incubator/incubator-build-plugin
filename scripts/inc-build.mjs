@@ -58,13 +58,10 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 async function api(creds, method, path, { query, body, signal } = {}) {
   const base = creds.endpoint.replace(/\/$/, "");
-  const qs = query
-    ? "?" +
-      Object.entries(query)
-        .filter(([, v]) => v != null && v !== "")
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join("&")
-    : "";
+  const pairs = Object.entries(query ?? {})
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+  const qs = pairs.length ? `?${pairs.join("&")}` : "";
   let res;
   try {
     res = await fetch(`${base}${path}${qs}`, {
@@ -253,10 +250,18 @@ function htmlTitle(html) {
 function padPayload(input, title) {
   if (!input) die("pad create/update requires <file-or-dir>");
   const path = resolve(input);
-  if (!existsSync(path)) die(`no such file or directory: ${input}`);
+  let rootStat;
+  try {
+    rootStat = lstatSync(path);
+  } catch {
+    die(`no such file or directory: ${input}`);
+  }
+  // The root itself must not be a link either: following it would upload the
+  // link target's tree, which may not be the directory the caller meant.
+  if (rootStat.isSymbolicLink()) die(`${input} is a symlink - pass the real path of the file or directory instead`);
   const files = [];
   let html;
-  if (statSync(path).isDirectory()) {
+  if (rootStat.isDirectory()) {
     // The entry must be a regular file: walkFiles skips symlinks and descends
     // into directories, so anything else would declare an entry never uploaded.
     const entry = join(path, "index.html");
@@ -424,11 +429,11 @@ async function padCommand(creds, sub, rest, flags, out) {
       await new Promise((resolveWrite, rejectWrite) => {
         process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
       }).catch((err) => die(`feedback batch kept for replay - stdout write failed: ${err?.message ?? String(err)}`, 4));
-      writePadState(id, { pending: [] });
+      writePadState(id, { pending: [], pending_ended: false });
     };
     if (flags.reset) {
-      writePadState(id, { cursor: null, pending: [] });
-    } else if (Array.isArray(state.pending) && state.pending.length) {
+      writePadState(id, { cursor: null, pending: [], pending_ended: false });
+    } else if ((Array.isArray(state.pending) && state.pending.length) || state.pending_ended === true) {
       // A replayed batch carries the terminal flag saved with it, so the
       // caller learns the review ended even though the original print was lost.
       await deliver({ items: state.pending, cursor: state.cursor ?? null, ...(state.ended === true ? { ended: true } : {}), replayed: true });
@@ -448,12 +453,14 @@ async function padCommand(creds, sub, rest, flags, out) {
         query: { after: cursor },
         signal: AbortSignal.timeout(Math.max(1, Math.min(POLL_REQUEST_CAP_MS, remaining))),
       });
-      const items = Array.isArray(result.items) ? result.items : [];
+      // A malformed batch must not advance the cursor, or its feedback is skipped for good.
+      if (!Array.isArray(result.items)) die("GET /api/v1/pads/:id/feedback returned no items array - nothing was saved", 3);
+      const items = result.items;
       const next = result.cursor ?? cursor;
       const ended = result.ended === true;
       if (items.length || ended) {
         cursor = next;
-        writePadState(id, { cursor, pending: items, ...(ended ? { ended: true } : {}) });
+        writePadState(id, { cursor, pending: items, pending_ended: ended, ...(ended ? { ended: true } : {}) });
         await deliver({ items, cursor, ...(ended ? { ended: true } : {}) });
         return;
       }
