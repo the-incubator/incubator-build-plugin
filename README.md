@@ -1,6 +1,7 @@
 # Incubator Build Plugin
 
-Incubator Build provides agent skills for planning, PR review, debugging, resolving review feedback, shipping pull requests, and generating project-local verification skills that drive the real app to prove its behavior.
+Incubator Build provides agent skills for planning, PR review, debugging, resolving review feedback, shipping pull requests, publishing hosted IncPad review pages (`inc-pad`), and generating project-local verification skills that drive the real app to prove its behavior.
+The full skill catalog lives in [skills/inc-guide/SKILL.md](skills/inc-guide/SKILL.md).
 
 ## Install and invoke
 
