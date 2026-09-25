@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Link the shared corpus for hosts without a usable direct plugin installation.
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 
@@ -39,6 +39,23 @@ for (const entry of readdirSync(join(root, "skills"), { withFileTypes: true })) 
   }
   symlinkSync(source, target, "dir");
   console.log(`Linked ${target} -> ${source}`);
+}
+// Skills retired from this checkout leave their old links dangling. Only links
+// with a retired skill's name that point into this checkout's skills/ and whose
+// target is gone are removed; every other link, dangling or not, is left alone.
+const RETIRED_SKILLS = ["inc-visual-plan"];
+const skillsRoot = join(root, "skills");
+for (const name of RETIRED_SKILLS) {
+  const link = join(destination, name);
+  let stat;
+  try { stat = lstatSync(link); } catch { continue; }
+  if (!stat.isSymbolicLink()) continue;
+  const target = resolve(destination, readlinkSync(link));
+  const inside = relative(skillsRoot, target);
+  if (inside && !inside.startsWith("..") && !isAbsolute(inside) && !existsSync(target)) {
+    unlinkSync(link);
+    console.log(`Removed retired link ${link} -> ${target}`);
+  }
 }
 if (host === "cline" && args.includes("--include-manual")) console.warn("Manual-only skills included: Cline may auto-activate them.");
 if (conflicts) process.exitCode = 1;

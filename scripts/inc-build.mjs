@@ -10,24 +10,26 @@
 //   inc-build feedback get <sessionId>              # session + annotations
 //   inc-build feedback fetch <sessionId> [--out <dir>]
 //                                                       # download bundle + recording zip
-//   inc-build plan blocks                            # authoritative block catalog
-//   inc-build plan create --project <slug> --title <title> --plan <file> [--canvas <file>]
-//   inc-build plan get <planId> [--out <dir>]
-//   inc-build plan list [--project <slug>] [--status <status>]
-//   inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
-//   inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
-//   inc-build plan share <planId> [--rotate] --expect <updatedAt>
-//   inc-build plan open <url>
+//   inc-build pad create <file-or-dir> [--title <title>]   # publish an IncPad, prints share URL
+//   inc-build pad update <padId> <file-or-dir>              # publish a new revision
+//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
+//                                                       # short-poll for reviewer feedback
+//   inc-build pad reply <padId> [--] <text...>              # reply in the pad's conversation panel
+//   inc-build pad end <padId>                               # end the review
+//   inc-build pad open <url>                                # open a URL in the host browser
 //
 // Auth: sends `Authorization: Bearer <apiKey>` from credentials.json. Errors are
 // surfaced (non-zero exit) rather than swallowed, unlike the telemetry hooks.
+// INCUBATOR_HOME overrides the config directory (credentials + per-pad cursors).
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 
-const CREDS_PATH = join(homedir(), ".claude", "incubator", "credentials.json");
+const CONFIG_DIR = process.env.INCUBATOR_HOME || join(homedir(), ".claude", "incubator");
+const CREDS_PATH = join(CONFIG_DIR, "credentials.json");
+const PADS_DIR = join(CONFIG_DIR, "pads");
 
 const die = (m, code = 1) => {
   process.stderr.write(`inc-build: ${m}\n`);
@@ -51,15 +53,15 @@ function loadCreds() {
   return c;
 }
 
-async function api(creds, method, path, { query, body } = {}) {
+// Every request is bounded so a stalled server cannot hang a command forever.
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+async function api(creds, method, path, { query, body, signal } = {}) {
   const base = creds.endpoint.replace(/\/$/, "");
-  const qs = query
-    ? "?" +
-      Object.entries(query)
-        .filter(([, v]) => v != null && v !== "")
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join("&")
-    : "";
+  const pairs = Object.entries(query ?? {})
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
+  const qs = pairs.length ? `?${pairs.join("&")}` : "";
   let res;
   try {
     res = await fetch(`${base}${path}${qs}`, {
@@ -69,11 +71,38 @@ async function api(creds, method, path, { query, body } = {}) {
         ...(body ? { "content-type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: signal ?? AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      die(`${method} ${path} timed out waiting for the server`, 3);
+    }
     die(`${method} ${path} transport failed: ${err?.message ?? String(err)}`, 3);
   }
-  const json = await res.json().catch(() => ({}));
+  // The body read shares the request signal, so a server that sends headers and
+  // then stalls is a timeout here, not an empty result.
+  let text;
+  try {
+    text = await res.text();
+  } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      die(`${method} ${path} timed out reading the response body`, 3);
+    }
+    die(`${method} ${path} body read failed: ${err?.message ?? String(err)}`, 3);
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // A success status with an unreadable body is a failed request. An error
+    // status keeps the tolerant parse so the status code alone can be reported.
+    if (res.ok) die(`${method} ${path} returned ${res.status} with a body that is not JSON`, 3);
+    json = {};
+  }
+  if (json === null || typeof json !== "object") {
+    if (res.ok) die(`${method} ${path} returned ${res.status} with a non-object JSON body`, 3);
+    json = {};
+  }
   if (!res.ok || json.ok === false) {
     const code = res.status === 404 ? 1 : res.status === 409 ? 2 : res.status === 401 || res.status === 403 ? 3 : 1;
     const detail = json.detail ?? json.message;
@@ -82,13 +111,17 @@ async function api(creds, method, path, { query, body } = {}) {
   return json;
 }
 
-const BOOLEAN_FLAGS = new Set(["rotate", "unconsumed"]);
+const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed"]);
 
 function parseFlags(argv) {
   const flags = {};
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (a === "--") {
+      rest.push(...argv.slice(i + 1));
+      break;
+    }
     if (a === "--query") {
       const query = argv[++i];
       if (!query || query.startsWith("--")) die("--query requires k=v");
@@ -120,37 +153,13 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback fetch <sessionId> [--out <dir>]
   inc-build feedback projects
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
-  inc-build plan blocks
-  inc-build plan create --project <slug> --title <title> --plan <file> [--canvas <file>]
-                        [--brief <text>] [--visibility link|org]
-  inc-build plan get <planId> [--out <dir>]
-  inc-build plan list [--project <slug>] [--status <status>]
-  inc-build plan patch <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
-  inc-build plan replace <planId> --plan <file> [--canvas <file>] --expect <updatedAt>
-  inc-build plan share <planId> [--rotate] --expect <updatedAt>
-  inc-build plan open <url>
-  inc-build plan feedback <planId>       # Phase 3 stub
-  inc-build plan consume <planId>        # Phase 3 stub
+  inc-build pad create <file-or-dir> [--title <title>]
+  inc-build pad update <padId> <file-or-dir>
+  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
+  inc-build pad reply <padId> [--] <text...>
+  inc-build pad end <padId>
+  inc-build pad open <url>
 `;
-
-function readRequiredFile(path, flag) {
-  if (!path) die(`usage requires ${flag}`);
-  try {
-    return readFileSync(path, "utf8");
-  } catch (err) {
-    die(`cannot read ${flag} file ${path}: ${err?.message ?? String(err)}`);
-  }
-}
-
-function planFiles(flags) {
-  const files = { "plan.mdx": readRequiredFile(flags.plan, "--plan") };
-  if (flags.canvas) files["canvas.mdx"] = readRequiredFile(flags.canvas, "--canvas");
-  return files;
-}
-
-function phase3Stub(sub) {
-  die(`plan ${sub} is reserved for Phase 3; feedback and consume arrive with the reviewer feedback API`);
-}
 
 function runCommand(command, args) {
   return spawnSync(command, args, {
@@ -163,15 +172,15 @@ function commandError(result) {
   return result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
 }
 
-function openPlanUrl(url) {
+function openUrl(url) {
   let parsed;
   try {
     parsed = new URL(url);
   } catch {
-    die("plan open requires a valid http(s) URL");
+    die("pad open requires a valid http(s) URL");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    die("plan open requires an http(s) URL");
+    die("pad open requires an http(s) URL");
   }
 
   // Match cmux-browser's gate: command present, live browser socket, and enabled panel.
@@ -183,7 +192,7 @@ function openPlanUrl(url) {
     if (opened.stdout) process.stdout.write(opened.stdout);
     if (opened.stderr) process.stderr.write(opened.stderr);
     if (opened.status !== 0) die(`cmux browser open failed: ${commandError(opened)}`);
-    process.stderr.write(`opened plan in cmux browser: ${url}\n`);
+    process.stderr.write(`opened in cmux browser: ${url}\n`);
     return;
   }
 
@@ -195,7 +204,325 @@ function openPlanUrl(url) {
   if (opened.stdout) process.stdout.write(opened.stdout);
   if (opened.stderr) process.stderr.write(opened.stderr);
   if (opened.status !== 0) die(`${launcher} failed: ${commandError(opened)}`);
-  process.stderr.write(`opened plan in ${process.platform === "darwin" ? "Google Chrome" : launcher}: ${url}\n`);
+  process.stderr.write(`opened in ${process.platform === "darwin" ? "Google Chrome" : launcher}: ${url}\n`);
+}
+
+// --- IncPad -----------------------------------------------------------------
+
+const CONTENT_TYPES = {
+  ".html": "text/html", ".htm": "text/html", ".css": "text/css", ".js": "text/javascript",
+  ".mjs": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".ico": "image/x-icon", ".woff": "font/woff", ".woff2": "font/woff2",
+  ".ttf": "font/ttf", ".otf": "font/otf", ".txt": "text/plain", ".md": "text/markdown",
+  ".csv": "text/csv", ".mp4": "video/mp4", ".webm": "video/webm", ".mp3": "audio/mpeg",
+  ".wav": "audio/wav", ".pdf": "application/pdf", ".wasm": "application/wasm", ".map": "application/json",
+};
+
+function contentTypeFor(path) {
+  return CONTENT_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+// Symlinks are skipped (not followed): a link could point outside the artifact
+// directory and publish a private file under an innocent-looking path, or loop.
+function walkFiles(dir, root = dir, acc = []) {
+  for (const name of readdirSync(dir).sort()) {
+    if (name.startsWith(".") || name === "node_modules") continue;
+    const full = join(dir, name);
+    const st = lstatSync(full);
+    if (st.isSymbolicLink()) {
+      process.stderr.write(`inc-build: skipping symlink ${relative(root, full)} (links are not uploaded)\n`);
+      continue;
+    }
+    if (st.isDirectory()) walkFiles(full, root, acc);
+    else if (st.isFile()) acc.push(relative(root, full));
+  }
+  return acc;
+}
+
+function htmlTitle(html) {
+  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+
+// A single .html file uploads inlined as index.html. A directory uploads its
+// index.html plus every non-hidden file with a path relative to the directory.
+function padPayload(input, title) {
+  if (!input) die("pad create/update requires <file-or-dir>");
+  const path = resolve(input);
+  let rootStat;
+  try {
+    rootStat = lstatSync(path);
+  } catch {
+    die(`no such file or directory: ${input}`);
+  }
+  // The root itself must not be a link either: following it would upload the
+  // link target's tree, which may not be the directory the caller meant.
+  if (rootStat.isSymbolicLink()) die(`${input} is a symlink - pass the real path of the file or directory instead`);
+  const files = [];
+  let html;
+  if (rootStat.isDirectory()) {
+    // The entry must be a regular file: walkFiles skips symlinks and descends
+    // into directories, so anything else would declare an entry never uploaded.
+    const entry = join(path, "index.html");
+    let entryStat;
+    try {
+      entryStat = lstatSync(entry);
+    } catch (err) {
+      if (err?.code === "ENOENT") die(`${input} has no index.html at its root - a pad directory must contain one`);
+      die(`cannot read ${entry}: ${err?.message ?? String(err)}`);
+    }
+    if (!entryStat.isFile()) {
+      const what = entryStat.isSymbolicLink() ? "a symlink" : entryStat.isDirectory() ? "a directory" : "not a regular file";
+      die(`${input}/index.html is ${what} - the pad entry must be a regular file (links are not uploaded)`);
+    }
+    for (const rel of walkFiles(path)) {
+      // Read by the filesystem-relative path; the payload path uses "/" only
+      // where the platform separator was, so a literal backslash in a POSIX
+      // file name is preserved.
+      const buf = readFileSync(join(path, rel));
+      const payloadPath = rel.split(sep).join("/");
+      if (payloadPath === "index.html") html = buf.toString("utf8");
+      files.push({ path: payloadPath, content_base64: buf.toString("base64"), content_type: contentTypeFor(rel) });
+    }
+  } else {
+    const ext = extname(path).toLowerCase();
+    if (ext !== ".html" && ext !== ".htm") die(`${input} is not an .html file - pass an HTML file or a directory with index.html`);
+    const buf = readFileSync(path);
+    html = buf.toString("utf8");
+    files.push({ path: "index.html", content_base64: buf.toString("base64"), content_type: "text/html" });
+  }
+  const resolvedTitle = title || htmlTitle(html ?? "") || basename(path, extname(path));
+  return { title: resolvedTitle, entry: "index.html", files };
+}
+
+function padStatePath(id) {
+  return join(PADS_DIR, `${encodeURIComponent(id)}.json`);
+}
+
+// Only a missing state file means "no state". Any other failure (corrupt JSON,
+// permissions) is surfaced, so a broken file cannot silently rewind the cursor
+// and re-deliver feedback the agent already handled.
+function readPadState(id, { throwOnError = false } = {}) {
+  const path = padStatePath(id);
+  const fail = (message) => {
+    if (throwOnError) throw new Error(message);
+    die(message, 4);
+  };
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    if (err?.code === "ENOENT") return {};
+    fail(`cannot read pad state ${path}: ${err?.message ?? String(err)}`);
+  }
+  let state;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    state = null;
+  }
+  const shapeOk =
+    state !== null && typeof state === "object" && !Array.isArray(state) &&
+    (state.cursor == null || typeof state.cursor === "string") &&
+    (state.pending == null || Array.isArray(state.pending));
+  if (!shapeOk) fail(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`);
+  return state;
+}
+
+// Atomic write (temp file + rename) so an interrupted write never leaves a
+// truncated JSON file behind.
+function writePadState(id, patch) {
+  mkdirSync(PADS_DIR, { recursive: true });
+  // Throw rather than exit here so a caller persisting after a remote mutation
+  // can still report that the server accepted the request.
+  const next = { ...readPadState(id, { throwOnError: true }), ...patch, updated_at: new Date().toISOString() };
+  const path = padStatePath(id);
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(next, null, 2));
+  renameSync(tmp, path);
+  return next;
+}
+
+// After a remote mutation succeeded, a local bookkeeping failure must not look
+// like an API failure (a retry would create a duplicate pad or reply).
+function persistAfterMutation(id, patch) {
+  try {
+    writePadState(id, patch);
+  } catch (err) {
+    process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
+    process.exitCode = 4;
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// `positive` rejects 0 (and -0): a zero --interval would hammer the server in a
+// tight loop, while a zero --timeout is a legitimate "check once, then stop".
+function numberFlag(flags, key, fallback, { positive = false } = {}) {
+  if (flags[key] == null) return fallback;
+  const n = Number(flags[key]);
+  const valid = Number.isFinite(n) && (positive ? n > 0 : n >= 0);
+  if (!valid) die(`--${key} must be a ${positive ? "positive" : "non-negative"} number of seconds`, 2);
+  return n;
+}
+
+const PAD_FLAGS = {
+  create: ["title"],
+  update: ["title"],
+  poll: ["interval", "timeout", "once", "after", "reset"],
+  reply: [],
+  end: [],
+  open: [],
+};
+
+const PAD_USAGE = {
+  create: "pad create <file-or-dir> [--title <title>]",
+  update: "pad update <padId> <file-or-dir> [--title <title>]",
+  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
+  reply: "pad reply <padId> [--] <text...>",
+  end: "pad end <padId>",
+  open: "pad open <url>",
+};
+
+// Exact positional arity, so a stray token never reaches the server as a mutation.
+function requireArity(sub, rest, min, max = min) {
+  if (rest.length < min || rest.length > max) {
+    die(`usage: ${PAD_USAGE[sub]} (got ${rest.length} positional argument${rest.length === 1 ? "" : "s"})`, 2);
+  }
+}
+
+function rejectUnknownFlags(sub, flags) {
+  const allowed = new Set(PAD_FLAGS[sub] ?? []);
+  const unknown = Object.keys(flags).filter((k) => !allowed.has(k));
+  if (!unknown.length) return;
+  const hint = allowed.size ? `valid flags: ${[...allowed].map((f) => `--${f}`).join(", ")}` : "this subcommand takes no flags";
+  die(`pad ${sub}: unknown flag${unknown.length > 1 ? "s" : ""} ${unknown.map((f) => `--${f}`).join(", ")} (${hint})`, 2);
+}
+
+// Poll requests are capped so a hung server cannot outlive --timeout.
+const POLL_REQUEST_CAP_MS = 30_000;
+
+async function padCommand(creds, sub, rest, flags, out) {
+  const padPath = (id, tail = "") => `/api/v1/pads/${encodeURIComponent(id)}${tail}`;
+  rejectUnknownFlags(sub, flags);
+
+  if (sub === "create") {
+    requireArity("create", rest, 1);
+    const body = padPayload(rest[0], flags.title);
+    const result = await api(creds, "POST", "/api/v1/pads", { body });
+    if (!result.url || !result.id) die("POST /api/v1/pads returned no pad id or URL");
+    process.stdout.write(`${result.url}\npadId: ${result.id}\nrevision: ${result.revision ?? 1}\n`);
+    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [] });
+    return;
+  }
+
+  if (sub === "update") {
+    requireArity("update", rest, 2);
+    const id = rest[0];
+    const saved = readPadState(id); // validated before the request so corrupt state cannot strand a published revision
+    const body = padPayload(rest[1], flags.title || saved.title);
+    const result = await api(creds, "PUT", padPath(id, "/revisions"), { body });
+    if (result.revision == null) die("PUT /api/v1/pads/:id/revisions returned no revision - the update was not confirmed", 3);
+    process.stdout.write(`revision: ${result.revision}\n`);
+    if (result.url) process.stdout.write(`url: ${result.url}\n`);
+    persistAfterMutation(id, { title: body.title, revision: result.revision, ...(result.url ? { url: result.url } : {}) });
+    return;
+  }
+
+  if (sub === "poll") {
+    requireArity("poll", rest, 1);
+    const id = rest[0];
+    const interval = numberFlag(flags, "interval", 10, { positive: true });
+    const timeout = numberFlag(flags, "timeout", 540);
+    const state = readPadState(id);
+    // Delivery is at-least-once up to this process's stdout: a fetched batch is
+    // saved as `pending` (with the advanced cursor and any ended flag) before it
+    // is printed, and cleared only after the stdout write completes. A poll
+    // killed before or while printing replays the batch on the next run. What
+    // the consumer does with bytes stdout already accepted is outside this
+    // client's control; there is no consumer acknowledgment.
+    const deliver = async (batch) => {
+      const text = JSON.stringify(batch, null, 2) + "\n";
+      await new Promise((resolveWrite, rejectWrite) => {
+        process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
+      }).catch((err) => die(`feedback batch kept for replay - stdout write failed: ${err?.message ?? String(err)}`, 4));
+      writePadState(id, { pending: [], pending_ended: false });
+    };
+    if (flags.reset) {
+      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false });
+    } else if ((Array.isArray(state.pending) && state.pending.length) || state.pending_ended === true) {
+      // A replayed batch carries the terminal flag saved with it, so the
+      // caller learns the review ended even though the original print was lost.
+      // Only the flag saved with this batch decides whether the replay is terminal;
+      // the historical `ended` field may be stale after a --reset re-fetch.
+      await deliver({ items: state.pending ?? [], cursor: state.cursor ?? null, ...(state.pending_ended === true ? { ended: true } : {}), replayed: true });
+      return;
+    }
+    let cursor = flags.reset ? null : flags.after ?? state.cursor ?? null;
+    const deadline = Date.now() + timeout * 1000;
+    // Short polls only: each request returns immediately, so nothing holds a
+    // server connection open between checks.
+    // The first request always happens, so --timeout 0 is a single immediate check.
+    let first = true;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (!first && remaining <= 0) {
+        out({ items: [], cursor });
+        return;
+      }
+      first = false;
+      const result = await api(creds, "GET", padPath(id, "/feedback"), {
+        query: { after: cursor },
+        signal: AbortSignal.timeout(remaining > 0 ? Math.min(POLL_REQUEST_CAP_MS, remaining) : POLL_REQUEST_CAP_MS),
+      });
+      if (result.cursor != null && typeof result.cursor !== "string") {
+        die("GET /api/v1/pads/:id/feedback returned a cursor that is not a string - nothing was saved", 3);
+      }
+      // A malformed batch must not advance the cursor, or its feedback is skipped for good.
+      if (!Array.isArray(result.items)) die("GET /api/v1/pads/:id/feedback returned no items array - nothing was saved", 3);
+      const items = result.items;
+      const next = result.cursor ?? cursor;
+      const ended = result.ended === true;
+      if (items.length || ended) {
+        cursor = next;
+        writePadState(id, { cursor, pending: items, pending_ended: ended, ...(ended ? { ended: true } : {}) });
+        await deliver({ items, cursor, ...(ended ? { ended: true } : {}) });
+        return;
+      }
+      cursor = next;
+      if (cursor !== (readPadState(id).cursor ?? null)) writePadState(id, { cursor });
+      if (flags.once || Date.now() + interval * 1000 > deadline) {
+        out({ items: [], cursor });
+        return;
+      }
+      await sleep(interval * 1000);
+    }
+  }
+
+  if (sub === "reply") {
+    requireArity("reply", rest, 2, Infinity);
+    const id = rest[0];
+    const text = rest.slice(1).join(" ").trim();
+    if (!text) die(`usage: ${PAD_USAGE.reply}`, 2);
+    const result = await api(creds, "POST", padPath(id, "/replies"), { body: { text } });
+    if (result.id == null) die("POST /api/v1/pads/:id/replies returned no reply id - the reply was not confirmed", 3);
+    process.stdout.write(`replyId: ${result.id}\n`);
+    return;
+  }
+
+  if (sub === "end") {
+    requireArity("end", rest, 1);
+    const id = rest[0];
+    readPadState(id); // validated before the request so corrupt state cannot mask a completed end
+    const result = await api(creds, "POST", padPath(id, "/end"));
+    if (result.ended !== true) die("POST /api/v1/pads/:id/end did not confirm ended: true", 3);
+    process.stdout.write("ended: true\n");
+    persistAfterMutation(id, { ended: true });
+    return;
+  }
+
+  die("usage: pad ( create <file-or-dir> | update <padId> <file-or-dir> | poll <padId> | reply <padId> <text> | end <padId> | open <url> )");
 }
 
 async function main() {
@@ -204,14 +531,21 @@ async function main() {
     process.stdout.write(USAGE);
     return;
   }
-  const { flags, rest } = parseFlags(tail);
-  if (cmd === "plan" && (sub === "feedback" || sub === "consume")) {
-    phase3Stub(sub);
+  const optionRegion = tail.includes("--") ? tail.slice(0, tail.indexOf("--")) : tail;
+  if (sub === "-h" || sub === "--help" || optionRegion.includes("-h") || optionRegion.includes("--help")) {
+    process.stdout.write(USAGE);
+    return;
   }
-  if (cmd === "plan" && sub === "open") {
-    const url = rest[0];
-    if (!url) die("usage: plan open <url>");
-    openPlanUrl(url);
+  // Retired commands are dispatched before flag parsing so their old flags
+  // (for example `plan share <id> --rotate`) cannot mask the migration message.
+  if (cmd === "plan") {
+    die("hosted plans moved to IncPad: use `inc-build pad create <file-or-dir>` (see the inc-pad skill)");
+  }
+  const { flags, rest } = parseFlags(tail);
+  if (cmd === "pad" && sub === "open") {
+    rejectUnknownFlags("open", flags);
+    requireArity("open", rest, 1);
+    openUrl(rest[0]);
     return;
   }
   const creds = loadCreds();
@@ -303,101 +637,12 @@ async function main() {
     die("usage: feedback ( list | get <id> | fetch <id> | projects | mint-token )");
   }
 
-  if (cmd === "plan") {
-    if (sub === "blocks") {
-      out(await api(creds, "GET", "/api/v1/plans/blocks"));
-      return;
-    }
-
-    if (sub === "create") {
-      if (!flags.project || !flags.title || !flags.plan) {
-        die("usage: plan create --project <slug> --title <title> --plan <file> [--canvas <file>]");
-      }
-      const body = {
-        project: flags.project,
-        title: flags.title,
-        files: planFiles(flags),
-      };
-      if (flags.brief) body.brief = flags.brief;
-      if (flags.visibility) body.visibility = flags.visibility;
-      const result = await api(creds, "POST", "/api/v1/plans", { body });
-      if (!result.url) die("POST /api/v1/plans returned no plan URL");
-      process.stderr.write(`planId: ${result.planId}\nrevision: ${result.revision}\nupdatedAt: ${result.updatedAt}\n`);
-      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
-      process.stdout.write(`${result.url}\n`);
-      // The API adds a writable reviewer link once share is provisioned; surface it
-      // when present so the skill need not make a second `plan share` call to get one.
-      if (result.reviewUrl) process.stdout.write(`reviewUrl: ${result.reviewUrl}\n`);
-      return;
-    }
-
-    if (sub === "share") {
-      const id = rest[0];
-      if (!id || !flags.expect) {
-        die("usage: plan share <planId> [--rotate] --expect <updatedAt>");
-      }
-      const body = { expectedUpdatedAt: flags.expect };
-      if (flags.rotate) body.rotate = true;
-      const result = await api(creds, "POST", `/api/v1/plans/${encodeURIComponent(id)}/share`, { body });
-      if (!result.url && !result.reviewUrl) die("POST /api/v1/plans/:id/share returned no url or reviewUrl");
-      process.stderr.write(`planId: ${result.planId ?? id}\nrevision: ${result.revision ?? "?"}\nupdatedAt: ${result.updatedAt ?? "?"}\n`);
-      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
-      if (result.url) process.stdout.write(`${result.url}\n`);
-      if (result.reviewUrl) process.stdout.write(`reviewUrl: ${result.reviewUrl}\n`);
-      return;
-    }
-
-    if (sub === "get") {
-      const id = rest[0];
-      if (!id) die("usage: plan get <planId> [--out <dir>]");
-      const result = await api(creds, "GET", `/api/v1/plans/${encodeURIComponent(id)}`);
-      if (!flags.out) {
-        out(result);
-        return;
-      }
-      mkdirSync(flags.out, { recursive: true });
-      const files = result.files ?? {};
-      for (const [name, source] of Object.entries(result.files ?? {})) {
-        writeFileSync(join(flags.out, name), source);
-      }
-      if (!("canvas.mdx" in files)) {
-        const canvasPath = join(flags.out, "canvas.mdx");
-        if (existsSync(canvasPath)) unlinkSync(canvasPath);
-      }
-      const plan = result.plan ?? {};
-      process.stderr.write(`planId: ${plan.planId ?? id}\nrevision: ${plan.revision ?? result.revision ?? "?"}\nupdatedAt: ${plan.updatedAt ?? result.updatedAt ?? "?"}\n`);
-      if (result.warnings?.length) process.stderr.write(`warnings: ${JSON.stringify(result.warnings)}\n`);
-      process.stdout.write(`wrote ${Object.keys(files).join(", ")} -> ${flags.out}/\n`);
-      return;
-    }
-
-    if (sub === "list") {
-      out(await api(creds, "GET", "/api/v1/plans", {
-        query: { project: flags.project, status: flags.status },
-      }));
-      return;
-    }
-
-    if (sub === "patch" || sub === "replace") {
-      const id = rest[0];
-      if (flags.ops) {
-        die("--ops is reserved for the Phase 3 PATCH API; use --plan/--canvas with the live M1 PUT endpoint");
-      }
-      if (!id || !flags.expect || !flags.plan) {
-        die(`usage: plan ${sub} <planId> --plan <file> [--canvas <file>] --expect <updatedAt>`);
-      }
-      // M1 has PUT source replacement only. Keep patch as an ergonomic alias until Phase 3 adds PATCH ops.
-      const result = await api(creds, "PUT", `/api/v1/plans/${encodeURIComponent(id)}/source`, {
-        body: { expectedUpdatedAt: flags.expect, files: planFiles(flags) },
-      });
-      out(result);
-      return;
-    }
-
-    die("usage: plan ( blocks | create | get | list | patch | replace | share | open | feedback | consume )");
+  if (cmd === "pad") {
+    await padCommand(creds, sub, rest, flags, out);
+    return;
   }
 
-  die("usage: inc-build ( get <path> | feedback <list|get|fetch> | plan <subcommand> )");
+  die("usage: inc-build ( get <path> | feedback <list|get|fetch> | pad <subcommand> )");
 }
 
 main().catch((err) => die(err?.message ?? String(err)));

@@ -1,6 +1,6 @@
 {
   "name": "incubator-build-plugin",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Incubator Build skills for coding agents",
   "private": true,
   "type": "module",
@@ -39,12 +39,13 @@
     ".agy/"
   ],
   "scripts": {
-    "test": "npm run test:skills && npm run test:distribution && npm run test:hooks",
+    "test": "npm run test:skills && npm run test:distribution && npm run test:hooks && npm run test:client",
     "manifests:sync": "node scripts/sync-manifests.mjs",
     "smoke:pi": "node scripts/smoke-pi.mjs",
     "test:distribution": "node scripts/sync-manifests.mjs --check && node --test tests/distribution.test.mjs",
     "test:skills": "node scripts/validate-skills.mjs",
-    "test:hooks": "node --test hooks/*.test.mjs"
+    "test:hooks": "node --test hooks/*.test.mjs",
+    "test:client": "node --test tests/pad-client.test.mjs"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

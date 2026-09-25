@@ -1,10 +1,10 @@
-This directory adapts guidance from BuilderIO/skills `skills/visual-plan`.
+This directory adapts guidance from kunchenguid/lavish-axi (Lavish Editor) `skills/lavish`.
 
-Source: https://github.com/BuilderIO/skills/tree/main/skills/visual-plan
+Source: https://github.com/kunchenguid/lavish-axi
 
 The source project is distributed under the MIT License.
 
-Copyright (c) 2026 Builder.io
+Copyright (c) 2026 Kun Chen
 
 MIT License
 
