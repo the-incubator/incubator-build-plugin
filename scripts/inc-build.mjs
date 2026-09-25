@@ -25,7 +25,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { basename, extname, join, relative, resolve, sep } from "node:path";
 
 const CONFIG_DIR = process.env.INCUBATOR_HOME || join(homedir(), ".claude", "incubator");
 const CREDS_PATH = join(CONFIG_DIR, "credentials.json");
@@ -235,7 +235,7 @@ function walkFiles(dir, root = dir, acc = []) {
       continue;
     }
     if (st.isDirectory()) walkFiles(full, root, acc);
-    else if (st.isFile()) acc.push(relative(root, full).split("\\").join("/"));
+    else if (st.isFile()) acc.push(relative(root, full));
   }
   return acc;
 }
@@ -277,9 +277,13 @@ function padPayload(input, title) {
       die(`${input}/index.html is ${what} - the pad entry must be a regular file (links are not uploaded)`);
     }
     for (const rel of walkFiles(path)) {
+      // Read by the filesystem-relative path; the payload path uses "/" only
+      // where the platform separator was, so a literal backslash in a POSIX
+      // file name is preserved.
       const buf = readFileSync(join(path, rel));
-      if (rel === "index.html") html = buf.toString("utf8");
-      files.push({ path: rel, content_base64: buf.toString("base64"), content_type: contentTypeFor(rel) });
+      const payloadPath = rel.split(sep).join("/");
+      if (payloadPath === "index.html") html = buf.toString("utf8");
+      files.push({ path: payloadPath, content_base64: buf.toString("base64"), content_type: contentTypeFor(rel) });
     }
   } else {
     const ext = extname(path).toLowerCase();
@@ -308,11 +312,18 @@ function readPadState(id) {
     if (err?.code === "ENOENT") return {};
     die(`cannot read pad state ${path}: ${err?.message ?? String(err)}`, 4);
   }
+  let state;
   try {
-    return JSON.parse(raw);
+    state = JSON.parse(raw);
   } catch {
-    die(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`, 4);
+    state = null;
   }
+  const shapeOk =
+    state !== null && typeof state === "object" && !Array.isArray(state) &&
+    (state.cursor == null || typeof state.cursor === "string") &&
+    (state.pending == null || Array.isArray(state.pending));
+  if (!shapeOk) die(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`, 4);
+  return state;
 }
 
 // Atomic write (temp file + rename) so an interrupted write never leaves a

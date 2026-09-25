@@ -286,10 +286,12 @@ test("a corrupt pad state file is reported instead of silently re-delivering fee
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c1" } }));
   const h = home(t, endpoint);
   mkdirSync(join(h, "pads"), { recursive: true });
-  writeFileSync(join(h, "pads", "pad_1.json"), "{not json");
-  const r = await run(h, ["pad", "poll", "pad_1", "--once"]);
-  assert.equal(r.status, 4);
-  assert.match(r.stderr, /corrupt/);
+  for (const bad of ["{not json", "[]", "false", "\"old\"", JSON.stringify({ cursor: 7 }), JSON.stringify({ pending: "x" })]) {
+    writeFileSync(join(h, "pads", "pad_1.json"), bad);
+    const r = await run(h, ["pad", "poll", "pad_1", "--once"]);
+    assert.equal(r.status, 4, `state ${bad} should be rejected`);
+    assert.match(r.stderr, /corrupt/);
+  }
   assert.equal(requests.length, 0);
 });
 
@@ -519,4 +521,14 @@ test("a malformed feedback batch fails without advancing the saved cursor", asyn
   assert.equal(r.status, 3);
   assert.match(r.stderr, /no items array/);
   assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+});
+
+test("a literal backslash in a POSIX file name is read as-is and uploaded under its real name", { skip: process.platform === "win32" }, async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: created }));
+  const f = fixtures(t);
+  writeFileSync(join(f.folder, "odd\\name.txt"), "literal backslash");
+  const r = await run(home(t, endpoint), ["pad", "create", f.folder, "--title", "Site"]);
+  assert.equal(r.status, 0, r.stderr);
+  const odd = requests[0].body.files.find((x) => x.path === "odd\\name.txt");
+  assert.equal(Buffer.from(odd.content_base64, "base64").toString(), "literal backslash");
 });

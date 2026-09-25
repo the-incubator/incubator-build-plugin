@@ -2,7 +2,7 @@
 // Link the shared corpus for hosts without a usable direct plugin installation.
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 
@@ -40,15 +40,19 @@ for (const entry of readdirSync(join(root, "skills"), { withFileTypes: true })) 
   symlinkSync(source, target, "dir");
   console.log(`Linked ${target} -> ${source}`);
 }
-// A skill retired from this checkout leaves its old link dangling; remove links
-// that point into this checkout's skills/ but whose target is gone. Links into
-// other checkouts or user-made links are left alone.
+// Skills retired from this checkout leave their old links dangling. Only links
+// with a retired skill's name that point into this checkout's skills/ and whose
+// target is gone are removed; every other link, dangling or not, is left alone.
+const RETIRED_SKILLS = ["inc-visual-plan"];
 const skillsRoot = join(root, "skills");
-for (const entry of readdirSync(destination, { withFileTypes: true })) {
-  if (!entry.isSymbolicLink()) continue;
-  const link = join(destination, entry.name);
+for (const name of RETIRED_SKILLS) {
+  const link = join(destination, name);
+  let stat;
+  try { stat = lstatSync(link); } catch { continue; }
+  if (!stat.isSymbolicLink()) continue;
   const target = resolve(destination, readlinkSync(link));
-  if (target.startsWith(skillsRoot + "/") && !existsSync(target)) {
+  const inside = relative(skillsRoot, target);
+  if (inside && !inside.startsWith("..") && !isAbsolute(inside) && !existsSync(target)) {
     unlinkSync(link);
     console.log(`Removed retired link ${link} -> ${target}`);
   }
