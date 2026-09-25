@@ -389,3 +389,84 @@ test("mutations refuse to report success on a 2xx that does not confirm the resu
   assert.equal(reply.status, 3);
   assert.match(reply.stderr, /no reply id/);
 });
+
+test("a 2xx whose body stalls or is not JSON is a failed request, not an empty poll", async (t) => {
+  const stalled = createRawServer((req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.write("{\"items\": [");
+  });
+  await new Promise((r) => stalled.listen(0, "127.0.0.1", r));
+  t.after(() => stalled.closeAllConnections?.() ?? stalled.close());
+  const stall = await run(home(t, `http://127.0.0.1:${stalled.address().port}`), ["pad", "poll", "pad_1", "--once", "--timeout", "1"]);
+  assert.equal(stall.status, 3);
+  assert.match(stall.stderr, /timed out reading the response body/);
+  assert.equal(stall.stdout, "", "no empty batch is printed for a failed poll");
+
+  const garbled = createRawServer((req, res) => {
+    res.writeHead(req.url.endsWith("/feedback") ? 200 : 502, { "content-type": "text/html" });
+    res.end("<html>upstream</html>");
+  });
+  await new Promise((r) => garbled.listen(0, "127.0.0.1", r));
+  t.after(() => garbled.close());
+  const h = home(t, `http://127.0.0.1:${garbled.address().port}`);
+  const okNotJson = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(okNotJson.status, 3);
+  assert.match(okNotJson.stderr, /returned 200 with a body that is not JSON/);
+  assert.equal(okNotJson.stdout, "");
+  const errNotJson = await run(h, ["pad", "end", "pad_1"]);
+  assert.equal(errNotJson.status, 1);
+  assert.match(errNotJson.stderr, /failed \(502\)/, "an error status still reports its code when the body is not JSON");
+});
+
+test("pad create rejects a directory whose index.html is a symlink or a directory", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: created }));
+  const h = home(t, endpoint);
+  const f = fixtures(t);
+  const linked = join(f.dir, "linked");
+  mkdirSync(linked);
+  symlinkSync(f.single, join(linked, "index.html"));
+  const viaLink = await run(h, ["pad", "create", linked]);
+  assert.notEqual(viaLink.status, 0);
+  assert.match(viaLink.stderr, /index\.html is a symlink/);
+  const nested = join(f.dir, "nested");
+  mkdirSync(join(nested, "index.html"), { recursive: true });
+  const viaDir = await run(h, ["pad", "create", nested]);
+  assert.notEqual(viaDir.status, 0);
+  assert.match(viaDir.stderr, /index\.html is a directory/);
+  assert.equal(requests.length, 0, "nothing is uploaded when the entry would be missing from the payload");
+});
+
+test("a replayed batch keeps the ended flag saved with it", async (t) => {
+  const pending = [{ id: "f10", kind: "comment", text: "Last word", selector: "h1", selected_text: "Hi", created_at: "2026-09-25T00:00:00Z" }];
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c8" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c8", pending, ended: true }));
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.deepEqual(JSON.parse(replay.stdout), { items: pending, cursor: "c8", ended: true, replayed: true });
+  assert.equal(requests.length, 0);
+});
+
+test("retired plan flags still reach the IncPad migration message", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: {} }));
+  const r = await run(home(t, endpoint), ["plan", "share", "x", "--rotate", "--expect", "y"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /moved to IncPad/);
+  assert.doesNotMatch(r.stderr, /--rotate requires a value/);
+  assert.equal(requests.length, 0);
+});
+
+test("pad poll rejects a zero or negative --interval but allows --timeout 0", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
+  const h = home(t, endpoint);
+  for (const interval of ["0", "-0", "-5"]) {
+    const r = await run(h, ["pad", "poll", "pad_1", "--interval", interval]);
+    assert.equal(r.status, 2, `--interval ${interval}: ${r.stderr}`);
+    assert.match(r.stderr, /--interval must be a positive number of seconds/);
+  }
+  assert.equal(requests.length, 0, "a rejected interval never reaches the server");
+  const zeroTimeout = await run(h, ["pad", "poll", "pad_1", "--timeout", "0"]);
+  assert.equal(zeroTimeout.status, 0, zeroTimeout.stderr);
+  assert.deepEqual(JSON.parse(zeroTimeout.stdout), { items: [], cursor: null });
+});

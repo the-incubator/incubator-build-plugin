@@ -82,7 +82,30 @@ async function api(creds, method, path, { query, body, signal } = {}) {
     }
     die(`${method} ${path} transport failed: ${err?.message ?? String(err)}`, 3);
   }
-  const json = await res.json().catch(() => ({}));
+  // The body read shares the request signal, so a server that sends headers and
+  // then stalls is a timeout here, not an empty result.
+  let text;
+  try {
+    text = await res.text();
+  } catch (err) {
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      die(`${method} ${path} timed out reading the response body`, 3);
+    }
+    die(`${method} ${path} body read failed: ${err?.message ?? String(err)}`, 3);
+  }
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // A success status with an unreadable body is a failed request. An error
+    // status keeps the tolerant parse so the status code alone can be reported.
+    if (res.ok) die(`${method} ${path} returned ${res.status} with a body that is not JSON`, 3);
+    json = {};
+  }
+  if (json === null || typeof json !== "object") {
+    if (res.ok) die(`${method} ${path} returned ${res.status} with a non-object JSON body`, 3);
+    json = {};
+  }
   if (!res.ok || json.ok === false) {
     const code = res.status === 404 ? 1 : res.status === 409 ? 2 : res.status === 401 || res.status === 403 ? 3 : 1;
     const detail = json.detail ?? json.message;
@@ -234,8 +257,20 @@ function padPayload(input, title) {
   const files = [];
   let html;
   if (statSync(path).isDirectory()) {
+    // The entry must be a regular file: walkFiles skips symlinks and descends
+    // into directories, so anything else would declare an entry never uploaded.
     const entry = join(path, "index.html");
-    if (!existsSync(entry)) die(`${input} has no index.html at its root - a pad directory must contain one`);
+    let entryStat;
+    try {
+      entryStat = lstatSync(entry);
+    } catch (err) {
+      if (err?.code === "ENOENT") die(`${input} has no index.html at its root - a pad directory must contain one`);
+      die(`cannot read ${entry}: ${err?.message ?? String(err)}`);
+    }
+    if (!entryStat.isFile()) {
+      const what = entryStat.isSymbolicLink() ? "a symlink" : entryStat.isDirectory() ? "a directory" : "not a regular file";
+      die(`${input}/index.html is ${what} - the pad entry must be a regular file (links are not uploaded)`);
+    }
     for (const rel of walkFiles(path)) {
       const buf = readFileSync(join(path, rel));
       if (rel === "index.html") html = buf.toString("utf8");
@@ -300,10 +335,13 @@ function persistAfterMutation(id, patch) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function numberFlag(flags, key, fallback) {
+// `positive` rejects 0 (and -0): a zero --interval would hammer the server in a
+// tight loop, while a zero --timeout is a legitimate "check once, then stop".
+function numberFlag(flags, key, fallback, { positive = false } = {}) {
   if (flags[key] == null) return fallback;
   const n = Number(flags[key]);
-  if (!Number.isFinite(n) || n < 0) die(`--${key} must be a non-negative number of seconds`);
+  const valid = Number.isFinite(n) && (positive ? n > 0 : n >= 0);
+  if (!valid) die(`--${key} must be a ${positive ? "positive" : "non-negative"} number of seconds`, 2);
   return n;
 }
 
@@ -372,12 +410,15 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "poll") {
     requireArity("poll", rest, 1);
     const id = rest[0];
-    const interval = numberFlag(flags, "interval", 10);
+    const interval = numberFlag(flags, "interval", 10, { positive: true });
     const timeout = numberFlag(flags, "timeout", 540);
     const state = readPadState(id);
-    // Delivery is durable: a fetched batch is saved as `pending` together with
-    // the advanced cursor before it is printed, and cleared only after printing.
-    // A poll killed between those steps replays the batch instead of losing it.
+    // Delivery is at-least-once up to this process's stdout: a fetched batch is
+    // saved as `pending` (with the advanced cursor and any ended flag) before it
+    // is printed, and cleared only after the stdout write completes. A poll
+    // killed before or while printing replays the batch on the next run. What
+    // the consumer does with bytes stdout already accepted is outside this
+    // client's control; there is no consumer acknowledgment.
     const deliver = async (batch) => {
       const text = JSON.stringify(batch, null, 2) + "\n";
       await new Promise((resolveWrite, rejectWrite) => {
@@ -388,7 +429,9 @@ async function padCommand(creds, sub, rest, flags, out) {
     if (flags.reset) {
       writePadState(id, { cursor: null, pending: [] });
     } else if (Array.isArray(state.pending) && state.pending.length) {
-      await deliver({ items: state.pending, cursor: state.cursor ?? null, replayed: true });
+      // A replayed batch carries the terminal flag saved with it, so the
+      // caller learns the review ended even though the original print was lost.
+      await deliver({ items: state.pending, cursor: state.cursor ?? null, ...(state.ended === true ? { ended: true } : {}), replayed: true });
       return;
     }
     let cursor = flags.reset ? null : flags.after ?? state.cursor ?? null;
@@ -459,10 +502,12 @@ async function main() {
     process.stdout.write(USAGE);
     return;
   }
-  const { flags, rest } = parseFlags(tail);
+  // Retired commands are dispatched before flag parsing so their old flags
+  // (for example `plan share <id> --rotate`) cannot mask the migration message.
   if (cmd === "plan") {
     die("hosted plans moved to IncPad: use `inc-build pad create <file-or-dir>` (see the inc-pad skill)");
   }
+  const { flags, rest } = parseFlags(tail);
   if (cmd === "pad" && sub === "open") {
     rejectUnknownFlags("open", flags);
     requireArity("open", rest, 1);
