@@ -12,7 +12,7 @@
       "name": "incubator-build",
       "source": "./",
       "description": "Curated skills for planning, code review, debugging, and shipping pull requests with coding agents.",
-      "version": "0.24.0"
+      "version": "0.24.1"
     }
   ]
 }

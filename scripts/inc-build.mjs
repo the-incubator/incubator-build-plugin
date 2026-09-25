@@ -14,6 +14,8 @@
 //   inc-build pad update <padId> <file-or-dir>              # publish a new revision
 //   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
 //                                                       # short-poll for reviewer feedback
+//   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
+//                                                       # confirm work on the last polled batch
 //   inc-build pad reply <padId> [--] <text...>              # reply in the pad's conversation panel
 //   inc-build pad end <padId>                               # end the review
 //   inc-build pad open <url>                                # open a URL in the host browser
@@ -56,7 +58,7 @@ function loadCreds() {
 // Every request is bounded so a stalled server cannot hang a command forever.
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-async function api(creds, method, path, { query, body, signal } = {}) {
+async function api(creds, method, path, { query, body, signal, pad = false } = {}) {
   const base = creds.endpoint.replace(/\/$/, "");
   const pairs = Object.entries(query ?? {})
     .filter(([, v]) => v != null && v !== "")
@@ -68,6 +70,7 @@ async function api(creds, method, path, { query, body, signal } = {}) {
       method,
       headers: {
         authorization: `Bearer ${creds.apiKey}`,
+        ...(pad ? { "X-IncPad-Agent": padAgent() } : {}),
         ...(body ? { "content-type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
@@ -109,6 +112,14 @@ async function api(creds, method, path, { query, body, signal } = {}) {
     die(`${method} ${path} failed (${res.status}): ${json.reason ?? "unknown"}${detail ? ` - ${detail}` : ""}`, code);
   }
   return json;
+}
+
+function padAgent() {
+  const name = process.env.INC_PAD_AGENT ||
+    (process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID ? "Codex" : null) ||
+    (process.env.CLAUDECODE ? "Claude Code" : null) || "Coding agent";
+  if (name.length > 100 || /[\r\n]/.test(name)) die("INC_PAD_AGENT must be at most 100 characters and one line", 2);
+  return name;
 }
 
 const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed"]);
@@ -156,6 +167,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build pad create <file-or-dir> [--title <title>]
   inc-build pad update <padId> <file-or-dir>
   inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
+  inc-build pad ack <padId> [--note <text>] [--items <id,...>]
   inc-build pad reply <padId> [--] <text...>
   inc-build pad end <padId>
   inc-build pad open <url>
@@ -300,6 +312,12 @@ function padStatePath(id) {
   return join(PADS_DIR, `${encodeURIComponent(id)}.json`);
 }
 
+function validItemIds(items) {
+  return Array.isArray(items) &&
+    items.every((item) => item && typeof item.id === "string" && item.id.length > 0) &&
+    new Set(items.map((item) => item.id)).size === items.length;
+}
+
 // Only a missing state file means "no state". Any other failure (corrupt JSON,
 // permissions) is surfaced, so a broken file cannot silently rewind the cursor
 // and re-deliver feedback the agent already handled.
@@ -325,7 +343,8 @@ function readPadState(id, { throwOnError = false } = {}) {
   const shapeOk =
     state !== null && typeof state === "object" && !Array.isArray(state) &&
     (state.cursor == null || typeof state.cursor === "string") &&
-    (state.pending == null || Array.isArray(state.pending));
+    (state.pending == null || validItemIds(state.pending)) &&
+    (state.last_batch_ids == null || (Array.isArray(state.last_batch_ids) && state.last_batch_ids.every((id) => typeof id === "string" && id.length > 0)));
   if (!shapeOk) fail(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`);
   return state;
 }
@@ -371,6 +390,7 @@ const PAD_FLAGS = {
   create: ["title"],
   update: ["title"],
   poll: ["interval", "timeout", "once", "after", "reset"],
+  ack: ["note", "items"],
   reply: [],
   end: [],
   open: [],
@@ -380,6 +400,7 @@ const PAD_USAGE = {
   create: "pad create <file-or-dir> [--title <title>]",
   update: "pad update <padId> <file-or-dir> [--title <title>]",
   poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
+  ack: "pad ack <padId> [--note <text>] [--items <id,...>]",
   reply: "pad reply <padId> [--] <text...>",
   end: "pad end <padId>",
   open: "pad open <url>",
@@ -410,10 +431,10 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "create") {
     requireArity("create", rest, 1);
     const body = padPayload(rest[0], flags.title);
-    const result = await api(creds, "POST", "/api/v1/pads", { body });
+    const result = await api(creds, "POST", "/api/v1/pads", { body, pad: true });
     if (!result.url || !result.id) die("POST /api/v1/pads returned no pad id or URL");
     process.stdout.write(`${result.url}\npadId: ${result.id}\nrevision: ${result.revision ?? 1}\n`);
-    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [] });
+    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [], last_batch_ids: [] });
     return;
   }
 
@@ -422,7 +443,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     const id = rest[0];
     const saved = readPadState(id); // validated before the request so corrupt state cannot strand a published revision
     const body = padPayload(rest[1], flags.title || saved.title);
-    const result = await api(creds, "PUT", padPath(id, "/revisions"), { body });
+    const result = await api(creds, "PUT", padPath(id, "/revisions"), { body, pad: true });
     if (result.revision == null) die("PUT /api/v1/pads/:id/revisions returned no revision - the update was not confirmed", 3);
     process.stdout.write(`revision: ${result.revision}\n`);
     if (result.url) process.stdout.write(`url: ${result.url}\n`);
@@ -447,10 +468,10 @@ async function padCommand(creds, sub, rest, flags, out) {
       await new Promise((resolveWrite, rejectWrite) => {
         process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
       }).catch((err) => die(`feedback batch kept for replay - stdout write failed: ${err?.message ?? String(err)}`, 4));
-      writePadState(id, { pending: [], pending_ended: false });
+      writePadState(id, { pending: [], pending_ended: false, last_batch_ids: batch.items.map((item) => item.id) });
     };
     if (flags.reset) {
-      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false });
+      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false, last_batch_ids: [] });
     } else if ((Array.isArray(state.pending) && state.pending.length) || state.pending_ended === true) {
       // A replayed batch carries the terminal flag saved with it, so the
       // caller learns the review ended even though the original print was lost.
@@ -468,6 +489,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     for (;;) {
       const remaining = deadline - Date.now();
       if (!first && remaining <= 0) {
+        writePadState(id, { last_batch_ids: [] });
         out({ items: [], cursor });
         return;
       }
@@ -475,6 +497,7 @@ async function padCommand(creds, sub, rest, flags, out) {
       const result = await api(creds, "GET", padPath(id, "/feedback"), {
         query: { after: cursor },
         signal: AbortSignal.timeout(remaining > 0 ? Math.min(POLL_REQUEST_CAP_MS, remaining) : POLL_REQUEST_CAP_MS),
+        pad: true,
       });
       if (result.cursor != null && typeof result.cursor !== "string") {
         die("GET /api/v1/pads/:id/feedback returned a cursor that is not a string - nothing was saved", 3);
@@ -482,6 +505,9 @@ async function padCommand(creds, sub, rest, flags, out) {
       // A malformed batch must not advance the cursor, or its feedback is skipped for good.
       if (!Array.isArray(result.items)) die("GET /api/v1/pads/:id/feedback returned no items array - nothing was saved", 3);
       const items = result.items;
+      if (!validItemIds(items)) {
+        die("GET /api/v1/pads/:id/feedback returned invalid item ids - nothing was saved", 3);
+      }
       const next = result.cursor ?? cursor;
       const ended = result.ended === true;
       if (items.length || ended) {
@@ -491,7 +517,10 @@ async function padCommand(creds, sub, rest, flags, out) {
         return;
       }
       cursor = next;
-      if (cursor !== (readPadState(id).cursor ?? null)) writePadState(id, { cursor });
+      const saved = readPadState(id);
+      if (cursor !== (saved.cursor ?? null) || (saved.last_batch_ids?.length ?? 0) > 0) {
+        writePadState(id, { cursor, last_batch_ids: [] });
+      }
       if (flags.once || Date.now() + interval * 1000 > deadline) {
         out({ items: [], cursor });
         return;
@@ -500,12 +529,35 @@ async function padCommand(creds, sub, rest, flags, out) {
     }
   }
 
+  if (sub === "ack") {
+    requireArity("ack", rest, 1);
+    const id = rest[0];
+    const state = readPadState(id);
+    const itemIds = flags.items == null
+      ? (state.pending?.length ? state.pending.map((item) => item.id) : state.last_batch_ids)
+      : flags.items.split(",").map((item) => item.trim());
+    if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no last polled batch - poll first or pass --items <id,...>", 2);
+    if (itemIds.some((item) => typeof item !== "string" || !item) || new Set(itemIds).size !== itemIds.length) {
+      die("pad ack requires distinct, non-empty item ids", 2);
+    }
+    if (flags.note != null && [...flags.note].length > 200) die("pad ack --note must be at most 200 characters", 2);
+    const result = await api(creds, "POST", padPath(id, "/ack"), {
+      body: { item_ids: itemIds, ...(flags.note != null ? { note: flags.note } : {}) }, pad: true,
+    });
+    if (!Array.isArray(result.acked) || result.acked.length !== itemIds.length ||
+        result.acked.some((item) => !itemIds.includes(item)) || new Set(result.acked).size !== itemIds.length) {
+      die("POST /api/v1/pads/:id/ack did not confirm every requested item", 3);
+    }
+    out({ acked: result.acked });
+    return;
+  }
+
   if (sub === "reply") {
     requireArity("reply", rest, 2, Infinity);
     const id = rest[0];
     const text = rest.slice(1).join(" ").trim();
     if (!text) die(`usage: ${PAD_USAGE.reply}`, 2);
-    const result = await api(creds, "POST", padPath(id, "/replies"), { body: { text } });
+    const result = await api(creds, "POST", padPath(id, "/replies"), { body: { text }, pad: true });
     if (result.id == null) die("POST /api/v1/pads/:id/replies returned no reply id - the reply was not confirmed", 3);
     process.stdout.write(`replyId: ${result.id}\n`);
     return;
@@ -515,14 +567,14 @@ async function padCommand(creds, sub, rest, flags, out) {
     requireArity("end", rest, 1);
     const id = rest[0];
     readPadState(id); // validated before the request so corrupt state cannot mask a completed end
-    const result = await api(creds, "POST", padPath(id, "/end"));
+    const result = await api(creds, "POST", padPath(id, "/end"), { pad: true });
     if (result.ended !== true) die("POST /api/v1/pads/:id/end did not confirm ended: true", 3);
     process.stdout.write("ended: true\n");
     persistAfterMutation(id, { ended: true });
     return;
   }
 
-  die("usage: pad ( create <file-or-dir> | update <padId> <file-or-dir> | poll <padId> | reply <padId> <text> | end <padId> | open <url> )");
+  die("usage: pad ( create <file-or-dir> | update <padId> <file-or-dir> | poll <padId> | ack <padId> | reply <padId> <text> | end <padId> | open <url> )");
 }
 
 async function main() {
