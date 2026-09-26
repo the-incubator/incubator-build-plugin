@@ -201,6 +201,7 @@ test("pad ack confirms the last polled batch with a working note and agent name"
   const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
   assert.equal(state.cursor, "c2");
   assert.deepEqual(state.last_batch_ids, ["f1", "f2"]);
+  assert.deepEqual(state.last_acked_ids, ["f1", "f2"], "confirmed items are no longer the default ack target");
 });
 
 test("pad ack can target explicit items and refuses an empty or malformed batch", async (t) => {
@@ -223,7 +224,7 @@ test("pad ack can target explicit items and refuses an empty or malformed batch"
   assert.deepEqual(requests[0].body, { item_ids: ["f3"] });
 });
 
-test("an empty poll clears the default ack target but explicit IDs remain available", async (t) => {
+test("an empty poll preserves an unacknowledged delivered batch", async (t) => {
   let polled = false;
   const { requests, endpoint } = await mockServer(t, (req) => {
     if (req.path.endsWith("/ack")) return { json: { acked: ["f1"] } };
@@ -236,11 +237,11 @@ test("an empty poll clears the default ack target but explicit IDs remain availa
   const h = home(t, endpoint);
   await run(h, ["pad", "poll", "pad_1", "--once"]);
   await run(h, ["pad", "poll", "pad_1", "--once"]);
-  const stale = await run(h, ["pad", "ack", "pad_1"]);
-  assert.equal(stale.status, 2);
-  assert.equal(requests.filter((req) => req.path.endsWith("/ack")).length, 0);
-  const explicit = await run(h, ["pad", "ack", "pad_1", "--items", "f1"]);
-  assert.equal(explicit.status, 0, explicit.stderr);
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 0, ack.stderr);
+  assert.deepEqual(requests.at(-1).body, { item_ids: ["f1"] });
+  const alreadyAcked = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(alreadyAcked.status, 2);
 });
 
 test("pad ack uses a replayed batch and does not accept an unconfirmed response", async (t) => {
@@ -269,7 +270,7 @@ test("pad ack rejects partial confirmation", async (t) => {
   assert.equal(ack.stdout, "");
 });
 
-test("pad ack prefers a newer batch pending replay over older delivered IDs", async (t) => {
+test("pad ack never defaults to an undelivered batch pending replay", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["new"] } }));
   const h = home(t, endpoint);
   mkdirSync(join(h, "pads"), { recursive: true });
@@ -277,8 +278,51 @@ test("pad ack prefers a newer batch pending replay over older delivered IDs", as
     cursor: "c2", last_batch_ids: ["old"], pending: [{ id: "new", text: "Update" }],
   }));
   const ack = await run(h, ["pad", "ack", "pad_1"]);
-  assert.equal(ack.status, 0, ack.stderr);
+  assert.equal(ack.status, 2);
+  assert.match(ack.stderr, /batch pending replay/);
+  assert.equal(requests.length, 0);
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 0, replay.stderr);
+  const delivered = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(delivered.status, 0, delivered.stderr);
   assert.deepEqual(requests[0].body, { item_ids: ["new"] });
+});
+
+test("an ack cannot erase a newer delivered batch", async (t) => {
+  let h;
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path.endsWith("/ack") && req.body.item_ids[0] === "old") {
+      const path = join(h, "pads", "pad_1.json");
+      const state = JSON.parse(readFileSync(path, "utf8"));
+      writeFileSync(path, JSON.stringify({ ...state, cursor: "c2", last_batch_ids: ["new"] }));
+    }
+    return { json: { acked: req.body.item_ids } };
+  });
+  h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", last_batch_ids: ["old"] }));
+  const first = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(first.status, 0, first.stderr);
+  const second = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(requests.map((req) => req.body.item_ids), [["old"], ["new"]]);
+});
+
+test("Claude's active host signal takes precedence over an inherited Codex session", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
+  const r = await run(home(t, endpoint), ["pad", "ack", "pad_1", "--items", "f1"], {
+    CLAUDECODE: "1", CODEX_THREAD_ID: "inherited",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(requests[0].agent, "Claude Code");
+});
+
+test("an unsupported agent header fails clearly before any pad request", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
+  const r = await run(home(t, endpoint), ["pad", "ack", "pad_1", "--items", "f1"], { INC_PAD_AGENT: "開発者" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /INC_PAD_AGENT must be at most 100 printable ASCII characters/);
+  assert.equal(requests.length, 0);
 });
 
 test("pad poll gives up cleanly at --timeout with an empty result", async (t) => {

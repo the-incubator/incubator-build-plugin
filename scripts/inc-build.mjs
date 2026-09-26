@@ -116,9 +116,11 @@ async function api(creds, method, path, { query, body, signal, pad = false } = {
 
 function padAgent() {
   const name = process.env.INC_PAD_AGENT ||
-    (process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID ? "Codex" : null) ||
-    (process.env.CLAUDECODE ? "Claude Code" : null) || "Coding agent";
-  if (name.length > 100 || /[\r\n]/.test(name)) die("INC_PAD_AGENT must be at most 100 characters and one line", 2);
+    (process.env.CLAUDECODE ? "Claude Code" : null) ||
+    (process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID ? "Codex" : null) || "Coding agent";
+  if (name.length > 100 || !/^[\x20-\x7E]+$/.test(name)) {
+    die("INC_PAD_AGENT must be at most 100 printable ASCII characters", 2);
+  }
   return name;
 }
 
@@ -318,6 +320,15 @@ function validItemIds(items) {
     new Set(items.map((item) => item.id)).size === items.length;
 }
 
+function validIds(ids) {
+  return Array.isArray(ids) && ids.every((id) => typeof id === "string" && id.length > 0) &&
+    new Set(ids).size === ids.length;
+}
+
+function sameIds(a, b) {
+  return validIds(a) && validIds(b) && a.length === b.length && a.every((id) => b.includes(id));
+}
+
 // Only a missing state file means "no state". Any other failure (corrupt JSON,
 // permissions) is surfaced, so a broken file cannot silently rewind the cursor
 // and re-deliver feedback the agent already handled.
@@ -344,7 +355,8 @@ function readPadState(id, { throwOnError = false } = {}) {
     state !== null && typeof state === "object" && !Array.isArray(state) &&
     (state.cursor == null || typeof state.cursor === "string") &&
     (state.pending == null || validItemIds(state.pending)) &&
-    (state.last_batch_ids == null || (Array.isArray(state.last_batch_ids) && state.last_batch_ids.every((id) => typeof id === "string" && id.length > 0)));
+    (state.last_batch_ids == null || validIds(state.last_batch_ids)) &&
+    (state.last_acked_ids == null || validIds(state.last_acked_ids));
   if (!shapeOk) fail(`pad state ${path} is corrupt - fix or delete it (deleting re-delivers feedback from the start)`);
   return state;
 }
@@ -434,7 +446,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     const result = await api(creds, "POST", "/api/v1/pads", { body, pad: true });
     if (!result.url || !result.id) die("POST /api/v1/pads returned no pad id or URL");
     process.stdout.write(`${result.url}\npadId: ${result.id}\nrevision: ${result.revision ?? 1}\n`);
-    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [], last_batch_ids: [] });
+    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [], last_batch_ids: [], last_acked_ids: [] });
     return;
   }
 
@@ -468,10 +480,10 @@ async function padCommand(creds, sub, rest, flags, out) {
       await new Promise((resolveWrite, rejectWrite) => {
         process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
       }).catch((err) => die(`feedback batch kept for replay - stdout write failed: ${err?.message ?? String(err)}`, 4));
-      writePadState(id, { pending: [], pending_ended: false, last_batch_ids: batch.items.map((item) => item.id) });
+      writePadState(id, { pending: [], pending_ended: false, ...(batch.items.length ? { last_batch_ids: batch.items.map((item) => item.id) } : {}) });
     };
     if (flags.reset) {
-      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false, last_batch_ids: [] });
+      writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false, last_batch_ids: [], last_acked_ids: [] });
     } else if ((Array.isArray(state.pending) && state.pending.length) || state.pending_ended === true) {
       // A replayed batch carries the terminal flag saved with it, so the
       // caller learns the review ended even though the original print was lost.
@@ -489,7 +501,6 @@ async function padCommand(creds, sub, rest, flags, out) {
     for (;;) {
       const remaining = deadline - Date.now();
       if (!first && remaining <= 0) {
-        writePadState(id, { last_batch_ids: [] });
         out({ items: [], cursor });
         return;
       }
@@ -518,9 +529,7 @@ async function padCommand(creds, sub, rest, flags, out) {
       }
       cursor = next;
       const saved = readPadState(id);
-      if (cursor !== (saved.cursor ?? null) || (saved.last_batch_ids?.length ?? 0) > 0) {
-        writePadState(id, { cursor, last_batch_ids: [] });
-      }
+      if (cursor !== (saved.cursor ?? null)) writePadState(id, { cursor });
       if (flags.once || Date.now() + interval * 1000 > deadline) {
         out({ items: [], cursor });
         return;
@@ -533,10 +542,13 @@ async function padCommand(creds, sub, rest, flags, out) {
     requireArity("ack", rest, 1);
     const id = rest[0];
     const state = readPadState(id);
+    if (flags.items == null && state.pending?.length) {
+      die("pad ack has a batch pending replay - run pad poll first or pass --items <id,...>", 2);
+    }
     const itemIds = flags.items == null
-      ? (state.pending?.length ? state.pending.map((item) => item.id) : state.last_batch_ids)
+      ? (sameIds(state.last_batch_ids, state.last_acked_ids) ? [] : state.last_batch_ids)
       : flags.items.split(",").map((item) => item.trim());
-    if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no last polled batch - poll first or pass --items <id,...>", 2);
+    if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no delivered, unacknowledged batch - poll first or pass --items <id,...>", 2);
     if (itemIds.some((item) => typeof item !== "string" || !item) || new Set(itemIds).size !== itemIds.length) {
       die("pad ack requires distinct, non-empty item ids", 2);
     }
@@ -549,6 +561,8 @@ async function padCommand(creds, sub, rest, flags, out) {
       die("POST /api/v1/pads/:id/ack did not confirm every requested item", 3);
     }
     out({ acked: result.acked });
+    // Record confirmation without overwriting a newer batch another poll may have delivered.
+    persistAfterMutation(id, { last_acked_ids: itemIds });
     return;
   }
 
