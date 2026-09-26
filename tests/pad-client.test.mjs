@@ -308,6 +308,22 @@ test("an ack cannot erase a newer delivered batch", async (t) => {
   assert.deepEqual(requests.map((req) => req.body.item_ids), [["old"], ["new"]]);
 });
 
+test("updating an older item's note does not reopen the latest acknowledged batch", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => ({ json: { acked: req.body.item_ids } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({
+    cursor: "c2", last_batch_ids: ["latest"], last_acked_ids: ["latest"],
+  }));
+  const older = await run(h, ["pad", "ack", "pad_1", "--items", "older", "--note", "Checking an earlier request."]);
+  assert.equal(older.status, 0, older.stderr);
+  const defaultAck = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(defaultAck.status, 2);
+  assert.deepEqual(requests.map((req) => req.body.item_ids), [["older"]]);
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.deepEqual(state.last_acked_ids, ["latest"]);
+});
+
 test("Claude's active host signal takes precedence over an inherited Codex session", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
   const r = await run(home(t, endpoint), ["pad", "ack", "pad_1", "--items", "f1"], {

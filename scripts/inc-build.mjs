@@ -562,7 +562,17 @@ async function padCommand(creds, sub, rest, flags, out) {
     }
     out({ acked: result.acked });
     // Record confirmation without overwriting a newer batch another poll may have delivered.
-    persistAfterMutation(id, { last_acked_ids: itemIds });
+    let current;
+    try {
+      current = readPadState(id, { throwOnError: true });
+    } catch (err) {
+      process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
+      process.exitCode = 4;
+      return;
+    }
+    if (sameIds(current.last_batch_ids, itemIds)) {
+      persistAfterMutation(id, { last_acked_ids: itemIds });
+    }
     return;
   }
 
