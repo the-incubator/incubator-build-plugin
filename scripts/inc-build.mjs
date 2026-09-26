@@ -314,19 +314,38 @@ function padStatePath(id) {
   return join(PADS_DIR, `${encodeURIComponent(id)}.json`);
 }
 
+function validId(id) {
+  return (typeof id === "string" && id.length > 0) ||
+    (Number.isSafeInteger(id) && id >= 0);
+}
+
+function normalizeId(id) {
+  if (typeof id === "number") return id;
+  if (/^(0|[1-9]\d*)$/.test(id)) {
+    const numeric = Number(id);
+    if (Number.isSafeInteger(numeric)) return numeric;
+  }
+  return id;
+}
+
+function idKey(id) {
+  return String(normalizeId(id));
+}
+
 function validItemIds(items) {
   return Array.isArray(items) &&
-    items.every((item) => item && typeof item.id === "string" && item.id.length > 0) &&
-    new Set(items.map((item) => item.id)).size === items.length;
+    items.every((item) => item && validId(item.id)) &&
+    new Set(items.map((item) => idKey(item.id))).size === items.length;
 }
 
 function validIds(ids) {
-  return Array.isArray(ids) && ids.every((id) => typeof id === "string" && id.length > 0) &&
-    new Set(ids).size === ids.length;
+  return Array.isArray(ids) && ids.every(validId) &&
+    new Set(ids.map(idKey)).size === ids.length;
 }
 
 function sameIds(a, b) {
-  return validIds(a) && validIds(b) && a.length === b.length && a.every((id) => b.includes(id));
+  return validIds(a) && validIds(b) && a.length === b.length &&
+    a.every((id) => b.some((other) => idKey(id) === idKey(other)));
 }
 
 // Only a missing state file means "no state". Any other failure (corrupt JSON,
@@ -476,6 +495,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     // the consumer does with bytes stdout already accepted is outside this
     // client's control; there is no consumer acknowledgment.
     const deliver = async (batch) => {
+      for (const item of batch.items) item.id = normalizeId(item.id);
       const text = JSON.stringify(batch, null, 2) + "\n";
       await new Promise((resolveWrite, rejectWrite) => {
         process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
@@ -519,6 +539,9 @@ async function padCommand(creds, sub, rest, flags, out) {
       if (!validItemIds(items)) {
         die("GET /api/v1/pads/:id/feedback returned invalid item ids - nothing was saved", 3);
       }
+      // Keep numeric database IDs numeric in state and stdout; normalize numeric
+      // strings too so old replay state and fresh API responses compare equally.
+      for (const item of items) item.id = normalizeId(item.id);
       const next = result.cursor ?? cursor;
       const ended = result.ended === true;
       if (items.length || ended) {
@@ -546,10 +569,10 @@ async function padCommand(creds, sub, rest, flags, out) {
       die("pad ack has a batch pending replay - run pad poll first or pass --items <id,...>", 2);
     }
     const itemIds = flags.items == null
-      ? (sameIds(state.last_batch_ids, state.last_acked_ids) ? [] : state.last_batch_ids)
-      : flags.items.split(",").map((item) => item.trim());
+      ? (sameIds(state.last_batch_ids, state.last_acked_ids) ? [] : (state.last_batch_ids ?? []).map(normalizeId))
+      : flags.items.split(",").map((item) => normalizeId(item.trim()));
     if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no delivered, unacknowledged batch - poll first or pass --items <id,...>", 2);
-    if (itemIds.some((item) => typeof item !== "string" || !item) || new Set(itemIds).size !== itemIds.length) {
+    if (itemIds.some((item) => !validId(item)) || !validIds(itemIds)) {
       die("pad ack requires distinct, non-empty item ids", 2);
     }
     if (flags.note != null && [...flags.note].length > 200) die("pad ack --note must be at most 200 characters", 2);
@@ -557,10 +580,10 @@ async function padCommand(creds, sub, rest, flags, out) {
       body: { item_ids: itemIds, ...(flags.note != null ? { note: flags.note } : {}) }, pad: true,
     });
     if (!Array.isArray(result.acked) || result.acked.length !== itemIds.length ||
-        result.acked.some((item) => !itemIds.includes(item)) || new Set(result.acked).size !== itemIds.length) {
+        !validIds(result.acked) || !sameIds(result.acked, itemIds)) {
       die("POST /api/v1/pads/:id/ack did not confirm every requested item", 3);
     }
-    out({ acked: result.acked });
+    out({ acked: result.acked.map(normalizeId) });
     // Record confirmation without overwriting a newer batch another poll may have delivered.
     let current;
     try {

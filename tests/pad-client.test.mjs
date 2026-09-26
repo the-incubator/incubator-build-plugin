@@ -153,6 +153,35 @@ test("pad update publishes a new revision from the same inputs", async (t) => {
   assert.deepEqual(req.body.files.map((x) => x.path), ["assets/app.css", "assets/logo.png", "index.html"]);
 });
 
+test("numeric feedback IDs poll and ack using the API's integer item_ids", async (t) => {
+  const items = [{ id: 3, kind: "comment", text: "Make this bigger" }];
+  const { requests, endpoint } = await mockServer(t, (req) =>
+    req.path.endsWith("/ack") ? { json: { acked: [3] } } : { json: { items, cursor: "c3" } },
+  );
+  const h = home(t, endpoint);
+  const poll = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(poll.status, 0, poll.stderr);
+  assert.deepEqual(JSON.parse(poll.stdout), { items, cursor: "c3" });
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 0, ack.stderr);
+  assert.deepEqual(requests[1].body, { item_ids: [3] });
+  assert.deepEqual(JSON.parse(ack.stdout), { acked: [3] });
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.deepEqual(state.last_batch_ids, [3]);
+  assert.deepEqual(state.last_acked_ids, [3]);
+});
+
+test("numeric strings in replay state are normalized before ack and matched to numeric confirmations", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => ({ json: { acked: [3] } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ last_batch_ids: ["3"] }));
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 0, ack.stderr);
+  assert.deepEqual(requests[0].body, { item_ids: [3] });
+  assert.deepEqual(JSON.parse(ack.stdout), { acked: [3] });
+});
+
 test("pad poll keeps checking until feedback arrives, prints it, and never re-delivers it", async (t) => {
   const items = [
     { id: "f1", kind: "comment", text: "Make this bigger", selector: "h1", selected_text: "Hi", created_at: "2026-09-25T00:00:00Z" },
