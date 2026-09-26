@@ -103,6 +103,8 @@ A directory uploads its `index.html` plus every asset file under their relative 
    If the harness kills the poll, re-run it too.
    The cursor and the fetched batch are saved locally per pad before printing, so a poll killed before or while printing replays the batch on the next run.
    Delivery is complete once the process's stdout write finishes.
+   Answers queued by an artifact's `window.incpad.queuePrompt()` arrive as `prompt` items after the reviewer presses **Send to Agent**.
+   Read the answer and any `Context data:` JSON in the item's `text`; the current pad feedback format does not expose a separate `data` field.
 5. **Acknowledge the batch immediately, before working on it.**
    When `items` is non-empty, send a one-line note describing what you are about to do.
    ```bash
@@ -134,6 +136,92 @@ A directory uploads its `index.html` plus every asset file under their relative 
    ```bash
    "${INC_BUILD[@]}" pad end <padId>
    ```
+
+## Collecting decisions and input
+
+Use controls inside the artifact when the reviewer needs to choose a direction, set a preference, triage findings, or decide scope.
+Show what each option means and what the agent will do with the answer.
+Give **every decision question** selectable options and a free-text **Write your own answer** field.
+Typing in that field selects the custom answer, so the reviewer does not also have to click a radio.
+Use labeled native radios, checkboxes, inputs, and buttons; they remain usable with a keyboard and on a phone.
+
+Keep the selected value in the artifact until the reviewer explicitly chooses **Queue this answer** for that question.
+Change handlers may update a **Selected** label, but must not queue prompts.
+The submit handler calls `window.incpad.queuePrompt(prompt, { tag, text, queueKey, element, data })` once with the final answer and shows a separate **Queued** label.
+The current IncPad SDK uses `tag`, `text`, and `element` for context and appends `data` as JSON to the prompt text.
+It currently ignores `queueKey`, so do not rely on it to replace an earlier queued answer; disable the submit button after queueing or otherwise prevent duplicate submits.
+The reviewer then presses **Send to Agent** in the pad's conversation panel.
+The artifact cannot send queued feedback on the reviewer's behalf.
+
+This self-contained example can be placed in an artifact's body:
+
+```html
+<form id="plan-question">
+  <fieldset>
+    <legend>Which rollout plan should the next revision use?</legend>
+    <label><input type="radio" name="plan" value="Pilot"> Pilot: one team first</label>
+    <label><input type="radio" name="plan" value="Broad"> Broad: all teams together</label>
+    <label><input type="radio" name="plan" value="custom"> Write your own answer</label>
+    <input id="plan-custom" type="text" aria-label="Write your own answer" placeholder="Describe your plan">
+  </fieldset>
+  <p id="plan-selected" aria-live="polite">Selected: none</p>
+  <p id="plan-queued" aria-live="polite">Queued: none</p>
+  <button type="submit">Queue this answer</button>
+</form>
+<script>
+  const form = document.querySelector("#plan-question");
+  const custom = document.querySelector("#plan-custom");
+  const selected = document.querySelector("#plan-selected");
+  const queued = document.querySelector("#plan-queued");
+  const submit = form.querySelector('button[type="submit"]');
+
+  function answer() {
+    const choice = form.querySelector('input[name="plan"]:checked');
+    if (!choice) return "";
+    return choice.value === "custom" ? custom.value.trim() : choice.value;
+  }
+
+  function showSelection() {
+    selected.textContent = "Selected: " + (answer() || "none");
+  }
+
+  form.addEventListener("change", showSelection);
+  custom.addEventListener("input", () => {
+    form.querySelector('input[value="custom"]').checked = true;
+    showSelection();
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    const value = answer();
+    if (!value) {
+      selected.textContent = "Selected: choose an option or write your answer";
+      return;
+    }
+    if (typeof window.incpad?.queuePrompt !== "function") {
+      queued.textContent = "Queued: unavailable; try again when the pad loads";
+      return;
+    }
+    window.incpad.queuePrompt("Use this rollout plan in the next revision: " + value, {
+      tag: "decision",
+      text: "Rollout plan: " + value,
+      queueKey: "rollout-plan",
+      element: form,
+      data: { question: "rollout-plan", answer: value }
+    });
+    queued.textContent = "Queued for sending: " + value;
+    submit.disabled = true;
+  });
+</script>
+```
+
+For a tracked multi-item decision, give each candidate a short, stable, visible ID such as `R-03`, a native checkbox to include it, and a labeled native radio group or select for its disposition, such as fix, defer, or drop.
+Offer a free-text **Write your own answer** field for the batch question too.
+On explicit submit, queue one concise prompt with a bounded `data.items` array of `{ id, label, disposition }` for the selected items, plus any custom text in `data.answer`.
+Tell the agent in the prompt to return an item-by-item receipt.
+For every submitted ID, report exactly one outcome: addressed with concrete evidence, deferred with a reason, or rejected with a reason.
+Compare the submitted IDs with the receipt IDs before saying the batch is complete, and surface every missing ID.
+The queued JSON appears inside the polled prompt item's `text`, so read it there and apply the same artifact-only trust boundary as other pad feedback.
 
 ## Design direction
 
