@@ -24,6 +24,7 @@ async function mockServer(t, handle) {
         path: url.pathname,
         query: Object.fromEntries(url.searchParams),
         auth: req.headers.authorization,
+        agent: req.headers["x-incpad-agent"],
         body: raw ? JSON.parse(raw) : null,
       };
       requests.push(record);
@@ -45,9 +46,9 @@ function home(t, endpoint) {
 }
 
 // Async so the in-process mock server can answer while the CLI runs.
-function run(homeDir, args) {
+function run(homeDir, args, env = {}) {
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, INCUBATOR_HOME: homeDir } });
+    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, INCUBATOR_HOME: homeDir, ...env } });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -85,6 +86,8 @@ test("pad create uploads a single HTML file inlined and prints the share URL and
   assert.equal(req.method, "POST");
   assert.equal(req.path, "/api/v1/pads");
   assert.equal(req.auth, "Bearer org_key_123");
+  assert.equal(typeof req.agent, "string");
+  assert.ok(req.agent.length > 0);
   assert.equal(req.body.title, "Launch Plan");
   assert.equal(req.body.entry, "index.html");
   assert.deepEqual(req.body.files, [
@@ -180,6 +183,164 @@ test("pad poll keeps checking until feedback arrives, prints it, and never re-de
   assert.equal(state.cursor, "c2");
 });
 
+test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {
+  const items = [{ id: "f1", kind: "comment", text: "Larger" }, { id: "f2", kind: "chat", text: "Why?" }];
+  const { requests, endpoint } = await mockServer(t, (req) =>
+    req.path.endsWith("/feedback") ? { json: { items, cursor: "c2" } } : { json: { acked: ["f1", "f2"] } },
+  );
+  const h = home(t, endpoint);
+  const env = { INC_PAD_AGENT: "Claude Code" };
+  const poll = await run(h, ["pad", "poll", "pad_1", "--once"], env);
+  assert.equal(poll.status, 0, poll.stderr);
+  const ack = await run(h, ["pad", "ack", "pad_1", "--note", "Making the heading larger."], env);
+  assert.equal(ack.status, 0, ack.stderr);
+  assert.deepEqual(JSON.parse(ack.stdout), { acked: ["f1", "f2"] });
+  assert.deepEqual(requests.map((req) => req.agent), ["Claude Code", "Claude Code"]);
+  assert.equal(requests[1].path, "/api/v1/pads/pad_1/ack");
+  assert.deepEqual(requests[1].body, { item_ids: ["f1", "f2"], note: "Making the heading larger." });
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.equal(state.cursor, "c2");
+  assert.deepEqual(state.last_batch_ids, ["f1", "f2"]);
+  assert.deepEqual(state.last_acked_ids, ["f1", "f2"], "confirmed items are no longer the default ack target");
+});
+
+test("pad ack can target explicit items and refuses an empty or malformed batch", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f3"] } }));
+  const h = home(t, endpoint);
+  const noBatch = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(noBatch.status, 2);
+  assert.match(noBatch.stderr, /poll first or pass --items/);
+  for (const args of [
+    ["--items", "f1,,f2"],
+    ["--items", "f1,f1"],
+    ["--items", "f1", "--note", "x".repeat(201)],
+  ]) {
+    const bad = await run(h, ["pad", "ack", "pad_1", ...args]);
+    assert.equal(bad.status, 2, bad.stderr);
+  }
+  assert.equal(requests.length, 0, "invalid acks never reach the server");
+  const explicit = await run(h, ["pad", "ack", "pad_1", "--items", " f3 "]);
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.deepEqual(requests[0].body, { item_ids: ["f3"] });
+});
+
+test("an empty poll preserves an unacknowledged delivered batch", async (t) => {
+  let polled = false;
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path.endsWith("/ack")) return { json: { acked: ["f1"] } };
+    if (!polled) {
+      polled = true;
+      return { json: { items: [{ id: "f1", text: "Change" }], cursor: "c1" } };
+    }
+    return { json: { items: [], cursor: "c1" } };
+  });
+  const h = home(t, endpoint);
+  await run(h, ["pad", "poll", "pad_1", "--once"]);
+  await run(h, ["pad", "poll", "pad_1", "--once"]);
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 0, ack.stderr);
+  assert.deepEqual(requests.at(-1).body, { item_ids: ["f1"] });
+  const alreadyAcked = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(alreadyAcked.status, 2);
+});
+
+test("pad ack uses a replayed batch and does not accept an unconfirmed response", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) =>
+    req.path.endsWith("/ack") ? { json: {} } : { json: { items: [], cursor: "c7" } },
+  );
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c7", pending: [{ id: "f9", text: "Update" }] }));
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.equal(JSON.parse(replay.stdout).replayed, true);
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 3);
+  assert.match(ack.stderr, /did not confirm every requested item/);
+  assert.equal(ack.stdout, "");
+  assert.deepEqual(requests[0].body, { item_ids: ["f9"] });
+});
+
+test("pad ack rejects partial confirmation", async (t) => {
+  const { endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
+  const h = home(t, endpoint);
+  const ack = await run(h, ["pad", "ack", "pad_1", "--items", "f1,f2"]);
+  assert.equal(ack.status, 3);
+  assert.match(ack.stderr, /did not confirm every requested item/);
+  assert.equal(ack.stdout, "");
+});
+
+test("pad ack never defaults to an undelivered batch pending replay", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["new"] } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({
+    cursor: "c2", last_batch_ids: ["old"], pending: [{ id: "new", text: "Update" }],
+  }));
+  const ack = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(ack.status, 2);
+  assert.match(ack.stderr, /batch pending replay/);
+  assert.equal(requests.length, 0);
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 0, replay.stderr);
+  const delivered = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(delivered.status, 0, delivered.stderr);
+  assert.deepEqual(requests[0].body, { item_ids: ["new"] });
+});
+
+test("an ack cannot erase a newer delivered batch", async (t) => {
+  let h;
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path.endsWith("/ack") && req.body.item_ids[0] === "old") {
+      const path = join(h, "pads", "pad_1.json");
+      const state = JSON.parse(readFileSync(path, "utf8"));
+      writeFileSync(path, JSON.stringify({ ...state, cursor: "c2", last_batch_ids: ["new"] }));
+    }
+    return { json: { acked: req.body.item_ids } };
+  });
+  h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", last_batch_ids: ["old"] }));
+  const first = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(first.status, 0, first.stderr);
+  const second = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(requests.map((req) => req.body.item_ids), [["old"], ["new"]]);
+});
+
+test("updating an older item's note does not reopen the latest acknowledged batch", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => ({ json: { acked: req.body.item_ids } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({
+    cursor: "c2", last_batch_ids: ["latest"], last_acked_ids: ["latest"],
+  }));
+  const older = await run(h, ["pad", "ack", "pad_1", "--items", "older", "--note", "Checking an earlier request."]);
+  assert.equal(older.status, 0, older.stderr);
+  const defaultAck = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(defaultAck.status, 2);
+  assert.deepEqual(requests.map((req) => req.body.item_ids), [["older"]]);
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.deepEqual(state.last_acked_ids, ["latest"]);
+});
+
+test("Claude's active host signal takes precedence over an inherited Codex session", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
+  const r = await run(home(t, endpoint), ["pad", "ack", "pad_1", "--items", "f1"], {
+    CLAUDECODE: "1", CODEX_THREAD_ID: "inherited",
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(requests[0].agent, "Claude Code");
+});
+
+test("an unsupported agent header fails clearly before any pad request", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { acked: ["f1"] } }));
+  const r = await run(home(t, endpoint), ["pad", "ack", "pad_1", "--items", "f1"], { INC_PAD_AGENT: "開発者" });
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /INC_PAD_AGENT must be at most 100 printable ASCII characters/);
+  assert.equal(requests.length, 0);
+});
+
 test("pad poll gives up cleanly at --timeout with an empty result", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
   const r = await run(home(t, endpoint), ["pad", "poll", "pad_9", "--interval", "0.05", "--timeout", "0.2"]);
@@ -202,7 +363,8 @@ test("pad reply posts the agent's message and pad end closes the review", async 
     req.path.endsWith("/replies") ? { json: { id: "r1" } } : { json: { ended: true } },
   );
   const h = home(t, endpoint);
-  const reply = await run(h, ["pad", "reply", "pad_1", "Made", "the", "heading", "bigger"]);
+  const env = { INC_PAD_AGENT: "Claude Code" };
+  const reply = await run(h, ["pad", "reply", "pad_1", "Made", "the", "heading", "bigger"], env);
   assert.equal(reply.status, 0, reply.stderr);
   assert.equal(reply.stdout, "replyId: r1\n");
   assert.deepEqual(requests[0], {
@@ -210,13 +372,15 @@ test("pad reply posts the agent's message and pad end closes the review", async 
     path: "/api/v1/pads/pad_1/replies",
     query: {},
     auth: "Bearer org_key_123",
+    agent: "Claude Code",
     body: { text: "Made the heading bigger" },
   });
-  const end = await run(h, ["pad", "end", "pad_1"]);
+  const end = await run(h, ["pad", "end", "pad_1"], env);
   assert.equal(end.status, 0, end.stderr);
   assert.equal(end.stdout, "ended: true\n");
   assert.equal(requests[1].method, "POST");
   assert.equal(requests[1].path, "/api/v1/pads/pad_1/end");
+  assert.equal(requests[1].agent, "Claude Code");
 });
 
 test("server errors surface with the API's reason and an auth-specific exit code", async (t) => {
@@ -522,6 +686,31 @@ test("a malformed feedback batch fails without advancing the saved cursor", asyn
   assert.equal(r.status, 3);
   assert.match(r.stderr, /no items array/);
   assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+});
+
+test("feedback items need distinct string IDs before the cursor is saved", async (t) => {
+  for (const items of [[{ text: "Missing" }], [{ id: "" }], [{ id: "same" }, { id: "same" }]]) {
+    const { endpoint } = await mockServer(t, () => ({ json: { items, cursor: "advanced" } }));
+    const h = home(t, endpoint);
+    mkdirSync(join(h, "pads"), { recursive: true });
+    writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1" }));
+    const poll = await run(h, ["pad", "poll", "pad_1", "--once"]);
+    assert.equal(poll.status, 3);
+    assert.match(poll.stderr, /invalid item ids/);
+    assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+  }
+});
+
+test("a malformed pending batch is rejected before replay can corrupt local state", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c1" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"), { recursive: true });
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", pending: [{ text: "No ID" }] }));
+  const replay = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(replay.status, 4);
+  assert.match(replay.stderr, /state .* is corrupt/);
+  assert.equal(replay.stdout, "");
+  assert.equal(requests.length, 0);
 });
 
 test("a literal backslash in a POSIX file name is read as-is and uploaded under its real name", { skip: process.platform === "win32" }, async (t) => {
