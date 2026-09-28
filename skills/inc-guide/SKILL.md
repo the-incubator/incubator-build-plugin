@@ -125,6 +125,7 @@ Each skill's full definition lives at `skills/<dir>/SKILL.md` under the plugin r
 
 | Skill | Source dir | What it does |
 |---|---|---|
+| `/inc-story-breakdown` | `inc-story-breakdown` | Break a feature (PRD, Linear issue, or plain description) into pointed, dev-agent-ready stories with story points |
 | `/inc-debug` | `inc-debug` | Systematic debugging - reproduce and isolate before any fix is attempted |
 | `/inc-resolve-pr-feedback` | `inc-resolve-pr-feedback` | Evaluate and fix PR review comments in parallel; also invoked automatically by commit-push-pr's watch loop |
 | `/inc-update-code` | `inc-update-code` | Pull latest main into the current branch; hands conflicts to git-merge-expert |
