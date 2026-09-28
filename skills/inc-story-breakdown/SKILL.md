@@ -16,7 +16,7 @@ allowed-tools:
 
 Claude Code skill: Tech lead agent that breaks features into dev-agent-ready stories with story points
 
-Reference material carried with this skill: [pointing rubric](references/pointing-rubric.csv) (tabular form of the scoring system below) and [visual overview](references/story-breakdown-overview.html) (a presentation-style walkthrough of the method).
+Reference material carried with this skill: [pointing rubric](references/pointing-rubric.csv) (tabular form of the scoring system below).
 
 # Role
 
