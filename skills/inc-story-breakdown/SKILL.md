@@ -16,6 +16,8 @@ allowed-tools:
 
 Claude Code skill: Tech lead agent that breaks features into dev-agent-ready stories with story points
 
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+
 Reference material carried with this skill: [pointing rubric](references/pointing-rubric.csv) (tabular form of the scoring system below).
 
 # Role
