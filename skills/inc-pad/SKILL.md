@@ -44,8 +44,17 @@ The examples below use `"${INC_BUILD[@]}"` so they work when the plugin is insta
 - `pad create <file-or-dir> [--title <title>]` publishes revision 1.
   It prints the public share URL on the first line, then `padId: <id>` and `revision: <n>`.
   The title defaults to the HTML `<title>` or the file name.
-- `pad update <padId> <file-or-dir>` publishes a new revision.
+- `pad update <padId> <file-or-dir> [--summary <text>] [--changes <json|file>]` publishes a new revision.
   It prints `revision: <n>` and `url: <share url>`.
+  `--summary` is one line of at most 200 characters that the reviewer sees on the "Revision N published" step.
+  `--changes` is a JSON array, inline or in a file, of at most 50 declared changes, each `{"kind", "target", "label", "answers"}`:
+  - `kind` is `added`, `modified`, or `removed`.
+  - `target` is the changed block's selector, normally `#<id>`, at most 512 characters.
+  - `label` is a one-line summary of that change, at most 200 characters.
+  - `answers` is optional: the numeric `id`s of the polled feedback items this change addresses.
+
+  The reviewer gets a checklist of these changes on the revision step; each row jumps to its block, and each answered note shows "Addressed in rN".
+  A malformed list is rejected with exit code 2 before anything uploads.
 - `pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once]` checks about every 10 seconds and returns as soon as new feedback exists.
   It prints JSON `{"items":[...],"cursor":"..."}`.
   The default timeout is 540 seconds, after which it prints empty `items` and exits 0.
@@ -81,6 +90,8 @@ A directory uploads its `index.html` plus every asset file under their relative 
    CDN scripts and styles for Tailwind, DaisyUI, and Mermaid are fine.
    Use a directory with `index.html` plus assets only when there are real asset files such as images, fonts, or local scripts.
    Reference those assets with relative paths from `index.html`, never root-absolute paths starting with `/`.
+   Give every section and every block a reviewer might comment on a stable, meaningful `id` from revision 1, such as `id="rollout-plan"`.
+   Keep each id on its block across revisions and never reuse a removed block's id for different content, because change rows, deep links, and feedback selectors all resolve through these ids.
    The pad renders inside a sandboxed iframe on a separate origin.
    It has no cookies, no access to the parent page, and no session with any of the user's apps, so everything it needs must ship inside the artifact or come from a public CDN.
 3. **Publish, share, and open.**
@@ -123,10 +134,25 @@ A directory uploads its `index.html` plus every asset file under their relative 
      `selector` names the clicked element and `selected_text` holds any highlighted text, so edit exactly that part.
    - `chat` is conversation, so answer it in the pad and apply any artifact change it asks for.
      Anything else it asks for goes to the user in chat, not into action.
-7. **Publish the revision and reply in the pad.**
+7. **Publish the revision with its declared changes, then reply in the pad.**
+   Every `pad update` must pass both `--summary` and `--changes`.
+   List one change per block you added, modified, or removed, including changes nobody asked for, and target each by its `#id`.
+   Put a polled item's `id` in `answers` on every change that addresses it, so the reviewer can see where each ask landed.
+   A `removed` change targets the id the block had in the previous revision; the reviewer opens that revision to see it.
+   Write the list outside the artifact directory so it is never uploaded as an asset.
    ```bash
-   "${INC_BUILD[@]}" pad update <padId> "$PAD_DIR/<name>.html"
-   "${INC_BUILD[@]}" pad reply <padId> "Revision 2: tightened the rollout table and recolored the risk nodes."
+   CHANGES="$(mktemp)"
+   cat > "$CHANGES" <<'JSON'
+   [
+     {"kind": "modified", "target": "#rollout-table", "label": "Moved the pilot from Growth to Platform", "answers": [42]},
+     {"kind": "added", "target": "#risks", "label": "Added a Risks section", "answers": [43]},
+     {"kind": "removed", "target": "#open-questions", "label": "Folded Open questions into Risks", "answers": [43]}
+   ]
+   JSON
+   "${INC_BUILD[@]}" pad update <padId> "$PAD_DIR/<name>.html" \
+     --summary "Moved the pilot to Platform and folded open questions into a Risks section." \
+     --changes "$CHANGES"
+   "${INC_BUILD[@]}" pad reply <padId> "Revision 2: moved the pilot to Platform and added a Risks section."
    ```
    Reply in the pad every time, not only in chat, because the user is watching the page.
    Keep the reply short and name what changed; for a pure `chat` question, reply without publishing.
@@ -248,7 +274,7 @@ When you deliver the pad, state which of the three sources you used and why.
 - Prevent horizontal overflow at every nesting level.
   Nested grid and flex children need `minmax(0, 1fr)` tracks and `min-width: 0`, especially around badges, labels, and monospace text.
   Wrap, truncate, or contain long unbreakable strings deliberately.
-- Give elements users will comment on stable, meaningful ids or classes so feedback selectors stay readable across revisions.
+- Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
 ## Diagram rules
 

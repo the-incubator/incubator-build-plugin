@@ -153,6 +153,86 @@ test("pad update publishes a new revision from the same inputs", async (t) => {
   assert.deepEqual(req.body.files.map((x) => x.path), ["assets/app.css", "assets/logo.png", "index.html"]);
 });
 
+test("pad update declares a summary and the changes it made, linked to the feedback they answer", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) =>
+    req.path === "/api/v1/pads" ? { json: created } : { json: { revision: 3, url: created.url } },
+  );
+  const f = fixtures(t);
+  const h = home(t, endpoint);
+  await run(h, ["pad", "create", f.single]);
+  const changes = [
+    { kind: "modified", target: "#rollout-heading", label: "Shortened the heading", answers: [41] },
+    { kind: "added", target: "#hop-failure", label: "Explained what happens when a hop fails", answers: ["42"] },
+    { kind: "removed", target: "#open-questions", label: "Folded Open questions into Risks" },
+  ];
+  const r = await run(h, ["pad", "update", "pad_1", f.single, "--summary", " Addressed all three notes ", "--changes", JSON.stringify(changes)]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, `revision: 3\nurl: ${created.url}\n`, "succeeds even when the server does not echo the fields back");
+  const { body } = requests[1];
+  assert.equal(body.summary, "Addressed all three notes");
+  assert.deepEqual(body.changes, [
+    changes[0],
+    { ...changes[1], answers: [42] },
+    changes[2],
+  ]);
+});
+
+test("pad update reads --changes from a JSON file", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { revision: 2 } }));
+  const f = fixtures(t);
+  const file = join(f.dir, "changes.json");
+  writeFileSync(file, JSON.stringify([{ kind: "added", target: "#risks", label: "Added a Risks section", answers: [43] }]));
+  const r = await run(home(t, endpoint), ["pad", "update", "pad_1", f.single, "--changes", file]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(requests[0].body.changes, [{ kind: "added", target: "#risks", label: "Added a Risks section", answers: [43] }]);
+  assert.equal("summary" in requests[0].body, false);
+});
+
+test("pad update without --summary or --changes sends neither field", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { revision: 2 } }));
+  const f = fixtures(t);
+  const r = await run(home(t, endpoint), ["pad", "update", "pad_1", f.single]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal("summary" in requests[0].body, false);
+  assert.equal("changes" in requests[0].body, false);
+});
+
+test("pad update rejects a malformed summary or change list before uploading anything", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { revision: 2 } }));
+  const f = fixtures(t);
+  const h = home(t, endpoint);
+  const ok = { kind: "added", target: "#risks", label: "Added Risks" };
+  const cases = [
+    [["--summary", "x".repeat(201)], /--summary must be non-empty and at most 200/],
+    [["--summary", "  "], /--summary must be non-empty/],
+    [["--changes", "[not json"], /not valid JSON/],
+    [["--changes", JSON.stringify(ok)], /must be a JSON array/],
+    [["--changes", join(f.dir, "missing.json")], /no such file .*missing\.json/],
+    [["--changes", JSON.stringify([{ ...ok, kind: "renamed" }])], /\[0\]\.kind must be one of added, modified, removed/],
+    [["--changes", JSON.stringify([ok, { kind: "added", target: "#x", summary: "old key" }])], /\[1\] has unknown key summary/],
+    [["--changes", JSON.stringify([{ ...ok, target: "" }])], /\[0\]\.target must be a non-empty/],
+    [["--changes", JSON.stringify([{ ...ok, label: "x".repeat(201) }])], /\[0\]\.label must be/],
+    [["--changes", JSON.stringify([{ ...ok, answers: ["abc"] }])], /\[0\]\.answers must be an array of distinct numeric/],
+    [["--changes", JSON.stringify([{ ...ok, answers: [7, "7"] }])], /answers must be an array of distinct/],
+    [["--changes", JSON.stringify(Array.from({ length: 51 }, () => ok))], /at most 50/],
+  ];
+  for (const [flags, message] of cases) {
+    const r = await run(h, ["pad", "update", "pad_1", f.single, ...flags]);
+    assert.equal(r.status, 2, `${flags.join(" ")}: ${r.stderr}`);
+    assert.match(r.stderr, message);
+  }
+  assert.equal(requests.length, 0, "nothing is uploaded when the declared changes are invalid");
+});
+
+test("pad create does not accept revision notes, which describe later revisions", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: created }));
+  const f = fixtures(t);
+  const r = await run(home(t, endpoint), ["pad", "create", f.single, "--summary", "first"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /unknown flag --summary/);
+  assert.equal(requests.length, 0);
+});
+
 test("numeric feedback IDs poll and ack using the API's integer item_ids", async (t) => {
   const items = [{ id: 3, kind: "comment", text: "Make this bigger" }];
   const { requests, endpoint } = await mockServer(t, (req) =>
