@@ -11,7 +11,8 @@
 //   inc-build feedback fetch <sessionId> [--out <dir>]
 //                                                       # download bundle + recording zip
 //   inc-build pad create <file-or-dir> [--title <title>]   # publish an IncPad, prints share URL
-//   inc-build pad update <padId> <file-or-dir>              # publish a new revision
+//   inc-build pad update <padId> <file-or-dir> [--summary <text>] [--changes <json|file>]
+//                                                       # publish a new revision and declare what changed
 //   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
 //                                                       # short-poll for reviewer feedback
 //   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
@@ -167,7 +168,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback projects
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
   inc-build pad create <file-or-dir> [--title <title>]
-  inc-build pad update <padId> <file-or-dir>
+  inc-build pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]
   inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
   inc-build pad reply <padId> [--] <text...>
@@ -310,6 +311,72 @@ function padPayload(input, title) {
   return { title: resolvedTitle, entry: "index.html", files };
 }
 
+// Declared revision changes, sent as-is so the pad chrome can list them and
+// link each one to the block it touched and the feedback it answers. Validated
+// here so a malformed list fails before anything is uploaded; the limits match
+// the server's, which may also ignore the fields entirely (older deploys).
+const CHANGE_KINDS = ["added", "modified", "removed"];
+const CHANGE_KEYS = new Set(["kind", "target", "label", "answers"]);
+const MAX_CHANGES = 50;
+const MAX_SUMMARY = 200;
+const MAX_LABEL = 200;
+const MAX_TARGET = 512;
+
+function readChanges(value) {
+  const inline = /^\s*[[{]/.test(value);
+  let raw = value;
+  if (!inline) {
+    try {
+      raw = readFileSync(value, "utf8");
+    } catch (err) {
+      if (err?.code === "ENOENT") die(`--changes: no such file ${value} (pass a JSON array or a path to a JSON file)`, 2);
+      die(`--changes: cannot read ${value}: ${err?.message ?? String(err)}`, 2);
+    }
+  }
+  let changes;
+  try {
+    changes = JSON.parse(raw);
+  } catch (err) {
+    die(`--changes: ${inline ? "value" : value} is not valid JSON (${err?.message ?? String(err)})`, 2);
+  }
+  if (!Array.isArray(changes)) die("--changes must be a JSON array of {kind, target, label, answers?}", 2);
+  if (changes.length > MAX_CHANGES) die(`--changes lists ${changes.length} changes; at most ${MAX_CHANGES} are allowed`, 2);
+  return changes.map((change, i) => {
+    const at = `--changes[${i}]`;
+    if (!change || typeof change !== "object" || Array.isArray(change)) die(`${at} must be an object {kind, target, label, answers?}`, 2);
+    const unknown = Object.keys(change).filter((k) => !CHANGE_KEYS.has(k));
+    if (unknown.length) die(`${at} has unknown key${unknown.length > 1 ? "s" : ""} ${unknown.join(", ")} (allowed: ${[...CHANGE_KEYS].join(", ")})`, 2);
+    const { kind, target, label, answers } = change;
+    if (!CHANGE_KINDS.includes(kind)) die(`${at}.kind must be one of ${CHANGE_KINDS.join(", ")}`, 2);
+    if (typeof target !== "string" || !target.trim() || target.length > MAX_TARGET) {
+      die(`${at}.target must be a non-empty element id or selector of at most ${MAX_TARGET} characters`, 2);
+    }
+    if (typeof label !== "string" || !label.trim() || label.length > MAX_LABEL) {
+      die(`${at}.label must be a non-empty one-line summary of at most ${MAX_LABEL} characters`, 2);
+    }
+    const out = { kind, target, label };
+    if (answers != null) {
+      const ids = Array.isArray(answers) ? answers.map(normalizeId) : null;
+      if (!ids || !ids.every((id) => Number.isSafeInteger(id) && id >= 0) || new Set(ids).size !== ids.length) {
+        die(`${at}.answers must be an array of distinct numeric feedback item ids from pad poll`, 2);
+      }
+      out.answers = ids;
+    }
+    return out;
+  });
+}
+
+function revisionNotes(flags) {
+  const notes = {};
+  if (flags.summary != null) {
+    const summary = flags.summary.trim();
+    if (!summary || summary.length > MAX_SUMMARY) die(`--summary must be non-empty and at most ${MAX_SUMMARY} characters`, 2);
+    notes.summary = summary;
+  }
+  if (flags.changes != null) notes.changes = readChanges(flags.changes);
+  return notes;
+}
+
 function padStatePath(id) {
   return join(PADS_DIR, `${encodeURIComponent(id)}.json`);
 }
@@ -419,7 +486,7 @@ function numberFlag(flags, key, fallback, { positive = false } = {}) {
 
 const PAD_FLAGS = {
   create: ["title"],
-  update: ["title"],
+  update: ["title", "summary", "changes"],
   poll: ["interval", "timeout", "once", "after", "reset"],
   ack: ["note", "items"],
   reply: [],
@@ -429,7 +496,7 @@ const PAD_FLAGS = {
 
 const PAD_USAGE = {
   create: "pad create <file-or-dir> [--title <title>]",
-  update: "pad update <padId> <file-or-dir> [--title <title>]",
+  update: "pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]",
   poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
   ack: "pad ack <padId> [--note <text>] [--items <id,...>]",
   reply: "pad reply <padId> [--] <text...>",
@@ -472,8 +539,9 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "update") {
     requireArity("update", rest, 2);
     const id = rest[0];
+    const notes = revisionNotes(flags);
     const saved = readPadState(id); // validated before the request so corrupt state cannot strand a published revision
-    const body = padPayload(rest[1], flags.title || saved.title);
+    const body = { ...padPayload(rest[1], flags.title || saved.title), ...notes };
     const result = await api(creds, "PUT", padPath(id, "/revisions"), { body, pad: true });
     if (result.revision == null) die("PUT /api/v1/pads/:id/revisions returned no revision - the update was not confirmed", 3);
     process.stdout.write(`revision: ${result.revision}\n`);
