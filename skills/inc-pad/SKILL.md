@@ -1,6 +1,6 @@
 ---
 name: inc-pad
-description: Author a rich HTML artifact (plan, comparison, diagram, table, report, interactive prototype), publish it as an IncPad on the Incubator Build web app, hand the user a public share URL, and loop on their in-browser feedback - element comments, text annotations, queued prompts, and chat - publishing new revisions until the review ends. Hosted replacement for the local Lavish Editor. Use when about to give a response that is easier to grasp visually than as prose, or when the user says "IncPad", "/inc-pad", "make a pad", "visual artifact", "HTML explainer", "interactive prototype", "review surface", "plan I can annotate", "show me visually", "browser feedback loop", or "hosted review page".
+description: Author a rich HTML artifact (plan, comparison, diagram, table, report, interactive prototype, annotated code, call stack), publish it as an IncPad on the Incubator Build web app, hand the user a public share URL, and loop on their in-browser feedback - element comments, text annotations, queued prompts, and chat - publishing new revisions until the review ends. Hosted replacement for the local Lavish Editor. Use when about to give a response that is easier to grasp visually than as prose, or when the user says "IncPad", "/inc-pad", "make a pad", "visual artifact", "HTML explainer", "interactive prototype", "review surface", "plan I can annotate", "annotate this code", "show the call stack", "show me visually", "browser feedback loop", or "hosted review page".
 argument-hint: "<what the artifact should show>"
 allowed-tools: Read, Write, Bash
 ---
@@ -163,6 +163,20 @@ A directory uploads its `index.html` plus every asset file under their relative 
    "${INC_BUILD[@]}" pad end <padId>
    ```
 
+## Toolbox blocks
+
+IncPad injects a blocks runtime into every pad, so these standard blocks work in pad HTML with no script or stylesheet tags.
+Read [the toolbox block catalog](references/blocks.md) before using one; it has the full contract and copyable snippets.
+
+- **Call stack** `<incpad-callstack>`: the function-level path a change runs through, one `<li>` per call with `data-mark` (`+` added, `~` changed, `-` removed, `?` open), `data-depth`, `data-at="path:line"`, and an optional `data-note`.
+  Use it when the decision depends on which calls a change adds, changes, removes, or leaves open.
+- **Code annotation** `<incpad-code data-path="..." data-start="N">`: a file slice or labeled sketch with line numbers, plus `<incpad-pin line="N" kind="info|warn|risk|ok">` callouts.
+  Use it when the decision depends on specific lines.
+
+Put the decision above the block and keep the block to the calls or lines that bear on it.
+Every row and code line is a comment target, so reviewer comments on them arrive as normal `comment` items.
+Give each block a stable `id` like any other section.
+
 ## Collecting decisions and input
 
 Use controls inside the artifact when the reviewer needs to choose a direction, set a preference, triage findings, or decide scope.
@@ -269,7 +283,8 @@ When you deliver the pad, state which of the three sources you used and why.
 ## Visual guidance
 
 - Use visual hierarchy so the most important decisions, risks, tradeoffs, and next actions are obvious at a glance.
-- Use sections, cards, tables, diagrams, annotated snippets, and side-by-side comparisons instead of long prose.
+- Use sections, cards, tables, diagrams, toolbox blocks, and side-by-side comparisons instead of long prose.
+  Show code with `<incpad-code>` rather than hand-built snippets, so its lines are pinned and commentable.
 - Choose typography, spacing, color, and layout deliberately so the artifact has a clear point of view.
 - Prevent horizontal overflow at every nesting level.
   Nested grid and flex children need `minmax(0, 1fr)` tracks and `min-width: 0`, especially around badges, labels, and monospace text.
@@ -282,6 +297,7 @@ These rules are mandatory for every pad.
 
 - **Always use Mermaid** for flows, architecture, relationships, states, sequences, and timelines.
   Never hand-build boxes-and-arrows diagrams from div, flexbox, grid, or ad-hoc SVG unless the user explicitly asks for a non-Mermaid diagram.
+  A function-level call path is not a diagram: use the `<incpad-callstack>` toolbox block for it.
 - **Always color diagrams.**
   Initialize Mermaid with `theme: "base"` and `themeVariables` mapped to the artifact's design tokens.
   Use `classDef` or `style` to color-code node categories such as new vs existing or error vs happy path, so color carries meaning.
