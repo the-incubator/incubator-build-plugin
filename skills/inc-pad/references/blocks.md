@@ -44,6 +44,8 @@ One `<li>` per call, in call order, inside `<incpad-callstack>`.
 | `data-note` | no | One short line on why this call matters to the decision |
 
 The `<li>` text is the call itself, such as `createRevision(padId, input)`.
+Escape HTML in the row text as in code slices: write `&lt;` for `<`, `&gt;` for `>`, and `&amp;` for `&`, so `handler<Result>()` becomes `handler&lt;Result&gt;()`.
+In `data-note` and other attribute values, write `&amp;` for `&` and `&quot;` for `"`.
 
 ```html
 <incpad-callstack id="save-path" aria-label="Revision save path">
@@ -82,6 +84,7 @@ Add an `<incpad-pin>` after the code for each line you want to call out.
 | `kind` | yes | `info` context, `warn` worth a look, `risk` likely bug or decision needed, `ok` checked and fine |
 
 The pin text is one or two sentences that say what the reviewer should notice and why it matters to the decision.
+Escape it the same way as the code.
 
 ```html
 <incpad-code id="revisions-slice" data-path="apps/web/lib/pads/revisions.ts" data-start="40">export async function createRevision(padId: string, input: RevisionInput): Promise&lt;Revision&gt; {
