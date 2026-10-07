@@ -90,6 +90,7 @@ A directory uploads its `index.html` plus every asset file under their relative 
    CDN scripts and styles for Tailwind, DaisyUI, and Mermaid are fine.
    Use a directory with `index.html` plus assets only when there are real asset files such as images, fonts, or local scripts.
    Reference those assets with relative paths from `index.html`, never root-absolute paths starting with `/`.
+   Decide the starting interaction mode with the `incpad-annotation` meta tag (see Starting interaction mode below).
    Give every section and every block a reviewer might comment on a stable, meaningful `id` from revision 1, such as `id="rollout-plan"`.
    Keep each id on its block across revisions and never reuse a removed block's id for different content, because change rows, deep links, and feedback selectors all resolve through these ids.
    The pad renders inside a sandboxed iframe on a separate origin.
@@ -162,6 +163,24 @@ A directory uploads its `index.html` plus every asset file under their relative 
    ```bash
    "${INC_BUILD[@]}" pad end <padId>
    ```
+
+## Starting interaction mode
+
+A pad opens with annotation on by default: clicking an element or selecting text opens a comment card.
+That suits review and decision artifacts, but for a read-mostly artifact most clicks are for reading, and the reviewer would have to switch annotation off every time.
+You decide the starting mode when you author the artifact, by declaring it in the HTML `<head>`:
+
+```html
+<meta name="incpad-annotation" content="off">
+```
+
+- Leave the tag out, or use `content="on"`, for review and decision artifacts: plans, comparisons, prototypes, anything the reviewer is meant to mark up.
+  Behavior is unchanged.
+- Set `content="off"` for read-mostly artifacts: dashboards, status pages, and reports someone revisits often.
+  The pad opens in read mode, and annotation stays available through the existing annotate toggle and Cmd/Ctrl+I.
+- Each revision's own tag decides its starting state, so keep the tag in the HTML of every revision you publish, including `pad update` ones.
+  A revision without the tag opens with annotation on.
+- The tag only sets the starting state: there is no per-viewer persistence, and feedback is stored and polled exactly as before.
 
 ## Toolbox blocks
 
