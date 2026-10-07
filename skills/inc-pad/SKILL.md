@@ -194,6 +194,7 @@ When you are just publishing an artifact to share and expect no review, declare 
 - Use `content="collapsed"` when publishing an artifact just to share, with no review expected.
   It often pairs with `<meta name="incpad-annotation" content="off">`.
   The pad opens with the chat rail collapsed, and the reader can still expand it with the existing control.
+  A share-only pad has no review to wait for, so after step 3 print the share URL and finish: skip steps 4 through 8 unless the user asks you to collect feedback.
 - Leave the tag out, or use `content="open"`, for anything you want feedback on.
   Behavior is unchanged.
 - Each revision's own tag decides its starting state, so keep the tag in the HTML of every revision you publish, including `pad update` ones.
