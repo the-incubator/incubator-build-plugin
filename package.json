@@ -1,6 +1,6 @@
 {
   "name": "incubator-build-plugin",
-  "version": "0.24.5",
+  "version": "0.24.6",
   "description": "Incubator Build skills for coding agents",
   "private": true,
   "type": "module",
