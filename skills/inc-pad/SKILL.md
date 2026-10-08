@@ -90,7 +90,7 @@ A directory uploads its `index.html` plus every asset file under their relative 
    CDN scripts and styles for Tailwind, DaisyUI, and Mermaid are fine.
    Use a directory with `index.html` plus assets only when there are real asset files such as images, fonts, or local scripts.
    Reference those assets with relative paths from `index.html`, never root-absolute paths starting with `/`.
-   Decide the starting interaction mode with the `incpad-annotation` meta tag (see Starting interaction mode below).
+   Decide the starting interaction mode with the `incpad-annotation` and `incpad-chat` meta tags (see Starting interaction mode below).
    Give every section and every block a reviewer might comment on a stable, meaningful `id` from revision 1, such as `id="rollout-plan"`.
    Keep each id on its block across revisions and never reuse a removed block's id for different content, because change rows, deep links, and feedback selectors all resolve through these ids.
    The pad renders inside a sandboxed iframe on a separate origin.
@@ -181,6 +181,25 @@ You decide the starting mode when you author the artifact, by declaring it in th
 - Each revision's own tag decides its starting state, so keep the tag in the HTML of every revision you publish, including `pad update` ones.
   A revision without the tag opens with annotation on.
 - The tag only sets the starting state: there is no per-viewer persistence, and feedback is stored and polled exactly as before.
+
+### Starting chat state
+
+A pad opens with the chat rail open.
+When you are just publishing an artifact to share and expect no review, declare the chat collapsed in the HTML `<head>`:
+
+```html
+<meta name="incpad-chat" content="collapsed">
+```
+
+- Use `content="collapsed"` when publishing an artifact just to share, with no review expected.
+  It often pairs with `<meta name="incpad-annotation" content="off">`.
+  The pad opens with the chat rail collapsed, and the reader can still expand it with the existing control.
+  A share-only pad has no review to wait for, so after step 3 print the share URL and finish: skip steps 4 through 8 unless the user asks you to collect feedback.
+- Leave the tag out, or use `content="open"`, for anything you want feedback on.
+  Behavior is unchanged.
+- Each revision's own tag decides its starting state, so keep the tag in the HTML of every revision you publish, including `pad update` ones.
+  A revision without the tag opens with the chat open.
+- The tag only sets the starting state: there is no per-viewer persistence.
 
 ## Toolbox blocks
 
