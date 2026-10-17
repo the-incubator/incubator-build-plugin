@@ -329,6 +329,19 @@ When you deliver the pad, state which of the three sources you used and why.
   Wrap, truncate, or contain long unbreakable strings deliberately.
 - Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
+## Technical plans: PRD first, TDD last
+
+A pad is a medium-to-large technical pad when it proposes an implementation and either (a) touches two or more separately owned or deployed pieces (for example a service, app, package, database, or third-party API) or (b) adds or changes a data model or an API/contract.
+For those pads, put the decision-facing PRD at the top and the implementation-facing TDD/architecture at the bottom.
+Anything else, including a bounded choice between options, keeps a short decision-first shape with no PRD or TDD sections.
+
+The top PRD stays simple and action-oriented: the problem and outcome, the prototype or mockup when useful, then the key decisions and the marked recommendation the reader must act on.
+Do not front-load technical detail, and summarize any risk that affects the decision here.
+Below it, the TDD/architecture holds the technical design, data model, contracts, and implementation risks.
+Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) in open sections, not inside a collapsed `<details>`, so they render and stay commentable.
+
+This is an ordering default, not a license to add sections: stay concise, subtract anything unnecessary, and keep the layout clean at 360-390px.
+
 ## Diagram rules
 
 These rules are mandatory for every pad.
