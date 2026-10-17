@@ -329,6 +329,14 @@ When you deliver the pad, state which of the three sources you used and why.
   Wrap, truncate, or contain long unbreakable strings deliberately.
 - Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
+## Technical plans: PRD first, TDD last
+
+For a medium-to-large technical pad, put the decision-facing PRD at the top and the implementation-facing TDD/architecture at the bottom. Use this shape when the proposal includes an implementation plan and either spans two or more substantial components/system boundaries, or changes/adds a data model or API/contract. If neither applies, keep the pad in its existing short, decision-first shape; a bounded choice between options does not need PRD or TDD sections.
+
+The top PRD should stay simple and action-oriented: state the problem and outcome, show the prototype/mockup when useful, then make the key decisions and recommendation the reader must act on obvious. Do not front-load technical detail. Put the TDD/architecture after the PRD: technical design, data model, contracts, and risks belong below it. Use a collapsed `<details>` block for that material when it keeps the decision path focused.
+
+This is an ordering default, not a license to add sections: keep the IncPad concise, decision-first, clearly mark the recommendation, subtract anything unnecessary, and keep the layout clean at 360-390px.
+
 ## Diagram rules
 
 These rules are mandatory for every pad.
