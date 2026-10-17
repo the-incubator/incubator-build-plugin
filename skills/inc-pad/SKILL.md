@@ -331,11 +331,16 @@ When you deliver the pad, state which of the three sources you used and why.
 
 ## Technical plans: PRD first, TDD last
 
-For a medium-to-large technical pad, put the decision-facing PRD at the top and the implementation-facing TDD/architecture at the bottom. Use this shape when the proposal includes an implementation plan and either spans two or more substantial components/system boundaries, or changes/adds a data model or API/contract. If neither applies, keep the pad in its existing short, decision-first shape; a bounded choice between options does not need PRD or TDD sections.
+A pad is a medium-to-large technical pad when it proposes an implementation and either (a) touches two or more separately owned or deployed pieces (for example a service, app, package, database, or third-party API) or (b) adds or changes a data model or an API/contract.
+For those pads, put the decision-facing PRD at the top and the implementation-facing TDD/architecture at the bottom.
+Anything else, including a bounded choice between options, keeps a short decision-first shape with no PRD or TDD sections.
 
-The top PRD should stay simple and action-oriented: state the problem and outcome, show the prototype/mockup when useful, then make the key decisions and recommendation the reader must act on obvious. Do not front-load technical detail. Put the TDD/architecture after the PRD: technical design, data model, contracts, and risks belong below it. Use a collapsed `<details>` block for that material when it keeps the decision path focused.
+The top PRD stays simple and action-oriented: the problem and outcome, the prototype or mockup when useful, then the key decisions and the marked recommendation the reader must act on.
+Do not front-load technical detail, and summarize any risk that affects the decision here.
+Below it, the TDD/architecture holds the technical design, data model, contracts, and implementation risks.
+Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) in open sections, not inside a collapsed `<details>`, so they render and stay commentable.
 
-This is an ordering default, not a license to add sections: keep the IncPad concise, decision-first, clearly mark the recommendation, subtract anything unnecessary, and keep the layout clean at 360-390px.
+This is an ordering default, not a license to add sections: stay concise, subtract anything unnecessary, and keep the layout clean at 360-390px.
 
 ## Diagram rules
 
