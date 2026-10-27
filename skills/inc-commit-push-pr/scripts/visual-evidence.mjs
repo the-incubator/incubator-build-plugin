@@ -20,13 +20,24 @@ const visualPath = (path) => {
 const nonVisualPath = (path) => {
   const p = path.toLowerCase();
   return /\.(test|spec)\.[cm]?[jt]sx?$/.test(p)
-    || /(^|\/)(tests?|__tests__|docs?|notes|scripts|server|api|migrations|\.github)\//.test(p)
+    || /(^|\/)(tests?|__tests__|docs?|notes|scripts|server|api|cli|bin|migrations|\.github)\//.test(p)
     || /(^|\/)(readme|changelog|license|agents|claude|contributing)(\.[^/]*)?$/i.test(p)
-    || /\.(md|mdx|txt|ya?ml|toml|json|lock|sh|py|test\.[cm]?[jt]s|spec\.[cm]?[jt]s)$/.test(p);
+    || /(^|\/)(package(?:-lock)?|plugin|tsconfig|jsconfig|biome|eslint|prettier)\.json$/.test(p)
+    || /\.(md|txt|ya?ml|toml|lock|sh)$/.test(p);
+};
+const renderedMarkdown = body => {
+  const withoutComments = body.replace(/<!--[\s\S]*?-->/g, '');
+  let fence = null;
+  return withoutComments.split('\n').filter(line => {
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (delimiter && !fence) { fence = delimiter[1]; return false; }
+    if (fence && new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(line)) { fence = null; return false; }
+    return !fence;
+  }).join('\n');
 };
 const attachmentUrls = (body, heading) => {
   // Implementation plans may contain their own example headings and images.
-  const topLevel = body.split(/^<details>/m)[0];
+  const topLevel = renderedMarkdown(body).split(/^<details>/m)[0];
   const sections = [...topLevel.matchAll(new RegExp(`^## ${heading}\\s*\\n([\\s\\S]*?)(?=^#{2,3} |^<sub>|$(?![\\s\\S]))`, 'gm'))].map(m => m[1]);
   const image = /!\[(?:\\.|[^\\\]])*\]\(([^)]+)\)/g;
   const urls = sections.flatMap(section => [...section.matchAll(image)].map(m => m[1]));
@@ -62,8 +73,11 @@ try {
       if (!Number.isInteger(count) || count < 1) throw new Error('expected-count must name captured files');
       const heading = evidence === 'screenshots' ? 'Screenshots' : 'Demo';
       const body = fs.readFileSync(option('--body-file'), 'utf8');
-      const before = option('--before-body-file') ? fs.readFileSync(option('--before-body-file'), 'utf8') : '';
-      const fresh = attachmentUrls(body, heading).filter(url => !attachmentUrls(before, heading).includes(url));
+      const beforeFile = option('--before-body-file');
+      if (!beforeFile) throw new Error('before-body-file is required to prove attachment freshness');
+      const before = fs.readFileSync(beforeFile, 'utf8');
+      const oldUrls = new Set(before.match(/https:\/\/github\.com\/user-attachments\/assets\/[a-zA-Z0-9-]+/g) ?? []);
+      const fresh = attachmentUrls(body, heading).filter(url => !oldUrls.has(url));
       if (new Set(fresh).size < count) throw new Error(`expected ${count} new GitHub attachments in ## ${heading}, found ${new Set(fresh).size}`);
     } else {
       throw new Error('evidence must be screenshots, demo, skip:non-visual, or skip:blocked:<named blocker>');

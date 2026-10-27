@@ -95,7 +95,7 @@ git diff origin/<baseRefName>...HEAD
 
 Run the writer from Step 11 ("Inlined body writer") using the branch diff from DU-4. For intent, use what the user provided in conversation when they asked to refresh the description (or re-ask if they didn't); skip the diff-vs-intent check — existing PRs have already been framed. Splice the preserved evidence blocks from DU-3 back into the body.
 
-If the user's focus explicitly asks to refresh evidence, skip the splice and run Step 9 ("Evidence gate") from the full workflow instead. A newly captured image must pass Step 12's readback verification; do not count previously attached images as new evidence.
+If the user's focus explicitly asks to refresh evidence, save the pre-edit body as `BEFORE_BODY_FILE`, skip the splice and run Step 9 ("Evidence gate") from the full workflow instead. A newly captured image must pass both Step 12's rewrite check and Step 12.5's freshness verifier; do not count previously attached images as new evidence.
 
 ### DU-6: Compare, confirm, apply
 
@@ -107,7 +107,7 @@ If confirmed, apply — `<TITLE>` and `<BODY_FILE>` come verbatim from the write
 gh pr edit --title "<TITLE>" --body "$(cat "<BODY_FILE>")"
 ```
 
-**If DU-5 refreshed evidence on the `github-attachment` path**, the new body carries local `![alt]`+`(./file)` references that GitHub cannot render on their own — this `gh pr edit` must therefore carry the same repeatable `--attach '<file>#<alt text>'` flags (safely quoted) as Step 12, **capture `WRITE_RC=$?` immediately after** (the Step 12 verifier reads `WRITE_RC` — leaving it unset makes `[ "$WRITE_RC" -ne 0 ]` error out and can mask a failed edit as `ALL_REWRITTEN`), and then run Step 12's fail-closed rewrite verification. Do not report the refresh as done until every local reference is confirmed a `user-attachments` URL. When DU-3 only spliced back **already-hosted** evidence (existing `user-attachments`/hosted URLs), pass no `--attach` and skip verification — those URLs are already permanent.
+**If DU-5 refreshed evidence on the `github-attachment` path**, the new body carries local `![alt]`+`(./file)` references that GitHub cannot render on their own — this `gh pr edit` must therefore carry the same repeatable `--attach '<file>#<alt text>'` flags (safely quoted) as Step 12, **capture `WRITE_RC=$?` immediately after** (the Step 12 verifier reads `WRITE_RC` — leaving it unset makes `[ "$WRITE_RC" -ne 0 ]` error out and can mask a failed edit as `ALL_REWRITTEN`), and then run Step 12's fail-closed rewrite verification. Do not report the refresh as done until every local reference is confirmed a `user-attachments` URL **and Step 12.5 passes** using the pre-edit body. Only then delete captured local files. When DU-3 only spliced back **already-hosted** evidence (existing `user-attachments`/hosted URLs), pass no `--attach` and skip verification — those URLs are already permanent.
 
 **If the user declines the DU-6 apply** and DU-5 had captured fresh evidence, delete the unused local artifacts. Do not claim the new evidence landed.
 
@@ -435,7 +435,7 @@ The checks run **only inside the successful-read branch** — branching on the r
 - **On `WRITE_FAILED` or `STILL_LOCAL`** — a PR exists (the write reached far enough to create/update it), so **retry via `gh pr edit` on that PR** with the intended `--title`, `--body`, and `--attach` flags (safely quoted; a `./` link still in the body names the file that didn't land), then **re-capture `WRITE_RC=$?`** and re-verify. Even after a *partial* `gh pr create` (PR created, some attachments failed), recover with `gh pr edit` — re-running `gh pr create` would just fail because the branch already has a PR. Do **not** retry `--attach` alone: an attach-only edit appends files while leaving the intended title/body unwritten, and never clears the original non-zero `WRITE_RC`, so verification would stay `WRITE_FAILED` forever.
 - **On `VERIFY_UNAVAILABLE`** — the readback failed, so first check `WRITE_RC`: if the write itself was a **`gh pr create` that failed before creating anything** (non-zero `WRITE_RC` and no PR URL printed — `gh pr create` prints the URL only on success), the create is what to retry, not the read. Only when the write succeeded (or the PR already existed) is this a genuine read failure — surface it, do **not** report the evidence as delivered, do **not** delete the local artifacts, and retry the read.
 
-Once `ALL_REWRITTEN` holds, **delete the returned local artifact(s) / demo-reel run directory immediately** — demo-reel deliberately left them in place for this caller, so nothing else will clean up those (potentially sensitive) captures.
+Once `ALL_REWRITTEN` holds, keep the local artifacts until Step 12.5 also passes. If that verifier fails, the files are still available for retry.
 
 **Existing PR (open PR found in Step 2).** Save its body as `BEFORE_BODY_FILE` before editing; old attachments cannot satisfy this run's evidence. New commits make the existing description stale by default — the title and "why" almost certainly no longer cover what was just pushed. **Default action is to rewrite the description**, not to leave it as-is. Treat "leave it as-is" as an explicit opt-out, not the default.
 
@@ -466,7 +466,7 @@ node "<plugin root>/skills/inc-commit-push-pr/scripts/visual-evidence.mjs" verif
   --expected-count "$CAPTURED_COUNT"
 ```
 
-For `skip:non-visual`, omit the body/count flags. For `skip:blocked:<named blocker>`, include `--body-file` but omit count/before-body flags. Add `--fixture-attempted` only after attempting the capture fixture, or `--attachment-blocked` if `gh --attach` could not be made available at preflight or upload. The verifier checks the PR body for the named blocker and the relevant fallback; these flags are mutually exclusive. If the verifier exits nonzero, **do not report a ready PR**; fix the attachment/capture and retry the edit/readback. For a blocked skip, report the named blocker loudly with the PR URL. A successful verifier prints the exact `evidence=...` token; include it in the final report. On an existing PR with new visual commits, do not keep the old body as-is or count previously uploaded images as this run's evidence.
+For `skip:non-visual`, omit the body/count flags. For `skip:blocked:<named blocker>`, include `--body-file` but omit count/before-body flags. Add `--fixture-attempted` only after attempting the capture fixture, or `--attachment-blocked` if `gh --attach` could not be made available at preflight or upload. The verifier checks the PR body for the named blocker and the relevant fallback; these flags are mutually exclusive. If the verifier exits nonzero, **do not report a ready PR**; fix the attachment/capture and retry the edit/readback. For a blocked skip, report the named blocker loudly with the PR URL. A successful verifier prints the exact `evidence=...` token; include it in the final report. Once both rewrite and freshness checks pass, delete the returned local artifacts / demo-reel run directory. On an existing PR with new visual commits, do not keep the old body as-is or count previously uploaded images as this run's evidence.
 
 ### Step 13: Report
 

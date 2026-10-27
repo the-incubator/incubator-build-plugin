@@ -20,6 +20,10 @@ test('only allowlisted non-visual paths can skip, unknown paths cannot', () => {
   assert.match(run('classify', [], 'src/feature.ts\n').stdout, /^visual:/);
   assert.match(run('classify', [], 'src/app/docs/page.tsx\n').stdout, /^visual:/);
   assert.match(run('classify', [], 'app/api/route.ts\n').stdout, /^non-visual:/);
+  assert.match(run('classify', [], 'src/cli/command.ts\n').stdout, /^non-visual:/);
+  assert.match(run('classify', [], 'content/landing.mdx\n').stdout, /^visual:/);
+  assert.match(run('classify', [], 'content/page.json\n').stdout, /^visual:/);
+  assert.match(run('classify', [], 'dashboard.py\n').stdout, /^visual:/);
   assert.equal(run('classify').status, 1);
   assert.equal(run('verify', ['--classification', 'visual', '--evidence', 'skip:non-visual']).status, 1);
   assert.equal(run('verify', ['--classification', 'non-visual', '--evidence', 'skip:non-visual']).status, 0);
@@ -64,6 +68,15 @@ test('screenshots count only new GitHub attachments under Screenshots, not tests
     assert.equal(run('verify', args).status, 0);
     writeFileSync(body, '<details>\n## Screenshots\n![new](https://github.com/user-attachments/assets/new)\n</details>\n');
     assert.equal(run('verify', args).status, 1);
+    writeFileSync(before, '## Demo\n![old](https://github.com/user-attachments/assets/old)\n');
+    writeFileSync(body, '## Screenshots\n![old](https://github.com/user-attachments/assets/old)\n');
+    assert.equal(run('verify', args).status, 1);
+    writeFileSync(body, '## Screenshots\n<!-- ![new](https://github.com/user-attachments/assets/new) -->\n');
+    assert.equal(run('verify', args).status, 1);
+    writeFileSync(body, '## Screenshots\n```md\n![new](https://github.com/user-attachments/assets/new)\n```\n');
+    assert.equal(run('verify', args).status, 1);
+    writeFileSync(body, '## Screenshots\n![new](https://github.com/user-attachments/assets/new)\n');
+    assert.equal(run('verify', args.filter((_, i) => i !== 6 && i !== 7)).status, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -73,8 +86,10 @@ test('demo uses its own section and rejects unsupported evidence tokens', () => 
   const dir = mkdtempSync(join(tmpdir(), 'evidence-test-'));
   try {
     const body = join(dir, 'body.md');
+    const before = join(dir, 'before.md');
+    writeFileSync(before, '');
     writeFileSync(body, '## Demo\n![flow](https://github.com/user-attachments/assets/flow)\n');
-    assert.equal(run('verify', ['--classification', 'visual', '--evidence', 'demo', '--body-file', body, '--expected-count', '1']).status, 0);
+    assert.equal(run('verify', ['--classification', 'visual', '--evidence', 'demo', '--body-file', body, '--before-body-file', before, '--expected-count', '1']).status, 0);
     assert.equal(run('verify', ['--classification', 'visual', '--evidence', 'skip']).status, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
