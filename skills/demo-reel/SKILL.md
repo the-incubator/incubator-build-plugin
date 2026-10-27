@@ -23,6 +23,7 @@ Never generate fake or placeholder image/GIF URLs. If upload fails, report the f
 Parse `$ARGUMENTS`:
 - **What to capture**: A description of the feature or behavior to demonstrate. If provided, use it to guide which pages to visit, commands to run, or states to capture.
 - If blank, infer what to capture from recoverable branch or PR context. If the target remains ambiguous after that, ask the user what they want to demonstrate before proceeding.
+- **Agent-owned mode**: When the caller passes `agent-owned`, capture without interactive target/tier/approval questions. Use `static-screenshots` and `github-attachment` by default; use a reel only when the caller explicitly requests one for motion or a complex experience. Return actual local files for attachment. Never ask a human for evidence. If the live product is unavailable, try a realistic local fixture first, then return a named blocker to the caller instead of silently skipping.
 - **Delivery mode**: How the approved evidence should be handed back. `github-attachment` — the caller uploads the file into the PR body via `gh --attach` (requires GitHub CLI **2.99.0+**), so demo-reel returns local artifact path(s) and leaves the files in place. `hosted` (default when unspecified) — demo-reel promotes the approved file to a permanent public host and returns that URL. A caller that has confirmed a capable `gh` passes `github-attachment`; older callers or those with no PR to attach to use `hosted`.
 
 ## Step 0: Discover Capture Target
@@ -41,7 +42,7 @@ Use the lightest available context to identify the best evidence target:
 
 Form a capture hypothesis: "The best evidence appears to be [behavior]."
 
-Proceed without asking only when there is exactly one high-confidence observable behavior and a plausible way to exercise it from the workspace. Ask the user what to demonstrate when multiple behaviors are plausible, the diff does not reveal how to exercise the behavior, or the requested target cannot be mapped to a product surface.
+Proceed without asking when there is exactly one high-confidence observable behavior and a plausible way to exercise it from the workspace. In `agent-owned` mode, use the caller's changed screen plus diff to choose the most representative state; if no target can be mapped, return a named blocker to the caller. In interactive mode, ask the user when multiple behaviors are plausible.
 
 Skip evidence with a clear reason when the diff is docs-only, markdown-only, config-only, CI-only, test-only, or a pure internal refactor with no observable output change.
 
@@ -54,7 +55,7 @@ Before capturing anything, verify the feature works by actually using it:
 - **Library**: Run example code using the new/changed API
 - **Bug fix**: Reproduce the original bug scenario and confirm it's fixed
 
-Use the workspace where the feature was built. Do not reinstall from scratch. If setup requires credentials or services, use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini) to ask the user.
+Use the workspace where the feature was built. Do not reinstall from scratch. In `agent-owned` mode, if credentials/services block the live surface, exercise a realistic local fixture or seeded screen, label the captured state honestly, and never ask the user for credentials/evidence. If neither works, return the specific blocker and confirm fixture fallback was attempted. In interactive mode, ask the user when setup requires credentials or services.
 
 ## Step 2: Detect Project Type
 
@@ -87,7 +88,7 @@ If arguments describe what to capture, classify based on the description. Otherw
 - **New feature (`feat`)**: Demonstrate the feature working. Show the hero moment -- the feature doing its thing.
 - **Bug fix (`fix`)**: Show before AND after. Reproduce the original broken state (if possible) then show the fix. If the broken state can't be reproduced (already fixed in the workspace), capture the fixed state and describe what was broken.
 
-Infer feat vs fix from commit messages, branch name, or plan file frontmatter (`type: feat` or `type: fix`). If unclear, ask.
+Infer feat vs fix from commit messages, branch name, or plan file frontmatter (`type: feat` or `type: fix`). If unclear in `agent-owned` mode, capture the current working state without asking; otherwise ask.
 
 ## Step 4: Tool Preflight
 
@@ -119,7 +120,7 @@ python3 "<plugin root>/skills/demo-reel/scripts/capture-demo.py" recommend --pro
 
 This outputs JSON with `recommended` (the best tier), `available` (list of tiers whose tools are present), and `reasoning`.
 
-Present the available tiers to the user via the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). Mark the recommended tier. Always include "No evidence needed" as a final option.
+In `agent-owned` mode skip this question and use static screenshots by default; only use a demo tier if the caller explicitly selected it for a complex experience. Otherwise present the available tiers to the user via the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). Mark the recommended tier. Always include "No evidence needed" as a final option.
 
 **Question:** "How should evidence be captured for this change?"
 
@@ -144,11 +145,11 @@ Load the appropriate reference file for the selected tier:
 - **Static screenshots** -> Read `references/tier-static-screenshots.md`
 - **No evidence needed** -> Skip to output. Set `evidence_url` to null, `evidence_label` to null.
 
-**Runtime failure fallback:** If the selected tier fails during execution (tool crashes, server not accessible, recording produces empty output), fall back to the next available tier rather than failing entirely. The fallback order is: browser reel -> static screenshots, terminal recording -> screenshot reel -> static screenshots, screenshot reel -> static screenshots. Static screenshots is the terminal fallback -- if even that fails, report the failure and let the user decide.
+**Runtime failure fallback:** If the selected tier fails during execution (tool crashes, server not accessible, recording produces empty output), fall back to the next available tier rather than failing entirely. The fallback order is: browser reel -> static screenshots, terminal recording -> screenshot reel -> static screenshots, screenshot reel -> static screenshots. Static screenshots is the terminal fallback -- if even that fails, return a named blocker to the caller in `agent-owned` mode; in interactive mode, report the failure and let the user decide.
 
 ## Step 8: Upload and Approval
 
-After the selected tier produces an artifact, read `references/upload-and-approval.md` for the temporary preview upload, the user approval gate, and delivery of the approved evidence per the active delivery mode (local path for `github-attachment`, permanent host URL for `hosted`).
+After the selected tier produces an artifact, read `references/upload-and-approval.md`. In `agent-owned` + `github-attachment` mode, bypass temporary preview and approval entirely: inspect the capture locally for relevance and sensitive data, then return its absolute path for the caller's `gh --attach`; keep it until the caller verifies the PR body rewrite. Interactive mode follows preview and approval as before.
 
 ## Output
 

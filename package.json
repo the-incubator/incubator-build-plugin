@@ -1,6 +1,6 @@
 {
   "name": "incubator-build-plugin",
-  "version": "0.24.8",
+  "version": "0.24.9",
   "description": "Incubator Build skills for coding agents",
   "private": true,
   "type": "module",
@@ -43,7 +43,7 @@
     "manifests:sync": "node scripts/sync-manifests.mjs",
     "smoke:pi": "node scripts/smoke-pi.mjs",
     "test:distribution": "node scripts/sync-manifests.mjs --check && node --test tests/distribution.test.mjs",
-    "test:skills": "node scripts/validate-skills.mjs",
+    "test:skills": "node scripts/validate-skills.mjs && node --test tests/visual-evidence.test.mjs",
     "test:hooks": "node --test hooks/*.test.mjs",
     "test:client": "node --test tests/pad-client.test.mjs",
     "test:blocks": "node --test tests/pad-blocks.test.mjs"
