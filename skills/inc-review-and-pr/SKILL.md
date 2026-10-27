@@ -60,7 +60,7 @@ rm -f "$REVIEW_STAMP"
 ## Step 2 — Commit + open/refresh PR, then watch + auto-resolve
 
 Run [inc-commit-push-pr](../inc-commit-push-pr/SKILL.md) using native invocation or by reading and following that file inline.
-It runs its intent interview, commits the review's auto-fixes plus the user's code, opens/refreshes the PR, and watches CI plus AI reviewers in its Step 14 loop.
+It runs its intent interview, commits the review's auto-fixes plus the user's code, classifies visual changes and captures screenshots itself, attaches them to the PR, verifies the `evidence=...` token against forge readback, and watches CI plus AI reviewers in its Step 14 loop. Never ask the user to supply screenshots. If capture fails, follow the fixture fallback before a named `skip:blocked:<blocker>` and surface it prominently. Do not call the PR ready until its Step 12.5 verifier succeeds.
 Its [feedback resolver](../inc-resolve-pr-feedback/SKILL.md) receives `--auto` explicitly, including on file-based hosts.
 Wait for the complete watch/resolve loop, not merely a PR URL, before continuing.
 
@@ -69,11 +69,11 @@ It (and therefore this chain) stops short when:
 - `CI_FAIL` made the PR un-passable,
 - the auto-resolve loop hit a `needs-human` item it couldn't action, or a `PREVIEW_FAIL`/`WATCH_TIMEOUT` fork.
 
-Surface whatever it reported and stop. Only when it returns a **feedback-clean PR** does the chain continue to Step 3.
+Surface whatever it reported and stop. Only when it returns a **feedback-clean PR with a verified evidence token** does the chain continue to Step 3.
 
 ## Step 3 — Stop at PR-ready
 
-Print the PR URL and `Ready for human merge.` Do **not** run `inc-merge-pr`.
+Print the PR URL, the verified `evidence=...` token, and `Ready for human merge.` If the token is `skip:blocked:<blocker>`, call out the missing visual evidence rather than treating it as an ordinary visual pass. Do **not** run `inc-merge-pr`.
 
 ## Interaction discipline
 
