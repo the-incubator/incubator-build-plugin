@@ -148,7 +148,9 @@ test("merge-pr observes main-branch CI without gating deploy observation", () =>
   assert.match(ci, /failed job names and the run URL/);
   assert.match(ci, /SKIPPED.*Railway/);
   assert.match(ci, /do not wait for CI to finish before arming or continuing deploy observation/);
-  assert.match(ci, /parallel with the deploy Monitor/);
+  assert.match(ci, /all listed runs whose `headSha` exactly matches `MERGE_SHA`/);
+  assert.match(ci, /up to 10 minutes after merge, including when pre-flight skipped deploy observation/);
+  assert.match(ci, /proceed in parallel/);
   assert.match(ci, /never a reason to cancel, delay, or gate Active Deploy Observation/);
   assert.match(merge, /Main-branch CI: <green.*failed: <job names>/);
 });
