@@ -139,6 +139,22 @@ test("closeout composition retains fail-closed gates and explicit inline handoff
   assert.ok(read("skills/inc-commit-push-pr/SKILL.md").includes("with the explicit `--auto` argument"));
 });
 
+test("merge-pr observes main-branch CI without gating deploy observation", () => {
+  const merge = read("skills/inc-merge-pr/SKILL.md");
+  const ci = merge.split("## Main-branch CI Observation")[1].split("## Active Deploy Observation")[0];
+  assert.match(ci, /exact merge commit SHA on the default branch/);
+  assert.match(ci, /gh run list/);
+  assert.match(ci, /gh run watch/);
+  assert.match(ci, /failed job names and the run URL/);
+  assert.match(ci, /SKIPPED.*Railway/);
+  assert.match(ci, /do not wait for CI to finish before arming or continuing deploy observation/);
+  assert.match(ci, /all listed runs whose `headSha` exactly matches `MERGE_SHA`/);
+  assert.match(ci, /up to 10 minutes after merge, including when pre-flight skipped deploy observation/);
+  assert.match(ci, /proceed in parallel/);
+  assert.match(ci, /never a reason to cancel, delay, or gate Active Deploy Observation/);
+  assert.match(merge, /Main-branch CI: <green.*failed: <job names>/);
+});
+
 test("Cursor/Cline installer is idempotent, project-scoped, and preserves conflicts", (t) => {
   const dir = sandbox(t);
   const run = (...args) => spawnSync(process.execPath, [join(root, "scripts/install-skills.mjs"), ...args], { cwd: dir, encoding: "utf8", env: { ...process.env, HOME: join(dir, "home") } });

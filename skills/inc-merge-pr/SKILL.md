@@ -347,7 +347,33 @@ If `gh pr merge` fails, report the error verbatim, then branch on the cause:
 - **Merge conflicts** - hand off to the `git-merge-expert` skill to resolve conflicts (update the branch from `main`, resolve, push), then re-run `/inc-merge-pr`. Do not resolve conflicts in this skill.
 - **Required checks not green / branch protection / anything else** - stop. Do not retry, do not pass force flags.
 
-After a successful merge, run **Active Deploy Observation** below - do not declare the skill complete until observation has produced a result.
+After a successful merge, start both **Main-branch CI Observation** and **Active Deploy Observation** below. They are parallel observations: a main-branch CI failure is reported, not a gate, and must never delay or prevent deploy observation.
+
+---
+
+## Main-branch CI Observation (only on MERGE: GO)
+
+Watch every GitHub Actions run for the exact merge commit SHA on the default branch. Start this watch alongside Active Deploy Observation - do not wait for CI to finish before arming or continuing deploy observation. CI is not a merge or deploy-observation gate.
+
+Resolve `MERGE_SHA` from the successful merge result (prefer `gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid`) and use the default branch resolved during pre-flight. Prefer `gh run list` / `gh run watch`:
+
+```bash
+gh run list --commit "$MERGE_SHA" --branch "$DEFAULT_BRANCH" --limit 100 \
+  --json databaseId,url,status,conclusion,headSha,name
+```
+
+Collect all listed runs whose `headSha` exactly matches `MERGE_SHA`; a commit may trigger multiple workflows. For each queued or in-progress matching run, run `gh run watch <run-id> --exit-status` under its own Monitor so all matching CI runs and the deploy Monitor from Step 4b proceed in parallel. For terminal runs, inspect `gh run view <run-id> --json jobs,url,conclusion`. Report green only when every discovered run has completed successfully. For failures, name failed jobs from `.jobs[]` entries whose `conclusion` is `failure`, and provide the run URL for each failing run.
+
+Poll for matching runs for up to 10 minutes after merge, including when pre-flight skipped deploy observation; this bounds discovery when no deploy Monitor exists to define an observation window. Once a matching run is found, let its Monitor run for up to 60 minutes. If no matching run appears within the 10-minute discovery window, report that no matching GitHub Actions run was found. Do not select a run for a different commit or branch. Never delay deploy observation while discovering or watching CI.
+
+Outcomes:
+
+- **Green** - briefly note `Main-branch CI: ✅ green (<run URL>)` (include URLs when multiple runs). This does not alter deploy observation.
+- **Failure** - surface `Main-branch CI: ❌ failed` with the failed job names and the run URL(s). If `gh run watch` exits unsuccessfully, inspect the completed run's jobs to identify the red jobs. A CI failure may mean the deploy is **SKIPPED** on CI-gated platforms such as Railway; report that possibility clearly, but do not infer that the deploy was skipped unless deploy observation confirms it.
+- **Watch timeout** - inspect each run's current status and jobs. If there is a failure signal, report it using the failure outcome above, including failed job names and run URL. Otherwise report that main-branch CI is still pending / timed out and include each pending run URL; leave deploy observation running independently.
+- **No run found for the SHA** - after the bounded 10-minute discovery window, report that no matching run was found; do not invent a green result or hold deploy observation for it.
+
+Include the main-branch CI result in the final merge-pr report. A failing or unavailable CI result is an observation only, never a reason to cancel, delay, or gate Active Deploy Observation.
 
 ---
 
@@ -483,7 +509,13 @@ Outcomes:
 
 ### Step 4d - Record the observation in the merge-pr report
 
-**Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
+For single or multiple deploys, include the main-branch CI outcome in the `=== MERGE-PR REPORT ===` block:
+
+```
+Main-branch CI: <green (<run URL>) | failed: <job names> (<run URL>) | pending/timed out (<run URL or unavailable>) | no matching run found>
+```
+
+**Single deploy** - append the following to the report block:
 
 ```
 Deploy observation:
