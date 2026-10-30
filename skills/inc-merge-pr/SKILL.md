@@ -347,7 +347,31 @@ If `gh pr merge` fails, report the error verbatim, then branch on the cause:
 - **Merge conflicts** - hand off to the `git-merge-expert` skill to resolve conflicts (update the branch from `main`, resolve, push), then re-run `/inc-merge-pr`. Do not resolve conflicts in this skill.
 - **Required checks not green / branch protection / anything else** - stop. Do not retry, do not pass force flags.
 
-After a successful merge, run **Active Deploy Observation** below - do not declare the skill complete until observation has produced a result.
+After a successful merge, start both **Main-branch CI Observation** and **Active Deploy Observation** below. They are parallel observations: a main-branch CI failure is reported, not a gate, and must never delay or prevent deploy observation.
+
+---
+
+## Main-branch CI Observation (only on MERGE: GO)
+
+Watch GitHub Actions for the exact merge commit SHA on the default branch. Start this watch alongside Active Deploy Observation - do not wait for CI to finish before arming or continuing deploy observation. CI is not a merge or deploy-observation gate.
+
+Resolve `MERGE_SHA` from the successful merge result (prefer `gh pr view "$PR_NUMBER" --json mergeCommit --jq .mergeCommit.oid`) and use the default branch resolved during pre-flight. Prefer `gh run list` / `gh run watch`:
+
+```bash
+gh run list --commit "$MERGE_SHA" --branch "$DEFAULT_BRANCH" --limit 20 \
+  --json databaseId,url,status,conclusion,headSha,name
+```
+
+Select the run whose `headSha` exactly matches `MERGE_SHA`. If the run is queued or in progress, run `gh run watch <run-id> --exit-status` under a Monitor, in parallel with the deploy Monitor from Step 4b. If the run has not appeared yet, poll `gh run list` for the exact SHA while the deploy watch proceeds. Do not select a run for a different commit or branch. For a terminal run, inspect `gh run view <run-id> --json jobs,url,conclusion` to report the authoritative result. Name failed jobs from entries in `.jobs[]` whose `conclusion` is `failure`.
+
+Outcomes:
+
+- **Green** - briefly note `Main-branch CI: ✅ green (<run URL>)` (the URL is useful when available). This does not alter deploy observation.
+- **Failure** - surface `Main-branch CI: ❌ failed` with the failed job names and the run URL. If `gh run watch` exits unsuccessfully, inspect the completed run's jobs to identify the red jobs. A CI failure may mean the deploy is **SKIPPED** on CI-gated platforms such as Railway; report that possibility clearly, but do not infer that the deploy was skipped unless deploy observation confirms it.
+- **Watch timeout** - inspect the run's current status and jobs. If there is a failure signal, report it using the failure outcome above, including failed job names and run URL. Otherwise report that main-branch CI is still pending / timed out and include the run URL when available; leave deploy observation running independently.
+- **No run found for the SHA** - continue polling during the existing observation window. If still absent when that window ends, report that no matching GitHub Actions run was found; do not invent a green result or hold deploy observation for it.
+
+Include the main-branch CI result in the final merge-pr report. A failing or unavailable CI result is an observation only, never a reason to cancel, delay, or gate Active Deploy Observation.
 
 ---
 
@@ -483,7 +507,13 @@ Outcomes:
 
 ### Step 4d - Record the observation in the merge-pr report
 
-**Single deploy** - append to the `=== MERGE-PR REPORT ===` block:
+For single or multiple deploys, include the main-branch CI outcome in the `=== MERGE-PR REPORT ===` block:
+
+```
+Main-branch CI: <green (<run URL>) | failed: <job names> (<run URL>) | pending/timed out (<run URL or unavailable>) | no matching run found>
+```
+
+**Single deploy** - append the following to the report block:
 
 ```
 Deploy observation:
