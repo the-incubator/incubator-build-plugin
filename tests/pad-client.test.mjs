@@ -292,6 +292,46 @@ test("pad poll keeps checking until feedback arrives, prints it, and never re-de
   assert.equal(state.cursor, "c2");
 });
 
+test("pad poll --wait stays asleep through empty checks and returns the next feedback batch", async (t) => {
+  let checks = 0;
+  const items = [{ id: 42, kind: "prompt", text: "Revise the rollout" }];
+  const { requests, endpoint } = await mockServer(t, () => ({
+    json: ++checks === 4
+      ? { items, cursor: "c1" }
+      : { items: [], cursor: "c0" },
+  }));
+  const r = await run(home(t, endpoint), ["pad", "poll", "pad_1", "--wait", "--interval", "0.05"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout), { items, cursor: "c1" });
+  assert.equal(requests.length, 4, "the wait continued past three empty checks");
+});
+
+test("pad poll --wait returns an ended pad without feedback and surfaces poll failures", async (t) => {
+  const { endpoint } = await mockServer(t, (req) => req.query.after === "c0"
+    ? { json: { items: [], cursor: "c1", ended: true } }
+    : { json: { items: [], cursor: "c0" } });
+  const ended = await run(home(t, endpoint), ["pad", "poll", "pad_1", "--wait", "--interval", "0.05"]);
+  assert.equal(ended.status, 0, ended.stderr);
+  assert.deepEqual(JSON.parse(ended.stdout), { items: [], cursor: "c1", ended: true });
+
+  const failedServer = await mockServer(t, () => ({ status: 401, json: { reason: "invalid_api_key" } }));
+  const failed = await run(home(t, failedServer.endpoint), ["pad", "poll", "pad_1", "--wait"]);
+  assert.equal(failed.status, 3);
+  assert.equal(failed.stdout, "");
+  assert.match(failed.stderr, /invalid_api_key/);
+});
+
+test("pad poll --wait rejects timeout and single-check modes", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
+  const h = home(t, endpoint);
+  for (const mode of [["--timeout", "1"], ["--once"]]) {
+    const r = await run(h, ["pad", "poll", "pad_1", "--wait", ...mode]);
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /cannot be combined/);
+  }
+  assert.equal(requests.length, 0);
+});
+
 test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {
   const items = [{ id: "f1", kind: "comment", text: "Larger" }, { id: "f2", kind: "chat", text: "Why?" }];
   const { requests, endpoint } = await mockServer(t, (req) =>
@@ -331,6 +371,27 @@ test("pad ack can target explicit items and refuses an empty or malformed batch"
   const explicit = await run(h, ["pad", "ack", "pad_1", "--items", " f3 "]);
   assert.equal(explicit.status, 0, explicit.stderr);
   assert.deepEqual(requests[0].body, { item_ids: ["f3"] });
+});
+
+test("explicit ack IDs keep overlapping feedback batches attached to the right request", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path.endsWith("/ack")) return { json: { acked: req.body.item_ids } };
+    return req.query.after === "c1"
+      ? { json: { items: [{ id: 22, kind: "chat", text: "Also simplify the title" }], cursor: "c2" } }
+      : { json: { items: [{ id: 11, kind: "comment", text: "Change the timeline" }], cursor: "c1" } };
+  });
+  const h = home(t, endpoint);
+  const first = await run(h, ["pad", "poll", "pad_1", "--wait"]);
+  assert.equal(first.status, 0, first.stderr);
+  const second = await run(h, ["pad", "poll", "pad_1", "--wait"]);
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(JSON.parse(first.stdout).items.map((item) => item.id), [11]);
+  assert.deepEqual(JSON.parse(second.stdout).items.map((item) => item.id), [22]);
+  const firstAck = await run(h, ["pad", "ack", "pad_1", "--items", "11"]);
+  assert.equal(firstAck.status, 0, firstAck.stderr);
+  const secondAck = await run(h, ["pad", "ack", "pad_1", "--items", "22"]);
+  assert.equal(secondAck.status, 0, secondAck.stderr);
+  assert.deepEqual(requests.filter((req) => req.path.endsWith("/ack")).map((req) => req.body.item_ids), [[11], [22]]);
 });
 
 test("an empty poll preserves an unacknowledged delivered batch", async (t) => {

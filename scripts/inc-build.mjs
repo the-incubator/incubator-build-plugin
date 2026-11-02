@@ -13,8 +13,8 @@
 //   inc-build pad create <file-or-dir> [--title <title>]   # publish an IncPad, prints share URL
 //   inc-build pad update <padId> <file-or-dir> [--summary <text>] [--changes <json|file>]
 //                                                       # publish a new revision and declare what changed
-//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
-//                                                       # short-poll for reviewer feedback
+//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once] [--wait]
+//                                                       # short-poll for reviewer feedback; --wait never returns an empty timeout
 //   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
 //                                                       # confirm work on the last polled batch
 //   inc-build pad reply <padId> [--] <text...>              # reply in the pad's conversation panel
@@ -125,7 +125,7 @@ function padAgent() {
   return name;
 }
 
-const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed"]);
+const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed", "wait"]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -169,7 +169,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
   inc-build pad create <file-or-dir> [--title <title>]
   inc-build pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]
-  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
+  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--wait] [--after <cursor>] [--reset]
   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
   inc-build pad reply <padId> [--] <text...>
   inc-build pad end <padId>
@@ -487,7 +487,7 @@ function numberFlag(flags, key, fallback, { positive = false } = {}) {
 const PAD_FLAGS = {
   create: ["title"],
   update: ["title", "summary", "changes"],
-  poll: ["interval", "timeout", "once", "after", "reset"],
+  poll: ["interval", "timeout", "once", "wait", "after", "reset"],
   ack: ["note", "items"],
   reply: [],
   end: [],
@@ -497,7 +497,7 @@ const PAD_FLAGS = {
 const PAD_USAGE = {
   create: "pad create <file-or-dir> [--title <title>]",
   update: "pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]",
-  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
+  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--wait] [--after <cursor>] [--reset]",
   ack: "pad ack <padId> [--note <text>] [--items <id,...>]",
   reply: "pad reply <padId> [--] <text...>",
   end: "pad end <padId>",
@@ -555,6 +555,9 @@ async function padCommand(creds, sub, rest, flags, out) {
     const id = rest[0];
     const interval = numberFlag(flags, "interval", 10, { positive: true });
     const timeout = numberFlag(flags, "timeout", 540);
+    if (flags.wait && (flags.once || flags.timeout != null)) {
+      die("pad poll --wait cannot be combined with --once or --timeout", 2);
+    }
     const state = readPadState(id);
     // Delivery is at-least-once up to this process's stdout: a fetched batch is
     // saved as `pending` (with the advanced cursor and any ended flag) before it
@@ -581,7 +584,7 @@ async function padCommand(creds, sub, rest, flags, out) {
       return;
     }
     let cursor = flags.reset ? null : flags.after ?? state.cursor ?? null;
-    const deadline = Date.now() + timeout * 1000;
+    const deadline = flags.wait ? Infinity : Date.now() + timeout * 1000;
     // Short polls only: each request returns immediately, so nothing holds a
     // server connection open between checks.
     // The first request always happens, so --timeout 0 is a single immediate check.
