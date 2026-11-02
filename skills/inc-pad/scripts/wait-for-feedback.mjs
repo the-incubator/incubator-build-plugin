@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // One Claude Code background task. The CLI remains a one-check client; empty
 // checks stay inside this process rather than waking the agent.
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const [padId, option, value] = process.argv.slice(2);
@@ -14,14 +13,28 @@ if (!padId || (option != null && (option !== "--interval" || process.argv.length
 }
 
 const cli = fileURLToPath(new URL("../../../scripts/inc-build.mjs", import.meta.url));
-const run = promisify(execFile);
+function checkOnce() {
+  return new Promise((done, fail) => {
+    const child = spawn(process.execPath, [cli, "pad", "poll", padId, "--once", "--hold"]);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", fail);
+    child.on("close", (code) => done({ code, stdout, stderr }));
+  });
+}
+
 for (;;) {
-  let stdout;
-  try {
-    ({ stdout } = await run(process.execPath, [cli, "pad", "poll", padId, "--once", "--hold"]));
-  } catch (err) {
-    process.stderr.write(err.stderr || `pad poll failed: ${err.message}\n`);
-    process.exit(typeof err.code === "number" ? err.code : 3);
+  let result;
+  try { result = await checkOnce(); } catch (err) {
+    process.stderr.write(`pad poll failed: ${err.message}\n`);
+    process.exit(3);
+  }
+  const { code, stdout, stderr } = result;
+  if (code !== 0) {
+    process.stderr.write(stderr || `pad poll exited ${code}\n`);
+    process.exit(code || 3);
   }
   let batch;
   try {

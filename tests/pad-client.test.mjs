@@ -344,6 +344,18 @@ test("one-shot waiter feedback replays after interruption until explicit ack", a
   assert.equal(requests.at(-1).query.after, "c1");
 });
 
+test("background waiter delivers a feedback batch larger than the child-process default buffer", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c1" } }));
+  const h = home(t, endpoint);
+  mkdirSync(join(h, "pads"));
+  const text = "x".repeat(1_200_000);
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", pending: [{ id: 44, kind: "comment", text }] }));
+  const result = await run(h, ["pad_1"], {}, WAITER);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).items[0].text, text);
+  assert.equal(requests.length, 0, "held feedback replays without a new request");
+});
+
 test("background waiter rejects invalid arguments before polling", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
   const h = home(t, endpoint);
@@ -409,6 +421,41 @@ test("a new poll recovers a state lock left by a terminated writer", async (t) =
   assert.deepEqual(JSON.parse(poll.stdout).items.map((item) => item.id), [52]);
   assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
   assert.equal(existsSync(lock), false, "the stale lock does not strand subsequent feedback");
+});
+
+test("concurrent stale-lock recovery does not let a poll erase an overlapping revision", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path === "/api/v1/pads") return { json: created };
+    if (req.path.endsWith("/revisions")) return { json: { revision: 2, url: created.url } };
+    return { json: { items: [{ id: 81, kind: "comment", text: "Revise" }], cursor: "c1" } };
+  });
+  const h = home(t, endpoint);
+  const f = fixtures(t);
+  await run(h, ["pad", "create", f.single]);
+  const lock = join(h, "pads", "pad_1.json.lock");
+  const recovery = `${lock}.recovery`;
+  mkdirSync(lock);
+  writeFileSync(join(lock, "owner"), "99999999");
+  mkdirSync(recovery);
+  t.after(() => { if (existsSync(recovery)) rmdirSync(recovery); });
+  let updateSettled = false;
+  const updating = run(h, ["pad", "update", "pad_1", f.single]).then((result) => {
+    updateSettled = true;
+    return result;
+  });
+  const polling = run(h, ["pad", "poll", "pad_1", "--once"]);
+  const deadline = Date.now() + 3_000;
+  while (requests.length < 3 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 10));
+  assert.equal(requests.length, 3);
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(updateSettled, false, "the second contender must wait for stale-lock recovery");
+  rmdirSync(recovery);
+  const [update, poll] = await Promise.all([updating, polling]);
+  assert.equal(update.status, 0, update.stderr);
+  assert.equal(poll.status, 0, poll.stderr);
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.equal(state.revision, 2);
+  assert.equal(state.cursor, "c1");
 });
 
 test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {

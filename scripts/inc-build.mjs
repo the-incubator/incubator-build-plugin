@@ -447,6 +447,37 @@ function readPadState(id, { throwOnError = false } = {}) {
   return state;
 }
 
+// Only one contender may inspect and remove an abandoned lock at a time.
+// Otherwise two readers of the dead owner could both remove it, and the second
+// would accidentally remove the first reader's newly acquired live lock.
+function recoverPadLock(lock, ownerPath) {
+  const recovery = `${lock}.recovery`;
+  try { mkdirSync(recovery); } catch (err) {
+    if (err?.code === "EEXIST") return;
+    throw err;
+  }
+  try {
+    let owner;
+    try { owner = Number(readFileSync(ownerPath, "utf8")); } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
+    }
+    let abandoned = false;
+    if (Number.isSafeInteger(owner) && owner > 0) {
+      try { process.kill(owner, 0); } catch (err) {
+        if (err?.code === "ESRCH") abandoned = true;
+        else if (err?.code !== "EPERM") throw err;
+      }
+    } else {
+      try { abandoned = Date.now() - statSync(lock).mtimeMs > 5_000; } catch (err) {
+        if (err?.code !== "ENOENT") throw err;
+      }
+    }
+    if (abandoned) rmSync(lock, { recursive: true, force: true });
+  } finally {
+    rmSync(recovery, { recursive: true, force: true });
+  }
+}
+
 // The background one-check poll and a foreground update may write the same
 // state file at once. Lock the entire read/modify/rename sequence, not just the
 // rename, so a revision write cannot rewind a newly saved feedback cursor.
@@ -462,25 +493,7 @@ function writePadState(id, patch) {
       break;
     } catch (err) {
       if (err?.code !== "EEXIST") throw err;
-      let owner;
-      try { owner = Number(readFileSync(ownerPath, "utf8")); } catch (readErr) {
-        if (readErr?.code !== "ENOENT") throw readErr;
-      }
-      let abandoned = false;
-      if (Number.isSafeInteger(owner) && owner > 0) {
-        try { process.kill(owner, 0); } catch (checkErr) {
-          if (checkErr?.code === "ESRCH") abandoned = true;
-          else if (checkErr?.code !== "EPERM") throw checkErr;
-        }
-      } else {
-        try { abandoned = Date.now() - statSync(lock).mtimeMs > 5_000; } catch (statErr) {
-          if (statErr?.code !== "ENOENT") throw statErr;
-        }
-      }
-      if (abandoned) {
-        rmSync(lock, { recursive: true, force: true });
-        continue;
-      }
+      recoverPadLock(lock, ownerPath);
       if (Date.now() >= deadline) throw new Error(`pad state ${path} is locked - another writer may be stuck`);
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
     }
