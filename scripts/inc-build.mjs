@@ -13,8 +13,8 @@
 //   inc-build pad create <file-or-dir> [--title <title>]   # publish an IncPad, prints share URL
 //   inc-build pad update <padId> <file-or-dir> [--summary <text>] [--changes <json|file>]
 //                                                       # publish a new revision and declare what changed
-//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
-//                                                       # short-poll for reviewer feedback
+//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once] [--hold]
+//                                                       # short-poll; --once --hold replays until ack
 //   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
 //                                                       # confirm work on the last polled batch
 //   inc-build pad reply <padId> [--] <text...>              # reply in the pad's conversation panel
@@ -125,7 +125,7 @@ function padAgent() {
   return name;
 }
 
-const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed"]);
+const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed", "hold"]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -169,7 +169,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
   inc-build pad create <file-or-dir> [--title <title>]
   inc-build pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]
-  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
+  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--hold] [--after <cursor>] [--reset]
   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
   inc-build pad reply <padId> [--] <text...>
   inc-build pad end <padId>
@@ -447,26 +447,74 @@ function readPadState(id, { throwOnError = false } = {}) {
   return state;
 }
 
-// Atomic write (temp file + rename) so an interrupted write never leaves a
-// truncated JSON file behind.
-function writePadState(id, patch) {
+function padSidecarPath(id, kind) {
+  return join(PADS_DIR, `${encodeURIComponent(id)}.${kind}.json`);
+}
+
+function readSidecar(path, { throwOnError = false } = {}) {
+  const fail = (message) => {
+    if (throwOnError) throw new Error(message);
+    die(message, 4);
+  };
+  let raw;
+  try { raw = readFileSync(path, "utf8"); } catch (err) {
+    if (err?.code === "ENOENT") return {};
+    fail(`cannot read pad state ${path}: ${err?.message ?? String(err)}`);
+  }
+  let value;
+  try { value = JSON.parse(raw); } catch { value = null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail(`pad state ${path} is corrupt`);
+  return value;
+}
+
+function writePadFile(path, value) {
   mkdirSync(PADS_DIR, { recursive: true });
-  // Throw rather than exit here so a caller persisting after a remote mutation
-  // can still report that the server accepted the request.
-  const next = { ...readPadState(id, { throwOnError: true }), ...patch, updated_at: new Date().toISOString() };
-  const path = padStatePath(id);
   const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(next, null, 2));
+  writeFileSync(tmp, JSON.stringify(value, null, 2));
   renameSync(tmp, path);
-  return next;
+}
+
+// One poller owns the cursor and replay batch. The foreground-only default ack
+// may also update this file, but never while a poll is running. Explicit acks
+// and artifact mutations write separate files, so they cannot rewind a poll.
+function writePadState(id, patch) {
+  const current = readPadState(id, { throwOnError: true });
+  writePadFile(padStatePath(id), { ...current, ...patch, updated_at: new Date().toISOString() });
+}
+
+function readAckReceipt(id) {
+  const path = padSidecarPath(id, "ack");
+  const receipt = readSidecar(path);
+  if (receipt.acked_ids != null && !validIds(receipt.acked_ids)) die(`pad state ${path} is corrupt`, 4);
+  return receipt;
+}
+
+function writeAckReceipt(id, patch) {
+  const path = padSidecarPath(id, "ack");
+  const previous = readSidecar(path, { throwOnError: true });
+  if (previous.acked_ids != null && !validIds(previous.acked_ids)) throw new Error(`pad state ${path} is corrupt`);
+  const ackedIds = [...new Set([...(previous.acked_ids ?? []), ...patch.acked_ids].map(normalizeId))];
+  writePadFile(path, { acked_ids: ackedIds, updated_at: new Date().toISOString() });
+}
+
+function includesIds(all, subset) {
+  return validIds(all) && validIds(subset) && subset.every((id) => all.some((other) => idKey(other) === idKey(id)));
+}
+
+function readPadMetadata(id) {
+  return readSidecar(padSidecarPath(id, "meta"));
+}
+
+function writePadMetadata(id, patch) {
+  const path = padSidecarPath(id, "meta");
+  const current = readSidecar(path, { throwOnError: true });
+  writePadFile(path, { ...current, ...patch, updated_at: new Date().toISOString() });
 }
 
 // After a remote mutation succeeded, a local bookkeeping failure must not look
 // like an API failure (a retry would create a duplicate pad or reply).
-function persistAfterMutation(id, patch) {
-  try {
-    writePadState(id, patch);
-  } catch (err) {
+function persistAfterMutation(id, patch, write = writePadMetadata) {
+  try { write(id, patch); } catch (err) {
     process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
     process.exitCode = 4;
   }
@@ -487,7 +535,7 @@ function numberFlag(flags, key, fallback, { positive = false } = {}) {
 const PAD_FLAGS = {
   create: ["title"],
   update: ["title", "summary", "changes"],
-  poll: ["interval", "timeout", "once", "after", "reset"],
+  poll: ["interval", "timeout", "once", "hold", "after", "reset"],
   ack: ["note", "items"],
   reply: [],
   end: [],
@@ -497,7 +545,7 @@ const PAD_FLAGS = {
 const PAD_USAGE = {
   create: "pad create <file-or-dir> [--title <title>]",
   update: "pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]",
-  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
+  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--hold] [--after <cursor>] [--reset]",
   ack: "pad ack <padId> [--note <text>] [--items <id,...>]",
   reply: "pad reply <padId> [--] <text...>",
   end: "pad end <padId>",
@@ -532,7 +580,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     const result = await api(creds, "POST", "/api/v1/pads", { body, pad: true });
     if (!result.url || !result.id) die("POST /api/v1/pads returned no pad id or URL");
     process.stdout.write(`${result.url}\npadId: ${result.id}\nrevision: ${result.revision ?? 1}\n`);
-    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision, cursor: null, pending: [], last_batch_ids: [], last_acked_ids: [] });
+    persistAfterMutation(result.id, { title: body.title, share_id: result.share_id, url: result.url, revision: result.revision });
     return;
   }
 
@@ -540,8 +588,9 @@ async function padCommand(creds, sub, rest, flags, out) {
     requireArity("update", rest, 2);
     const id = rest[0];
     const notes = revisionNotes(flags);
-    const saved = readPadState(id); // validated before the request so corrupt state cannot strand a published revision
-    const body = { ...padPayload(rest[1], flags.title || saved.title), ...notes };
+    const legacy = readPadState(id); // validate before publishing; older installs also kept the title here
+    const saved = readPadMetadata(id);
+    const body = { ...padPayload(rest[1], flags.title || saved.title || legacy.title), ...notes };
     const result = await api(creds, "PUT", padPath(id, "/revisions"), { body, pad: true });
     if (result.revision == null) die("PUT /api/v1/pads/:id/revisions returned no revision - the update was not confirmed", 3);
     process.stdout.write(`revision: ${result.revision}\n`);
@@ -555,20 +604,27 @@ async function padCommand(creds, sub, rest, flags, out) {
     const id = rest[0];
     const interval = numberFlag(flags, "interval", 10, { positive: true });
     const timeout = numberFlag(flags, "timeout", 540);
-    const state = readPadState(id);
-    // Delivery is at-least-once up to this process's stdout: a fetched batch is
-    // saved as `pending` (with the advanced cursor and any ended flag) before it
-    // is printed, and cleared only after the stdout write completes. A poll
-    // killed before or while printing replays the batch on the next run. What
-    // the consumer does with bytes stdout already accepted is outside this
-    // client's control; there is no consumer acknowledgment.
+    if (flags.hold && !flags.once) die("pad poll --hold requires --once", 2);
+    let state = readPadState(id);
+    // Explicit acks write a separate receipt, never the cursor file. Only this
+    // poller clears a held batch once its exact IDs have been acknowledged.
+    if (state.pending?.length && includesIds(readAckReceipt(id).acked_ids, state.pending.map((item) => item.id))) {
+      writePadState(id, { pending: [], pending_ended: false });
+      state = readPadState(id);
+    }
+    // Save a fetched batch before printing. Foreground polling clears it after
+    // stdout completes; --hold leaves it until the next poll sees an explicit
+    // ack receipt, so an interrupted background waiter can replay it.
     const deliver = async (batch) => {
       for (const item of batch.items) item.id = normalizeId(item.id);
       const text = JSON.stringify(batch, null, 2) + "\n";
       await new Promise((resolveWrite, rejectWrite) => {
         process.stdout.write(text, (err) => (err ? rejectWrite(err) : resolveWrite()));
       }).catch((err) => die(`feedback batch kept for replay - stdout write failed: ${err?.message ?? String(err)}`, 4));
-      writePadState(id, { pending: [], pending_ended: false, ...(batch.items.length ? { last_batch_ids: batch.items.map((item) => item.id) } : {}) });
+      writePadState(id, {
+        ...(!flags.hold ? { pending: [], pending_ended: false } : {}),
+        ...(batch.items.length ? { last_batch_ids: batch.items.map((item) => item.id) } : {}),
+      });
     };
     if (flags.reset) {
       writePadState(id, { cursor: null, pending: [], pending_ended: false, ended: false, last_batch_ids: [], last_acked_ids: [] });
@@ -632,12 +688,13 @@ async function padCommand(creds, sub, rest, flags, out) {
   if (sub === "ack") {
     requireArity("ack", rest, 1);
     const id = rest[0];
-    const state = readPadState(id);
+    const state = flags.items == null ? readPadState(id) : null;
     if (flags.items == null && state.pending?.length) {
       die("pad ack has a batch pending replay - run pad poll first or pass --items <id,...>", 2);
     }
     const itemIds = flags.items == null
-      ? (sameIds(state.last_batch_ids, state.last_acked_ids) ? [] : (state.last_batch_ids ?? []).map(normalizeId))
+      ? (sameIds(state.last_batch_ids, state.last_acked_ids) || includesIds(readAckReceipt(id).acked_ids, state.last_batch_ids)
+        ? [] : (state.last_batch_ids ?? []).map(normalizeId))
       : flags.items.split(",").map((item) => normalizeId(item.trim()));
     if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no delivered, unacknowledged batch - poll first or pass --items <id,...>", 2);
     if (itemIds.some((item) => !validId(item)) || !validIds(itemIds)) {
@@ -652,17 +709,20 @@ async function padCommand(creds, sub, rest, flags, out) {
       die("POST /api/v1/pads/:id/ack did not confirm every requested item", 3);
     }
     out({ acked: result.acked.map(normalizeId) });
-    // Record confirmation without overwriting a newer batch another poll may have delivered.
-    let current;
-    try {
-      current = readPadState(id, { throwOnError: true });
-    } catch (err) {
-      process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
-      process.exitCode = 4;
-      return;
-    }
-    if (sameIds(current.last_batch_ids, itemIds)) {
-      persistAfterMutation(id, { last_acked_ids: itemIds });
+    if (flags.items != null) {
+      // This receipt has one writer (the agent's explicit ack), even while a
+      // background poll writes cursor state. The next poll clears its own batch.
+      persistAfterMutation(id, { acked_ids: itemIds }, writeAckReceipt);
+    } else {
+      // The default target is for the foreground workflow only. It has no
+      // concurrent poller, but still avoids replacing a newer delivered batch.
+      let current;
+      try { current = readPadState(id, { throwOnError: true }); } catch (err) {
+        process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
+        process.exitCode = 4;
+        return;
+      }
+      if (sameIds(current.last_batch_ids, itemIds)) persistAfterMutation(id, { last_acked_ids: itemIds }, writePadState);
     }
     return;
   }
@@ -682,6 +742,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     requireArity("end", rest, 1);
     const id = rest[0];
     readPadState(id); // validated before the request so corrupt state cannot mask a completed end
+    readPadMetadata(id);
     const result = await api(creds, "POST", padPath(id, "/end"), { pad: true });
     if (result.ended !== true) die("POST /api/v1/pads/:id/end did not confirm ended: true", 3);
     process.stdout.write("ended: true\n");
