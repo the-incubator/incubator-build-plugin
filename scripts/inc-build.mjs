@@ -13,8 +13,8 @@
 //   inc-build pad create <file-or-dir> [--title <title>]   # publish an IncPad, prints share URL
 //   inc-build pad update <padId> <file-or-dir> [--summary <text>] [--changes <json|file>]
 //                                                       # publish a new revision and declare what changed
-//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once] [--wait]
-//                                                       # short-poll for reviewer feedback; --wait never returns an empty timeout
+//   inc-build pad poll <padId> [--interval <s>] [--timeout <s>] [--once]
+//                                                       # short-poll for reviewer feedback
 //   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
 //                                                       # confirm work on the last polled batch
 //   inc-build pad reply <padId> [--] <text...>              # reply in the pad's conversation panel
@@ -26,7 +26,7 @@
 // INCUBATOR_HOME overrides the config directory (credentials + per-pad cursors).
 
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, statSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 
@@ -125,7 +125,7 @@ function padAgent() {
   return name;
 }
 
-const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed", "wait"]);
+const BOOLEAN_FLAGS = new Set(["once", "reset", "unconsumed"]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -169,7 +169,7 @@ const USAGE = `inc-build - Incubator Build API client (uses plugin install crede
   inc-build feedback mint-token --project <slug> [--label <name>] [--days <n>]
   inc-build pad create <file-or-dir> [--title <title>]
   inc-build pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]
-  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--wait] [--after <cursor>] [--reset]
+  inc-build pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]
   inc-build pad ack <padId> [--note <text>] [--items <id,...>]
   inc-build pad reply <padId> [--] <text...>
   inc-build pad end <padId>
@@ -447,18 +447,36 @@ function readPadState(id, { throwOnError = false } = {}) {
   return state;
 }
 
-// Atomic write (temp file + rename) so an interrupted write never leaves a
-// truncated JSON file behind.
+// The background one-check poll and a foreground update may write the same
+// state file at once. Lock the entire read/modify/rename sequence, not just the
+// rename, so a revision write cannot rewind a newly saved feedback cursor.
 function writePadState(id, patch) {
   mkdirSync(PADS_DIR, { recursive: true });
-  // Throw rather than exit here so a caller persisting after a remote mutation
-  // can still report that the server accepted the request.
-  const next = { ...readPadState(id, { throwOnError: true }), ...patch, updated_at: new Date().toISOString() };
   const path = padStatePath(id);
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(next, null, 2));
-  renameSync(tmp, path);
-  return next;
+  const lock = `${path}.lock`;
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch (err) {
+      if (err?.code !== "EEXIST") throw err;
+      if (Date.now() >= deadline) throw new Error(`pad state ${path} is locked - another writer may be stuck`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    // Throw rather than exit here so a caller persisting after a remote mutation
+    // can still report that the server accepted the request.
+    const current = readPadState(id, { throwOnError: true });
+    const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch), updated_at: new Date().toISOString() };
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(next, null, 2));
+    renameSync(tmp, path);
+    return next;
+  } finally {
+    rmdirSync(lock);
+  }
 }
 
 // After a remote mutation succeeded, a local bookkeeping failure must not look
@@ -487,7 +505,7 @@ function numberFlag(flags, key, fallback, { positive = false } = {}) {
 const PAD_FLAGS = {
   create: ["title"],
   update: ["title", "summary", "changes"],
-  poll: ["interval", "timeout", "once", "wait", "after", "reset"],
+  poll: ["interval", "timeout", "once", "after", "reset"],
   ack: ["note", "items"],
   reply: [],
   end: [],
@@ -497,7 +515,7 @@ const PAD_FLAGS = {
 const PAD_USAGE = {
   create: "pad create <file-or-dir> [--title <title>]",
   update: "pad update <padId> <file-or-dir> [--title <title>] [--summary <text>] [--changes <json|file>]",
-  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--wait] [--after <cursor>] [--reset]",
+  poll: "pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--after <cursor>] [--reset]",
   ack: "pad ack <padId> [--note <text>] [--items <id,...>]",
   reply: "pad reply <padId> [--] <text...>",
   end: "pad end <padId>",
@@ -555,9 +573,6 @@ async function padCommand(creds, sub, rest, flags, out) {
     const id = rest[0];
     const interval = numberFlag(flags, "interval", 10, { positive: true });
     const timeout = numberFlag(flags, "timeout", 540);
-    if (flags.wait && (flags.once || flags.timeout != null)) {
-      die("pad poll --wait cannot be combined with --once or --timeout", 2);
-    }
     const state = readPadState(id);
     // Delivery is at-least-once up to this process's stdout: a fetched batch is
     // saved as `pending` (with the advanced cursor and any ended flag) before it
@@ -584,7 +599,7 @@ async function padCommand(creds, sub, rest, flags, out) {
       return;
     }
     let cursor = flags.reset ? null : flags.after ?? state.cursor ?? null;
-    const deadline = flags.wait ? Infinity : Date.now() + timeout * 1000;
+    const deadline = Date.now() + timeout * 1000;
     // Short polls only: each request returns immediately, so nothing holds a
     // server connection open between checks.
     // The first request always happens, so --timeout 0 is a single immediate check.
@@ -655,18 +670,10 @@ async function padCommand(creds, sub, rest, flags, out) {
       die("POST /api/v1/pads/:id/ack did not confirm every requested item", 3);
     }
     out({ acked: result.acked.map(normalizeId) });
-    // Record confirmation without overwriting a newer batch another poll may have delivered.
-    let current;
-    try {
-      current = readPadState(id, { throwOnError: true });
-    } catch (err) {
-      process.stderr.write(`inc-build: warning - the server accepted the request but local pad state was not saved (${err?.message ?? String(err)})\n`);
-      process.exitCode = 4;
-      return;
-    }
-    if (sameIds(current.last_batch_ids, itemIds)) {
-      persistAfterMutation(id, { last_acked_ids: itemIds });
-    }
+    // Check the latest batch under the same lock as the write: a poll can
+    // finish while the ack API request is in flight.
+    persistAfterMutation(id, (current) =>
+      sameIds(current.last_batch_ids, itemIds) ? { last_acked_ids: itemIds } : {});
     return;
   }
 

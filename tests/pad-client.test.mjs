@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createRawServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(root, "scripts/inc-build.mjs");
+const WAITER = join(root, "skills/inc-pad/scripts/wait-for-feedback.mjs");
 
 async function mockServer(t, handle) {
   const requests = [];
@@ -46,9 +47,9 @@ function home(t, endpoint) {
 }
 
 // Async so the in-process mock server can answer while the CLI runs.
-function run(homeDir, args, env = {}) {
+function run(homeDir, args, env = {}, command = CLI) {
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [CLI, ...args], { env: { ...process.env, INCUBATOR_HOME: homeDir, ...env } });
+    const child = spawn(process.execPath, [command, ...args], { env: { ...process.env, INCUBATOR_HOME: homeDir, ...env } });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -292,7 +293,7 @@ test("pad poll keeps checking until feedback arrives, prints it, and never re-de
   assert.equal(state.cursor, "c2");
 });
 
-test("pad poll --wait stays asleep through empty checks and returns the next feedback batch", async (t) => {
+test("background waiter stays asleep through empty one-shot checks and returns the next feedback batch", async (t) => {
   let checks = 0;
   const items = [{ id: 42, kind: "prompt", text: "Revise the rollout" }];
   const { requests, endpoint } = await mockServer(t, () => ({
@@ -300,36 +301,79 @@ test("pad poll --wait stays asleep through empty checks and returns the next fee
       ? { items, cursor: "c1" }
       : { items: [], cursor: "c0" },
   }));
-  const r = await run(home(t, endpoint), ["pad", "poll", "pad_1", "--wait", "--interval", "0.05"]);
+  const r = await run(home(t, endpoint), ["pad_1", "--interval", "0.05"], {}, WAITER);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), { items, cursor: "c1" });
   assert.equal(requests.length, 4, "the wait continued past three empty checks");
 });
 
-test("pad poll --wait returns an ended pad without feedback and surfaces poll failures", async (t) => {
+test("background waiter returns an ended pad without feedback and surfaces poll failures", async (t) => {
   const { endpoint } = await mockServer(t, (req) => req.query.after === "c0"
     ? { json: { items: [], cursor: "c1", ended: true } }
     : { json: { items: [], cursor: "c0" } });
-  const ended = await run(home(t, endpoint), ["pad", "poll", "pad_1", "--wait", "--interval", "0.05"]);
+  const ended = await run(home(t, endpoint), ["pad_1", "--interval", "0.05"], {}, WAITER);
   assert.equal(ended.status, 0, ended.stderr);
   assert.deepEqual(JSON.parse(ended.stdout), { items: [], cursor: "c1", ended: true });
 
   const failedServer = await mockServer(t, () => ({ status: 401, json: { reason: "invalid_api_key" } }));
-  const failed = await run(home(t, failedServer.endpoint), ["pad", "poll", "pad_1", "--wait"]);
+  const failed = await run(home(t, failedServer.endpoint), ["pad_1"], {}, WAITER);
   assert.equal(failed.status, 3);
   assert.equal(failed.stdout, "");
   assert.match(failed.stderr, /invalid_api_key/);
 });
 
-test("pad poll --wait rejects timeout and single-check modes", async (t) => {
+test("background waiter rejects invalid arguments before polling", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
   const h = home(t, endpoint);
-  for (const mode of [["--timeout", "1"], ["--once"]]) {
-    const r = await run(h, ["pad", "poll", "pad_1", "--wait", ...mode]);
+  for (const args of [["pad_1", "--interval", "0"], ["pad_1", "--once"]]) {
+    const r = await run(h, args, {}, WAITER);
     assert.equal(r.status, 2, r.stderr);
-    assert.match(r.stderr, /cannot be combined/);
+    assert.match(r.stderr, /usage: wait-for-feedback/);
   }
   assert.equal(requests.length, 0);
+});
+
+test("a revision and background feedback check preserve both the revision and the feedback cursor", async (t) => {
+  let delivered = false;
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path === "/api/v1/pads") return { json: created };
+    if (req.path.endsWith("/revisions")) return { json: { revision: 2, url: created.url } };
+    if (!delivered) {
+      delivered = true;
+      return { json: { items: [{ id: 41, kind: "comment", text: "Clarify this" }], cursor: "c1" } };
+    }
+    return { json: { items: [], cursor: "c1" } };
+  });
+  const h = home(t, endpoint);
+  const f = fixtures(t);
+  await run(h, ["pad", "create", f.single]);
+  const lock = join(h, "pads", "pad_1.json.lock");
+  mkdirSync(lock);
+  t.after(() => { if (existsSync(lock)) rmdirSync(lock); });
+  let updateSettled = false;
+  const updating = run(h, ["pad", "update", "pad_1", f.single]).then((result) => {
+    updateSettled = true;
+    return result;
+  });
+  const polling = run(h, ["pad", "poll", "pad_1", "--once"]);
+  const deadline = Date.now() + 3_000;
+  while (requests.filter((req) => req.path.endsWith("/revisions") || req.path.endsWith("/feedback")).length < 2 && Date.now() < deadline) {
+    await new Promise((done) => setTimeout(done, 10));
+  }
+  assert.equal(requests.length, 3, "update and poll both reached the server");
+  await new Promise((done) => setTimeout(done, 150));
+  assert.equal(updateSettled, false, "revision must not overwrite cursor while another writer holds the state");
+  rmdirSync(lock);
+  const [update, poll] = await Promise.all([updating, polling]);
+  assert.equal(update.status, 0, update.stderr);
+  assert.equal(poll.status, 0, poll.stderr);
+  assert.deepEqual(JSON.parse(poll.stdout).items.map((item) => item.id), [41]);
+  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
+  assert.equal(state.revision, 2);
+  assert.equal(state.cursor, "c1");
+  const again = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.deepEqual(JSON.parse(again.stdout).items, [], "handled feedback is not re-delivered after an overlapping update");
+  assert.equal(requests.at(-1).query.after, "c1");
 });
 
 test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {
@@ -381,9 +425,9 @@ test("explicit ack IDs keep overlapping feedback batches attached to the right r
       : { json: { items: [{ id: 11, kind: "comment", text: "Change the timeline" }], cursor: "c1" } };
   });
   const h = home(t, endpoint);
-  const first = await run(h, ["pad", "poll", "pad_1", "--wait"]);
+  const first = await run(h, ["pad", "poll", "pad_1", "--once"]);
   assert.equal(first.status, 0, first.stderr);
-  const second = await run(h, ["pad", "poll", "pad_1", "--wait"]);
+  const second = await run(h, ["pad", "poll", "pad_1", "--once"]);
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(JSON.parse(first.stdout).items.map((item) => item.id), [11]);
   assert.deepEqual(JSON.parse(second.stdout).items.map((item) => item.id), [22]);
