@@ -55,10 +55,10 @@ The examples below use `"${INC_BUILD[@]}"` so they work when the plugin is insta
 
   The reviewer gets a checklist of these changes on the revision step; each row jumps to its block, and each answered note shows "Addressed in rN".
   A malformed list is rejected with exit code 2 before anything uploads.
-- `pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once]` checks about every 10 seconds and returns as soon as new feedback exists.
+- `pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--hold]` checks about every 10 seconds and returns as soon as new feedback exists.
   It prints JSON `{"items":[...],"cursor":"..."}`.
   The default timeout is 540 seconds, after which it prints empty `items` and exits 0.
-  `--once` does a single check. In Claude Code, the background waiter script below repeats one-shot checks and suppresses empty results.
+  `--once` does a single check. `--once --hold` keeps a delivered batch replayable until an explicit `pad ack --items` succeeds; the Claude Code background waiter below uses it so a killed waiter cannot lose feedback buffered between the CLI and the harness.
   A batch is saved locally before it is printed, so a poll killed mid-delivery replays the same batch (marked `"replayed": true`) on the next run instead of losing it.
 - `pad ack <padId> [--note <text>] [--items <id,...>]` confirms the agent started work on feedback and shows the note in the review thread.
   Without `--items`, it acknowledges the latest delivered batch that has not been acknowledged, saved with that pad's cursor.
@@ -110,14 +110,14 @@ A directory uploads its `index.html` plus every asset file under their relative 
      PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<resolved-plugin-root>}"
      node "$PLUGIN_ROOT/skills/inc-pad/scripts/wait-for-feedback.mjs" <padId>
      ```
-     The script calls `pad poll <padId> --once` every 10 seconds; empty results stay inside the task. It exits only with feedback, `"ended": true`, or a nonzero error. This task notifies the agent when it exits, including while a revision is in progress. Do not block on its output while working or start a second task while it is running. On each completion notification, inspect its exit status and JSON output at the next step of the current turn. A nonzero exit is an error to surface and fix, not an empty batch to ignore. If Claude Code kills the task (including when the session closes), start a new background wait when work resumes; the saved per-pad cursor and undelivered batch allow replay.
+     The script calls `pad poll <padId> --once --hold` every 10 seconds; empty results stay inside the task. It exits only with feedback, `"ended": true`, or a nonzero error. This task notifies the agent when it exits, including while a revision is in progress. Do not block on its output while working or start a second task while it is running. On each completion notification, inspect its exit status and JSON output at the next step of the current turn. A nonzero exit is an error to surface and fix, not an empty batch to ignore. If Claude Code kills the task (including when the session closes), start a new background wait when work resumes; the saved per-pad cursor and undelivered batch allow replay.
    - **Codex, Pi, Cursor, and other harnesses without background tasks:** Keep the foreground loop:
      ```bash
      "${INC_BUILD[@]}" pad poll <padId>
      ```
      Give the tool a timeout longer than 540 seconds, or pass a shorter `--timeout` if the harness caps foreground commands. Re-run after an empty `items` array without `"ended": true`, or after the harness kills the poll.
 
-   A result with `"ended": true` means the reviewer ended the review. Do not start another poll; if it also carries items, acknowledge and handle those once before stopping. A killed poll that fetched a batch replays it on the next run. Delivery is complete once the process's stdout write finishes. Answers queued by an artifact's `window.incpad.queuePrompt()` arrive as `prompt` items after the reviewer presses **Send to Agent**. Read the answer and any `Context data:` JSON in the item's `text`; the current pad feedback format does not expose a separate `data` field.
+   A result with `"ended": true` means the reviewer ended the review. Do not start another poll; if it also carries items, acknowledge and handle those once before stopping. A killed foreground poll that fetched a batch replays it on the next run. In Claude Code, held batches replay until acknowledged, even if the background waiter was killed after the CLI delivered them internally. Answers queued by an artifact's `window.incpad.queuePrompt()` arrive as `prompt` items after the reviewer presses **Send to Agent**. Read the answer and any `Context data:` JSON in the item's `text`; the current pad feedback format does not expose a separate `data` field.
 5. **Acknowledge exactly this batch, then re-arm the Claude Code poll before editing.**
    Take the `id` of every item in the returned JSON, not a saved or assumed latest batch. When `items` is non-empty, send a one-line note describing what you are about to do:
    ```bash

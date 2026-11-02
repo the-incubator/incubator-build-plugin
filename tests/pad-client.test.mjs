@@ -322,6 +322,28 @@ test("background waiter returns an ended pad without feedback and surfaces poll 
   assert.match(failed.stderr, /invalid_api_key/);
 });
 
+test("one-shot waiter feedback replays after interruption until explicit ack", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => {
+    if (req.path.endsWith("/ack")) return { json: { acked: req.body.item_ids } };
+    return req.query.after === "c1"
+      ? { json: { items: [], cursor: "c1" } }
+      : { json: { items: [{ id: 42, kind: "prompt", text: "Revise" }], cursor: "c1" } };
+  });
+  const h = home(t, endpoint);
+  const first = await run(h, ["pad_1"], {}, WAITER);
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(JSON.parse(first.stdout).items.map((item) => item.id), [42]);
+  const replay = await run(h, ["pad_1"], {}, WAITER);
+  assert.equal(replay.status, 0, replay.stderr);
+  assert.equal(JSON.parse(replay.stdout).replayed, true);
+  assert.equal(requests.filter((req) => req.path.endsWith("/feedback")).length, 1, "replay needs no new request");
+  const ack = await run(h, ["pad", "ack", "pad_1", "--items", "42"]);
+  assert.equal(ack.status, 0, ack.stderr);
+  const next = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.deepEqual(JSON.parse(next.stdout).items, []);
+  assert.equal(requests.at(-1).query.after, "c1");
+});
+
 test("background waiter rejects invalid arguments before polling", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c0" } }));
   const h = home(t, endpoint);
@@ -374,6 +396,19 @@ test("a revision and background feedback check preserve both the revision and th
   const again = await run(h, ["pad", "poll", "pad_1", "--once"]);
   assert.deepEqual(JSON.parse(again.stdout).items, [], "handled feedback is not re-delivered after an overlapping update");
   assert.equal(requests.at(-1).query.after, "c1");
+});
+
+test("a new poll recovers a state lock left by a terminated writer", async (t) => {
+  const { endpoint } = await mockServer(t, () => ({ json: { items: [{ id: 52, kind: "comment", text: "Update this" }], cursor: "c1" } }));
+  const h = home(t, endpoint);
+  const lock = join(h, "pads", "pad_1.json.lock");
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, "owner"), "99999999");
+  const poll = await run(h, ["pad", "poll", "pad_1", "--once"]);
+  assert.equal(poll.status, 0, poll.stderr);
+  assert.deepEqual(JSON.parse(poll.stdout).items.map((item) => item.id), [52]);
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
+  assert.equal(existsSync(lock), false, "the stale lock does not strand subsequent feedback");
 });
 
 test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {

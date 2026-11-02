@@ -18,7 +18,7 @@ const run = promisify(execFile);
 for (;;) {
   let stdout;
   try {
-    ({ stdout } = await run(process.execPath, [cli, "pad", "poll", padId, "--once"]));
+    ({ stdout } = await run(process.execPath, [cli, "pad", "poll", padId, "--once", "--hold"]));
   } catch (err) {
     process.stderr.write(err.stderr || `pad poll failed: ${err.message}\n`);
     process.exit(typeof err.code === "number" ? err.code : 3);
