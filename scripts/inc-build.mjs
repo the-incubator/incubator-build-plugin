@@ -490,7 +490,15 @@ function readAckReceipt(id) {
 }
 
 function writeAckReceipt(id, patch) {
-  writePadFile(padSidecarPath(id, "ack"), { ...patch, updated_at: new Date().toISOString() });
+  const path = padSidecarPath(id, "ack");
+  const previous = readSidecar(path, { throwOnError: true });
+  if (previous.acked_ids != null && !validIds(previous.acked_ids)) throw new Error(`pad state ${path} is corrupt`);
+  const ackedIds = [...new Set([...(previous.acked_ids ?? []), ...patch.acked_ids].map(normalizeId))];
+  writePadFile(path, { acked_ids: ackedIds, updated_at: new Date().toISOString() });
+}
+
+function includesIds(all, subset) {
+  return validIds(all) && validIds(subset) && subset.every((id) => all.some((other) => idKey(other) === idKey(id)));
 }
 
 function readPadMetadata(id) {
@@ -600,7 +608,7 @@ async function padCommand(creds, sub, rest, flags, out) {
     let state = readPadState(id);
     // Explicit acks write a separate receipt, never the cursor file. Only this
     // poller clears a held batch once its exact IDs have been acknowledged.
-    if (state.pending?.length && sameIds(state.pending.map((item) => item.id), readAckReceipt(id).acked_ids)) {
+    if (state.pending?.length && includesIds(readAckReceipt(id).acked_ids, state.pending.map((item) => item.id))) {
       writePadState(id, { pending: [], pending_ended: false });
       state = readPadState(id);
     }
@@ -685,7 +693,7 @@ async function padCommand(creds, sub, rest, flags, out) {
       die("pad ack has a batch pending replay - run pad poll first or pass --items <id,...>", 2);
     }
     const itemIds = flags.items == null
-      ? (sameIds(state.last_batch_ids, state.last_acked_ids) || sameIds(state.last_batch_ids, readAckReceipt(id).acked_ids)
+      ? (sameIds(state.last_batch_ids, state.last_acked_ids) || includesIds(readAckReceipt(id).acked_ids, state.last_batch_ids)
         ? [] : (state.last_batch_ids ?? []).map(normalizeId))
       : flags.items.split(",").map((item) => normalizeId(item.trim()));
     if (!Array.isArray(itemIds) || !itemIds.length) die("pad ack has no delivered, unacknowledged batch - poll first or pass --items <id,...>", 2);

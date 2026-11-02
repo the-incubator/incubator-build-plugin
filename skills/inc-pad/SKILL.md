@@ -63,7 +63,7 @@ The examples below use `"${INC_BUILD[@]}"` so they work when the plugin is insta
 - `pad ack <padId> [--note <text>] [--items <id,...>]` confirms the agent started work on feedback and shows the note in the review thread.
   Without `--items`, it acknowledges the latest delivered batch that has not been acknowledged, saved with that pad's cursor. Use this default only in the foreground workflow, never while a background poller is running.
   An empty poll keeps that batch available, and a batch saved for replay becomes available only after the replay is printed.
-  A successful acknowledgment clears the default target; use `--items` to target specific feedback IDs later, including to update their note. Explicit acks write a separate receipt, not the poller's cursor file.
+  A successful acknowledgment clears the default target; use `--items` to target specific feedback IDs later, including to update their note. Explicit acks accumulate acknowledged IDs in a separate receipt, not the poller's cursor file, so updating an older note cannot reopen a newer batch.
   Keep the note to one line and at most 200 characters.
 - `pad reply <padId> [--] <text...>` posts an agent reply to the pad's conversation panel.
   It prints `replyId: <id>`.

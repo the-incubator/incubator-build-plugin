@@ -475,6 +475,26 @@ test("explicit ack IDs keep overlapping feedback batches attached to the right r
   assert.equal(defaultAck.status, 2, "an explicit ack does not leave the latest batch as a default target");
 });
 
+test("updating an older ack note does not replay the latest acknowledged feedback", async (t) => {
+  const { requests, endpoint } = await mockServer(t, (req) => req.path.endsWith("/ack")
+    ? { json: { acked: req.body.item_ids } }
+    : req.query.after === "c2"
+      ? { json: { items: [], cursor: "c2" } }
+      : { json: { items: [{ id: 22, kind: "chat", text: "Latest request" }], cursor: "c2" } });
+  const h = home(t, endpoint);
+  const first = await run(h, ["pad_1"], {}, WAITER);
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(JSON.parse(first.stdout).items.map((item) => item.id), [22]);
+  assert.equal((await run(h, ["pad", "ack", "pad_1", "--items", "22"])).status, 0);
+  assert.equal((await run(h, ["pad", "ack", "pad_1", "--items", "11", "--note", "Updated earlier note"])).status, 0);
+  const next = await run(h, ["pad", "poll", "pad_1", "--once", "--hold"]);
+  assert.equal(next.status, 0, next.stderr);
+  assert.deepEqual(JSON.parse(next.stdout).items, [], "the latest batch remains acknowledged");
+  assert.equal(requests.at(-1).query.after, "c2");
+  const defaultAck = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(defaultAck.status, 2, "the latest batch is not reopened as a default target");
+});
+
 test("an empty poll preserves an unacknowledged delivered batch", async (t) => {
   let polled = false;
   const { requests, endpoint } = await mockServer(t, (req) => {
