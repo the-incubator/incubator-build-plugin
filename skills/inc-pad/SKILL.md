@@ -58,12 +58,12 @@ The examples below use `"${INC_BUILD[@]}"` so they work when the plugin is insta
 - `pad poll <padId> [--interval <seconds>] [--timeout <seconds>] [--once] [--hold]` checks about every 10 seconds and returns as soon as new feedback exists.
   It prints JSON `{"items":[...],"cursor":"..."}`.
   The default timeout is 540 seconds, after which it prints empty `items` and exits 0.
-  `--once` does a single check. `--once --hold` keeps a delivered batch replayable until an explicit `pad ack --items` succeeds; the Claude Code background waiter below uses it so a killed waiter cannot lose feedback buffered between the CLI and the harness.
+  `--once` does a single check. `--once --hold` keeps a delivered batch replayable until an explicit `pad ack --items` succeeds; the next poll clears its own saved batch after reading that ack's separate receipt. The Claude Code background waiter uses this so a killed waiter cannot lose feedback buffered between the CLI and the harness. Run only one poller per pad at a time.
   A batch is saved locally before it is printed, so a poll killed mid-delivery replays the same batch (marked `"replayed": true`) on the next run instead of losing it.
 - `pad ack <padId> [--note <text>] [--items <id,...>]` confirms the agent started work on feedback and shows the note in the review thread.
-  Without `--items`, it acknowledges the latest delivered batch that has not been acknowledged, saved with that pad's cursor.
+  Without `--items`, it acknowledges the latest delivered batch that has not been acknowledged, saved with that pad's cursor. Use this default only in the foreground workflow, never while a background poller is running.
   An empty poll keeps that batch available, and a batch saved for replay becomes available only after the replay is printed.
-  A successful acknowledgment clears the default target; use `--items` to target specific feedback IDs later, including to update their note.
+  A successful acknowledgment clears the default target; use `--items` to target specific feedback IDs later, including to update their note. Explicit acks write a separate receipt, not the poller's cursor file.
   Keep the note to one line and at most 200 characters.
 - `pad reply <padId> [--] <text...>` posts an agent reply to the pad's conversation panel.
   It prints `replyId: <id>`.

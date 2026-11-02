@@ -18,6 +18,8 @@ function checkOnce() {
     const child = spawn(process.execPath, [cli, "pad", "poll", padId, "--once", "--hold"]);
     let stdout = "";
     let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", fail);

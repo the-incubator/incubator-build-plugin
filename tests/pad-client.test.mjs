@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createRawServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -50,6 +50,8 @@ function home(t, endpoint) {
 function run(homeDir, args, env = {}, command = CLI) {
   return new Promise((resolvePromise) => {
     const child = spawn(process.execPath, [command, ...args], { env: { ...process.env, INCUBATOR_HOME: homeDir, ...env } });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -348,11 +350,11 @@ test("background waiter delivers a feedback batch larger than the child-process 
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "c1" } }));
   const h = home(t, endpoint);
   mkdirSync(join(h, "pads"));
-  const text = "x".repeat(1_200_000);
+  const text = "漢".repeat(400_000);
   writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ cursor: "c1", pending: [{ id: 44, kind: "comment", text }] }));
   const result = await run(h, ["pad_1"], {}, WAITER);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).items[0].text, text);
+  assert.ok(JSON.parse(result.stdout).items[0].text === text, "large UTF-8 feedback is not corrupted at stream boundaries");
   assert.equal(requests.length, 0, "held feedback replays without a new request");
 });
 
@@ -367,95 +369,46 @@ test("background waiter rejects invalid arguments before polling", async (t) => 
   assert.equal(requests.length, 0);
 });
 
-test("a revision and background feedback check preserve both the revision and the feedback cursor", async (t) => {
-  let delivered = false;
+test("ack and revision during a background wait cannot roll back the next feedback cursor", async (t) => {
+  let release = false;
   const { requests, endpoint } = await mockServer(t, (req) => {
     if (req.path === "/api/v1/pads") return { json: created };
     if (req.path.endsWith("/revisions")) return { json: { revision: 2, url: created.url } };
-    if (!delivered) {
-      delivered = true;
-      return { json: { items: [{ id: 41, kind: "comment", text: "Clarify this" }], cursor: "c1" } };
-    }
-    return { json: { items: [], cursor: "c1" } };
+    if (req.path.endsWith("/ack")) return { json: { acked: req.body.item_ids } };
+    if (!req.query.after) return { json: { items: [{ id: 41, kind: "comment", text: "Clarify this" }], cursor: "c1" } };
+    if (req.query.after === "c1") return release
+      ? { json: { items: [{ id: 42, kind: "prompt", text: "Also update the title" }], cursor: "c2" } }
+      : { json: { items: [], cursor: "c1" } };
+    return { json: { items: [], cursor: "c2" } };
   });
   const h = home(t, endpoint);
   const f = fixtures(t);
   await run(h, ["pad", "create", f.single]);
-  const lock = join(h, "pads", "pad_1.json.lock");
-  mkdirSync(lock);
-  t.after(() => { if (existsSync(lock)) rmdirSync(lock); });
-  let updateSettled = false;
-  const updating = run(h, ["pad", "update", "pad_1", f.single]).then((result) => {
-    updateSettled = true;
-    return result;
-  });
-  const polling = run(h, ["pad", "poll", "pad_1", "--once"]);
+  const first = await run(h, ["pad_1", "--interval", "0.05"], {}, WAITER);
+  assert.deepEqual(JSON.parse(first.stdout).items.map((item) => item.id), [41]);
+  assert.equal((await run(h, ["pad", "ack", "pad_1", "--items", "41"])).status, 0);
+  const waiting = run(h, ["pad_1", "--interval", "0.05"], {}, WAITER);
   const deadline = Date.now() + 3_000;
-  while (requests.filter((req) => req.path.endsWith("/revisions") || req.path.endsWith("/feedback")).length < 2 && Date.now() < deadline) {
+  while (!requests.some((req) => req.path.endsWith("/feedback") && req.query.after === "c1") && Date.now() < deadline) {
     await new Promise((done) => setTimeout(done, 10));
   }
-  assert.equal(requests.length, 3, "update and poll both reached the server");
-  await new Promise((done) => setTimeout(done, 150));
-  assert.equal(updateSettled, false, "revision must not overwrite cursor while another writer holds the state");
-  rmdirSync(lock);
-  const [update, poll] = await Promise.all([updating, polling]);
+  assert.ok(requests.some((req) => req.path.endsWith("/feedback") && req.query.after === "c1"), "second wait is running");
+  const [update, ack] = await Promise.all([
+    run(h, ["pad", "update", "pad_1", f.single]),
+    run(h, ["pad", "ack", "pad_1", "--items", "41", "--note", "Still working"]),
+  ]);
   assert.equal(update.status, 0, update.stderr);
-  assert.equal(poll.status, 0, poll.stderr);
-  assert.deepEqual(JSON.parse(poll.stdout).items.map((item) => item.id), [41]);
-  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
-  assert.equal(state.revision, 2);
-  assert.equal(state.cursor, "c1");
-  const again = await run(h, ["pad", "poll", "pad_1", "--once"]);
-  assert.deepEqual(JSON.parse(again.stdout).items, [], "handled feedback is not re-delivered after an overlapping update");
-  assert.equal(requests.at(-1).query.after, "c1");
-});
-
-test("a new poll recovers a state lock left by a terminated writer", async (t) => {
-  const { endpoint } = await mockServer(t, () => ({ json: { items: [{ id: 52, kind: "comment", text: "Update this" }], cursor: "c1" } }));
-  const h = home(t, endpoint);
-  const lock = join(h, "pads", "pad_1.json.lock");
-  mkdirSync(lock, { recursive: true });
-  writeFileSync(join(lock, "owner"), "99999999");
-  const poll = await run(h, ["pad", "poll", "pad_1", "--once"]);
-  assert.equal(poll.status, 0, poll.stderr);
-  assert.deepEqual(JSON.parse(poll.stdout).items.map((item) => item.id), [52]);
-  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c1");
-  assert.equal(existsSync(lock), false, "the stale lock does not strand subsequent feedback");
-});
-
-test("concurrent stale-lock recovery does not let a poll erase an overlapping revision", async (t) => {
-  const { requests, endpoint } = await mockServer(t, (req) => {
-    if (req.path === "/api/v1/pads") return { json: created };
-    if (req.path.endsWith("/revisions")) return { json: { revision: 2, url: created.url } };
-    return { json: { items: [{ id: 81, kind: "comment", text: "Revise" }], cursor: "c1" } };
-  });
-  const h = home(t, endpoint);
-  const f = fixtures(t);
-  await run(h, ["pad", "create", f.single]);
-  const lock = join(h, "pads", "pad_1.json.lock");
-  const recovery = `${lock}.recovery`;
-  mkdirSync(lock);
-  writeFileSync(join(lock, "owner"), "99999999");
-  mkdirSync(recovery);
-  t.after(() => { if (existsSync(recovery)) rmdirSync(recovery); });
-  let updateSettled = false;
-  const updating = run(h, ["pad", "update", "pad_1", f.single]).then((result) => {
-    updateSettled = true;
-    return result;
-  });
-  const polling = run(h, ["pad", "poll", "pad_1", "--once"]);
-  const deadline = Date.now() + 3_000;
-  while (requests.length < 3 && Date.now() < deadline) await new Promise((done) => setTimeout(done, 10));
-  assert.equal(requests.length, 3);
-  await new Promise((done) => setTimeout(done, 150));
-  assert.equal(updateSettled, false, "the second contender must wait for stale-lock recovery");
-  rmdirSync(recovery);
-  const [update, poll] = await Promise.all([updating, polling]);
-  assert.equal(update.status, 0, update.stderr);
-  assert.equal(poll.status, 0, poll.stderr);
-  const state = JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8"));
-  assert.equal(state.revision, 2);
-  assert.equal(state.cursor, "c1");
+  assert.equal(ack.status, 0, ack.stderr);
+  release = true;
+  const second = await waiting;
+  assert.equal(second.status, 0, second.stderr);
+  assert.deepEqual(JSON.parse(second.stdout).items.map((item) => item.id), [42]);
+  assert.equal((await run(h, ["pad", "ack", "pad_1", "--items", "42"])).status, 0);
+  const next = await run(h, ["pad", "poll", "pad_1", "--once", "--hold"]);
+  assert.deepEqual(JSON.parse(next.stdout).items, [], "acknowledged feedback is not replayed");
+  assert.equal(requests.at(-1).query.after, "c2");
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c2");
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.meta.json"), "utf8")).revision, 2);
 });
 
 test("pad ack confirms the last polled batch with a working note and agent name", async (t) => {
@@ -518,6 +471,8 @@ test("explicit ack IDs keep overlapping feedback batches attached to the right r
   const secondAck = await run(h, ["pad", "ack", "pad_1", "--items", "22"]);
   assert.equal(secondAck.status, 0, secondAck.stderr);
   assert.deepEqual(requests.filter((req) => req.path.endsWith("/ack")).map((req) => req.body.item_ids), [[11], [22]]);
+  const defaultAck = await run(h, ["pad", "ack", "pad_1"]);
+  assert.equal(defaultAck.status, 2, "an explicit ack does not leave the latest batch as a default target");
 });
 
 test("an empty poll preserves an unacknowledged delivered batch", async (t) => {
@@ -828,6 +783,19 @@ test("a title set on pad update sticks for later untitled updates", async (t) =>
   assert.deepEqual(requests.slice(1).map((r) => r.body.title), ["Renamed", "Renamed"]);
 });
 
+test("a pre-upgrade pad keeps its title when metadata moves out of poll state", async (t) => {
+  const { requests, endpoint } = await mockServer(t, () => ({ json: { revision: 2, url: created.url } }));
+  const h = home(t, endpoint);
+  const f = fixtures(t);
+  mkdirSync(join(h, "pads"));
+  writeFileSync(join(h, "pads", "pad_1.json"), JSON.stringify({ title: "Original title", cursor: "c7" }));
+  const update = await run(h, ["pad", "update", "pad_1", f.folder]);
+  assert.equal(update.status, 0, update.stderr);
+  assert.equal(requests[0].body.title, "Original title");
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.json"), "utf8")).cursor, "c7");
+  assert.equal(JSON.parse(readFileSync(join(h, "pads", "pad_1.meta.json"), "utf8")).title, "Original title");
+});
+
 test("pad poll --reset discards a stale pending batch instead of replaying it later", async (t) => {
   const { requests, endpoint } = await mockServer(t, () => ({ json: { items: [], cursor: "fresh" } }));
   const h = home(t, endpoint);
@@ -1073,9 +1041,9 @@ test("corrupt pad state blocks update and end before any request, and never hide
   }
   assert.equal(requests.length, 0, "no mutation is sent when local state is corrupt");
   const create = await run(h, ["pad", "create", f.single]);
-  assert.equal(create.status, 4);
+  assert.equal(create.status, 0, create.stderr);
   assert.match(create.stdout, /padId: pad_1/, "the server-accepted pad is still reported");
-  assert.match(create.stderr, /server accepted the request but local pad state was not saved/);
+  assert.equal(readFileSync(join(h, "pads", "pad_1.json"), "utf8"), "[]", "create does not overwrite the poll cursor file");
 });
 
 test("a replayed batch after --reset is not marked ended by the pad's historical ended flag", async (t) => {
