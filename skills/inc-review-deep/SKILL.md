@@ -8,9 +8,9 @@ argument-hint: "[blank to review current branch, or provide PR link]"
 
 Reviews code changes using dynamically selected reviewer personas. Spawns parallel sub-agents that return structured JSON, then merges and deduplicates findings into a single report.
 
-First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md) and use its host-specific launch table for every reviewer and fixer subagent.
 Persona names below identify bundled prompt assets, not mandatory registered agent types.
-Read their files from the resolved plugin-root `agents/` directory and supply the contents to the host's general-purpose subagent mechanism.
+Read their files from the resolved plugin-root `agents/` directory and supply the contents to the host's appropriate generic subagent mechanism when needed.
 Explicitly read the Included References at the end of this file; `@` inclusion is not portable.
 If independent subagents are unavailable, stop with a capability gap rather than silently turning deep review into self-review.
 
@@ -94,7 +94,7 @@ The reviewer sub-agents can run on a different AI engine than the platform hosti
 
 **Dispatch rule:**
 
-- **Host == engine:** native dispatch, exactly as Stage 4 describes. In Claude Code that is the Agent tool; in Codex, its native sub-agent mechanism. Nothing changes. (With the local `codex` default above, this branch is taken only when the host is already Codex, or when `engine:claude` is passed on a Claude host.)
+- **Host == engine:** native dispatch, exactly as Stage 4 describes. In Claude Code that is the Agent tool; in Codex, its native sub-agent mechanism; in Pi with `pi-subagents`, use the `subagent` tool and the agent names from the host-compatibility table. Nothing changes. (With the local `codex` default above, this branch is taken only when the host is already Codex, or when `engine:claude` is passed on a Claude host.)
 - **Host != engine (the local default when hosting in Claude Code):** dispatch each selected reviewer (persona and CE) as a subprocess of the engine's CLI. Read `references/cross-engine-dispatch.md` for the runner recipes -- do not read it when host and engine match. The prompt content each reviewer receives is identical to native dispatch; only the transport and the artifact-write responsibility change (cross-engine reviewers run read-only and return full JSON; the orchestrator writes their artifact files).
 
 **What never moves engines:** the orchestrator itself (scope, intent, selection, merge, synthesis) always runs on the host platform, and so does the After Review fixer sub-agent -- it mutates the working tree, which cross-engine sandboxes forbid.

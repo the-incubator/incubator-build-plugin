@@ -7,9 +7,9 @@ disable-model-invocation: false
 
 Create a plan so the user can approve an approach before you write code.
 
-First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md) and use its host-specific launch table for any subagents.
 Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
-Read bundled persona files from the plugin-root `agents/` directory and pass their contents to native general-purpose subagents where named agents are unavailable.
+Read bundled persona files from the plugin-root `agents/` directory and pass their contents to the host's generic subagent mechanism where named agents are unavailable.
 
 ## Pre-flight: Report branch freshness (notify only)
 

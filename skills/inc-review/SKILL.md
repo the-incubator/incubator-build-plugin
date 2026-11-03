@@ -7,8 +7,7 @@ disable-model-invocation: false
 
 Review the change set on the current branch: auto-apply safe fixes, surface findings that need the user's call, and write a run artifact. This is the lightweight review tier — a fast single-agent pass without the deep persona fan-out, merge, or dedup machinery. For large or sensitive changes, or to review a GitHub PR, use `inc-review-deep` instead.
 
-First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
-An independent review agent is required; if the host has no subagent mechanism, stop with that capability gap rather than reviewing your own work and proceeding.
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md) and use its host-specific launch table for the independent review agent. An independent review agent is required; if the host has no subagent mechanism, stop with that capability gap rather than reviewing your own work and proceeding.
 
 ## Scope
 

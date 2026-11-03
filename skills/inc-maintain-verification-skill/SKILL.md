@@ -32,7 +32,7 @@ Only edit the verification skill's own directory (its SKILL.md, features/, and a
 
 1. **Index hygiene.** Read the feature map README and glob its sibling files. Fix missing, extra, duplicate, or dead entries. Lightweight; no generated inventory.
 
-2. **Source wave.** Launch one read-only Agent per feature file, concurrently (the Claude Code Agent tool; under Codex, a parallel read-only task). Each explains "how does this user-facing feature work?" from source, flags likely doc drift with citations, and returns one concise live-verification recipe. Children never drive the app and never edit files. Return shape: feature summary / source entry points / likely drift or none / one recipe.
+2. **Source wave.** First read [host compatibility and composition](../inc-guide/references/host-compatibility.md), then use its host-specific launch table to launch one read-only agent per feature file, concurrently (the Claude Code Agent tool; under Codex, a parallel read-only task; under Pi with `pi-subagents`, `subagent` with `agent: "scout"`). Each explains "how does this user-facing feature work?" from source, flags likely doc drift with citations, and returns one concise live-verification recipe. Children never drive the app and never edit files. Return shape: feature summary / source entry points / likely drift or none / one recipe.
 
 3. **Reconcile.** Every feature file has a returned summary. Merge overlapping recipes into as few app states as practical. Spot-check cited drift; don't re-prove clean claims. Sweep recent churn for user-facing surfaces missing from the map — require a concrete source path before calling one missing.
 

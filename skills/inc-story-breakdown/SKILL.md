@@ -213,7 +213,7 @@ Once confirmed, proceed to step 2.
 
 ## 2) Codebase Research
 
-Before writing any stories, you MUST understand the codebase. Spawn up to 3 research scouts (Agent tool) in parallel. Each report must be <= 40 lines.
+Before writing any stories, you MUST understand the codebase. First read [host compatibility and composition](../inc-guide/references/host-compatibility.md), then use its host-specific launch table to spawn up to 3 research scouts in parallel (use the native mechanism for the current host, such as Claude Code's Agent tool or Pi's `subagent` tool with `agent: "scout"`). Each report must be <= 40 lines.
 
 ### Scout A — Architecture Map (required)
 
