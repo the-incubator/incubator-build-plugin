@@ -9,9 +9,9 @@ allowed-tools: Bash(gh *), Bash(git *), Read, Skill
 
 Evaluate and fix PR review feedback, then reply and resolve threads. Spawns parallel agents for each thread.
 
-First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md) and use its host-specific launch table for resolver agents.
 Resolve `<plugin root>` from the real path of this installed skill, not the current project directory.
-The resolver persona is [inc-pr-comment-resolver](../../agents/inc-pr-comment-resolver.agent.md); pass its contents to a general-purpose subagent if the host has no registered agent by that name.
+The resolver persona is [inc-pr-comment-resolver](../../agents/inc-pr-comment-resolver.agent.md); pass its contents to the host's generic subagent mechanism if the host has no registered agent by that name.
 Stop with a capability gap if required independent resolver agents are unavailable.
 
 > **Confirm before you mutate.** This skill does two mutating transitions: edits → commit, and commit → push + reply. The user sees the plan before edits happen, and the diff before commit/push happens. Do not chain fix → commit → push → reply without checkpoints, even when every finding looks obviously valid.

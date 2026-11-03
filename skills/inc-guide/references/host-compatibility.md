@@ -45,14 +45,21 @@ Use the explicit file-reading path in that case, and report the discovery limita
 
 Persona definitions are portable prompt assets under the plugin-root [agents directory](../../../agents/), not a requirement to register Claude custom agents.
 Resolve `review:<name>` to `agents/review/<name>.agent.md`, `research:<name>` to `agents/research/<name>.agent.md`, and an unqualified name to `agents/<name>.agent.md` (or the explicitly named `.md` file).
-Read the persona and pass its body plus task context to a general-purpose subagent when the host lacks that registered agent name.
-Use only tools, model IDs, and permission settings supported by the current host.
-Model labels such as Sonnet or Haiku are preferences, not prerequisites: inherit the current model when an equivalent is unavailable.
+Read the persona and pass its body plus task context to the host's appropriate subagent mechanism when the host lacks that registered agent name. Use this host-specific launch table:
+
+| Host | Launch mechanism | Agent selection |
+| --- | --- | --- |
+| Claude Code | `Agent` tool | `subagent_type: "general-purpose"` or the registered persona name |
+| Codex | Native sub-agent mechanism | Use a registered persona name when available; otherwise pass the persona body to its native generic sub-agent |
+| Pi with `pi-subagents` | `subagent` tool | Use `agent: "reviewer"` for independent code review, `agent: "delegate"` for persona-body or other generic delegation (inherits the parent model and starts without default reads), and `agent: "worker"` for implementation. Never use `general-purpose` on Pi. |
+
+On Pi, if a launch is rejected, do not stop immediately: list the available agents with `subagent({ action: "guide" })` or the list action documented by the installed version, then retry with the closest available agent. Verify names against the installed extension rather than assuming a name exists.
+
+Use only tools, model IDs, and permission settings supported by the current host. Model labels such as Sonnet or Haiku are preferences, not prerequisites: inherit the current model when an equivalent is unavailable.
 
 Parallel dispatch may become sequential independent subagent calls when the host lacks parallelism.
 If the workflow requires independent agents but there is no subagent mechanism, stop with a capability gap before review or mutation; do not grade your own work and call it an independent review.
-Pi's bundled adapter only discovers skills, not subagents.
-For Pi, a compatible subagent extension (for example `pi install npm:pi-subagents`) is required for reviewer/resolver fan-out; pass persona content to its general-purpose agent rather than assuming it discovers this package's `agents/`.
+Pi's bundled adapter only discovers skills, not subagents. For Pi, a compatible subagent extension (for example `pi install npm:pi-subagents`) is required for reviewer/resolver fan-out.
 
 ## Questions, tools, and limits
 

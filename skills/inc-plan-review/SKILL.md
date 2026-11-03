@@ -8,9 +8,9 @@ disable-model-invocation: false
 
 Review a plan or design proposal **before** any implementation begins. The goal is to catch missing edge cases, unnecessary complexity, ambiguous requirements, and architectural risk while changes are still cheap.
 
-First read [host compatibility and composition](../inc-guide/references/host-compatibility.md).
+First read [host compatibility and composition](../inc-guide/references/host-compatibility.md) and use its host-specific launch table for every reviewer.
 All `agents/...` paths below are relative to the installed plugin root, not the project being reviewed.
-Pass persona file contents to general-purpose subagents when named agents are unavailable, and inherit the host model if Sonnet/Haiku selectors are unsupported.
+Pass persona file contents to the host's generic subagent mechanism when named agents are unavailable, and inherit the host model if Sonnet/Haiku selectors are unsupported.
 Stop if independent subagents are unavailable.
 
 ## When to use
