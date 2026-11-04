@@ -1,12 +1,17 @@
 ---
 name: inc-design-principles
-description: Design principles to apply before designing, prototyping, building, or reviewing any visual web or mobile interface. Covers page layout (shared gutters, max-width, edge-bleed carousels), empty states, mobile responsiveness, subtraction and not overexplaining, AI tells, pushing past safe default design, and a critique loop. Use when the user says "design principles", "/inc-design-principles", asks to build or polish UI, or wants a design reviewed.
+description: Use before a prototype or mockup, when asked to "design a few variations", redesign, build, polish, or review web or mobile UI, screens, layouts, components, or landing pages. Also use for "/inc-design-principles", visual design, responsive design, design tokens, interaction states, motion, or UI critique. Start from existing tokens and components; cover every state, page layout, mobile responsiveness, animation, fine details, subtraction, AI tells, creative direction, and screenshot-based review.
 ---
 
 # Design principles
 
 Apply these when designing, building, or reviewing any web or mobile interface.
 When reviewing, check each section below and call out concrete violations.
+
+## Start from the system
+
+- Before building anything, find the existing color, type, spacing, radius, and shadow tokens and components; use them.
+- Add new tokens and components to the system, not inline in a single screen.
 
 ## Page layout
 
@@ -18,14 +23,20 @@ When reviewing, check each section below and call out concrete violations.
 - The first carousel item should align with the content gutter, and overflow should run to the viewport edge.
 - A fade at the carousel edges is acceptable but not typical; prefer a plain edge bleed.
 
-## Empty states
+## Design every state
 
-- Every component that displays a list of items needs an empty state.
-- Never render a bare heading, an empty grid, or a blank region when there is nothing to show.
-- Use one consistent look and feel for empty states across the app, especially when the missing items are similar in nature.
-- Build a shared empty state component: short text explaining what is missing, plus an optional CTA button that creates or finds the first item.
-- Keep empty state copy specific to the item type ("No orders yet") rather than generic ("Nothing here").
-- Match the empty state to the container it replaces so the layout does not jump when items arrive.
+- Hover and pressed: make interactive feedback clear.
+- Focus: show a visible indicator for keyboard users.
+- Loading: reserve space for images and async content so nothing jumps on load.
+- Empty:
+  - Every component that displays a list of items needs an empty state.
+  - Never render a bare heading, an empty grid, or a blank region when there is nothing to show.
+  - Use one consistent look and feel for empty states across the app, especially when the missing items are similar in nature.
+  - Build a shared empty state component: short text explaining what is missing, plus an optional CTA button that creates or finds the first item.
+  - Keep empty state copy specific to the item type ("No orders yet") rather than generic ("Nothing here").
+  - Match the empty state to the container it replaces so the layout does not jump when items arrive.
+- Error: explain what went wrong and give the user a way forward.
+- Long content: test the really long name so text wraps or truncates without breaking layout.
 
 ## Mobile responsive design
 
@@ -35,6 +46,18 @@ When reviewing, check each section below and call out concrete violations.
 - Keep the content's purposeful inner padding, but drop desktop-only outer margins, framing, borders, shadows, radii, and nested card surfaces that waste mobile width.
 - Reflow, do not shrink: stack side-by-side desktop regions vertically instead of squeezing them into narrow columns.
 - Test at a real phone width (360 to 390px) with the content gutter applied and no horizontal scroll.
+- Follow the 44px tap-target rule in Details, even for small icons.
+
+## Motion
+
+- Animate only transform and opacity.
+- Use ease-out for anything entering.
+- Keep animations under 250ms.
+
+## Details
+
+- Make nested corners concentric: outer radius = inner radius + padding.
+- Make every tap target at least 44px, even when the icon inside is smaller.
 
 ## Subtract before you ship
 
@@ -45,7 +68,7 @@ Putting less on the screen communicates more, because you hold attention without
 
 ### Do not overexplain
 
-- Cut subtext, captions, helper copy, and labels that restate what the visual already communicates.
+- Cut subtext, eyebrows, captions, helper copy, and labels that restate what the visual already communicates.
 - If an image, icon, color, or layout already carries the meaning, no text should repeat it.
 - If information matters but is currently a line of text, ask whether it should be captured visually instead (a thumbnail, a badge, a progress bar, a count in the corner).
 - One title per element is enough. Titles plus subtitles plus descriptions plus tags is a tell.
@@ -90,7 +113,7 @@ Great design bends the rules and creates an emotional response, so steer it deli
 - Name the aesthetic, the mood, the layout idea, and the typography intent before writing any UI code.
 - Inject the user's taste: ask for high-level ideas first, react to them, then refine into one precise direction.
 - When exploring, generate a few clearly different directions rather than small variations of one.
-- Once a direction is chosen, commit to it consistently across every screen and state.
+- Once a direction is chosen, commit to it consistently.
 
 ## Critique loop
 
@@ -101,6 +124,8 @@ Evaluate the result as an independent design critic.
 - State what aesthetic the design is aiming for.
 - Imagine the same brief executed by a top design studio and list the largest gaps.
 - Check both high-level structure and fine details (alignment, spacing, type scale, contrast).
+- Check hover, pressed, keyboard focus, loading, empty, error, and long-content states.
+- Check concentric corners and 44px tap targets, including icon buttons.
 - Penalize anything that looks overdone or obviously AI-generated.
 - Give tight, specific feedback with concrete fixes, not vague prose.
 - Be bold and opinionated rather than safe.
