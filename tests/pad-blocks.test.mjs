@@ -62,6 +62,16 @@ test("the skill lists both toolbox blocks and links the catalog", () => {
   assert.match(skill, /<incpad-code /);
 });
 
+test("multi-section navigation and open decisions stay linked and unified", () => {
+  assert.match(skill, /For every pad with multiple sections, put a compact section navigation near the top/);
+  assert.match(skill, /360-390px/);
+  assert.match(skill, /native fragment link/);
+  assert.match(skill, /all open questions in one \*\*Decisions\*\* list/);
+  assert.match(skill, /\*\*Product\*\* or \*\*Technical\*\*/);
+  assert.match(skill, /link the decision to that section's anchor/);
+  assert.match(skill, /forward link from the relevant section back to the decision/);
+});
+
 test("the catalog names the injected runtime paths", () => {
   assert.match(catalog, /`\/pad-editor\/blocks\.js`/);
   assert.match(catalog, /`\/pad-editor\/blocks\.css`/);

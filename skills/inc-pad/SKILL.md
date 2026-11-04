@@ -337,6 +337,12 @@ When you deliver the pad, state which of the three sources you used and why.
   Wrap, truncate, or contain long unbreakable strings deliberately.
 - Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
+## Section navigation and decisions
+
+For every pad with multiple sections, put a compact section navigation near the top. Link each item to the matching section heading's stable `id` with a native fragment link (`href="#section-id"`). Use a labeled `<nav>` and a list of links; do not invent a toolbox block for navigation. Keep the links wrapping or horizontally scrollable within the viewport at 360-390px, and for long pads make the navigation sticky so it stays reachable while scrolling. Avoid forcing the document itself to scroll horizontally.
+
+Keep all open questions in one **Decisions** list so readers have one place to find them. Label each item **Product** or **Technical**; do not split them into separate lists or sections. When a decision depends on a specific section, link the decision to that section's anchor, and add a forward link from the relevant section back to the decision. Give both targets stable, meaningful ids. Example: `<a href="#data-design">Data design context</a>` in the decision, and `<a href="#decision-retention">Decision on retention</a>` in the Data design section. These are ordinary HTML links, not custom IncPad blocks.
+
 ## Planning pads: product first, technical design second
 
 When a pad plans feature or project work, use two ordered halves, even for a small plan. Start with a short purpose, outcome, and decision or next action.
@@ -353,7 +359,7 @@ When a pad plans feature or project work, use two ordered halves, even for a sma
 2. Data design and storage: specify schemas, tables, new fields, and migration plans. If nothing changes, say so briefly.
 3. Risks and mitigation strategies: pair each material risk with a concrete response or an open decision.
 
-Lead each section with a few scannable lines or a compact visual. Put in-depth prose in a labeled subsection below that summary. Use native `<details>` collapsed by default (see [toolbox blocks and disclosure](references/blocks.md)). Keep the core answer, decisions, and risks visible. Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) outside `<details>` so they render and stay commentable. Give summaries and disclosures stable ids for feedback.
+Lead each section with a few scannable lines or a compact visual. Put in-depth prose in a labeled subsection below that summary. Use native `<details>` collapsed by default (see [toolbox blocks and disclosure](references/blocks.md)). Keep the core answer, one unified labeled Decisions list, and risks visible. Link each open decision to its relevant context section, and link that section back to the decision. Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) outside `<details>` so they render and stay commentable. Give summaries and disclosures stable ids for feedback.
 
 Do not invent a prototype, migration, or diagram when it would not help. A brief "not needed" note can close that question. Non-planning pads retain their decision-first freedom without PRD or TDD scaffolding. Subtract unnecessary content and keep the layout clean at 360-390px. Apply the `inc-technical-writing` check before publishing each planning revision.
 
