@@ -81,7 +81,9 @@ A directory uploads its `index.html` plus every asset file under their relative 
 
 ## Workflow
 
-Before authoring, decide whether the requested artifact includes UI work: interactive prototypes, UI components, mockups, screens, layouts, or any UI-related design. If it does, invoke `/incubator-build:inc-design-principles` first using the host's native skill invocation, and apply its guidance before writing any HTML. If the host has no native skill invocation, read the complete sibling `skills/inc-design-principles/SKILL.md` from the installed plugin corpus and follow it inline before continuing. On strict hosts that cannot invoke the colon-named skill, use that file-reading fallback. Do not invoke or load the design skill for non-UI artifacts such as plain plans, diagrams, tables, reports, or code annotations.
+Before authoring, decide whether the pad plans feature or project work. If it does, invoke `inc-technical-writing` using the host's native skill invocation and apply its checklist before publishing. If there is no native skill invocation, or the host rejects the name, read the complete sibling `skills/inc-technical-writing/SKILL.md` from this installed plugin corpus and follow it inline. Non-planning pads do not need this skill.
+
+Separately, decide whether the requested artifact includes UI work: interactive prototypes, UI components, mockups, screens, layouts, or any UI-related design. If it does, invoke `inc-design-principles` first using the host's native skill invocation, and apply its guidance before writing any HTML. If the host has no native skill invocation, or rejects the name, read the complete sibling `skills/inc-design-principles/SKILL.md` from the installed plugin corpus and follow it inline before continuing. Do not load the design skill for non-UI artifacts such as plain plans, diagrams, tables, reports, or code annotations. A planning pad with a UI prototype uses both skills.
 
 1. **Decide the design direction** (see below) before writing any HTML.
 2. **Author the artifact in a temp dir** so the working copy stays clean.
@@ -335,18 +337,25 @@ When you deliver the pad, state which of the three sources you used and why.
   Wrap, truncate, or contain long unbreakable strings deliberately.
 - Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
-## Technical plans: PRD first, TDD last
+## Planning pads: product first, technical design second
 
-A pad is a medium-to-large technical pad when it proposes an implementation and either (a) touches two or more separately owned or deployed pieces (for example a service, app, package, database, or third-party API) or (b) adds or changes a data model or an API/contract.
-For those pads, put the decision-facing PRD at the top and the implementation-facing TDD/architecture at the bottom.
-Anything else, including a bounded choice between options, keeps a short decision-first shape with no PRD or TDD sections.
+When a pad plans feature or project work, use two ordered halves, even for a small plan. Start with a short purpose, outcome, and decision or next action.
 
-The top PRD stays simple and action-oriented: the problem and outcome, the prototype or mockup when useful, then the key decisions and the marked recommendation the reader must act on.
-Do not front-load technical detail, and summarize any risk that affects the decision here.
-Below it, the TDD/architecture holds the technical design, data model, contracts, and implementation risks.
-Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) in open sections, not inside a collapsed `<details>`, so they render and stay commentable.
+**Top half - product (PRD-style)**
 
-This is an ordering default, not a license to add sections: stay concise, subtract anything unnecessary, and keep the layout clean at 360-390px.
+1. Design or prototype: show the user journey, screen, or interaction when useful. Otherwise describe the intended experience.
+2. User stories and functional requirements: say who can do what and what the system must do.
+3. Assumptions, constraints, and dependencies: separate unverified premises, known limits, and external prerequisites.
+
+**Bottom half - technical design (TDD-style)**
+
+1. System architecture: show components and responsibilities. Add a Mermaid sequence diagram when the order of interactions matters.
+2. Data design and storage: specify schemas, tables, new fields, and migration plans. If nothing changes, say so briefly.
+3. Risks and mitigation strategies: pair each material risk with a concrete response or an open decision.
+
+Lead each section with a few scannable lines or a compact visual. Put in-depth prose in a labeled subsection below that summary. Use native `<details>` collapsed by default (see [toolbox blocks and disclosure](references/blocks.md)). Keep the core answer, decisions, and risks visible. Keep Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) outside `<details>` so they render and stay commentable. Give summaries and disclosures stable ids for feedback.
+
+Do not invent a prototype, migration, or diagram when it would not help. A brief "not needed" note can close that question. Non-planning pads retain their decision-first freedom without PRD or TDD scaffolding. Subtract unnecessary content and keep the layout clean at 360-390px. Apply the `inc-technical-writing` check before publishing each planning revision.
 
 ## Diagram rules
 
