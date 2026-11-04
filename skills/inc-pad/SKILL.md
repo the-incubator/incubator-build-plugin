@@ -81,6 +81,8 @@ A directory uploads its `index.html` plus every asset file under their relative 
 
 ## Workflow
 
+Before authoring, decide whether the requested artifact includes UI work: interactive prototypes, UI components, mockups, screens, layouts, or any UI-related design. If it does, invoke `/incubator-build:inc-design-principles` first using the host's native skill invocation, and apply its guidance before writing any HTML. If the host has no native skill invocation, read the complete sibling `skills/inc-design-principles/SKILL.md` from the installed plugin corpus and follow it inline before continuing. On strict hosts that cannot invoke the colon-named skill, use that file-reading fallback. Do not invoke or load the design skill for non-UI artifacts such as plain plans, diagrams, tables, reports, or code annotations.
+
 1. **Decide the design direction** (see below) before writing any HTML.
 2. **Author the artifact in a temp dir** so the working copy stays clean.
    ```bash
