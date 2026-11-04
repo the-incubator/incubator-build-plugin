@@ -14,6 +14,21 @@ Write the markup below in the pad HTML and the runtime renders it when the pad l
 | Call stack | `<incpad-callstack>` | Which code path a change runs through, and which calls it adds, changes, removes, or leaves open |
 | Code annotation | `<incpad-code>` | Specific lines of a file slice or sketch, with the agent's calls on what is safe, risky, or worth a look |
 
+## Collapsed supporting detail
+
+The injected toolbox has no disclosure block. Use native HTML `<details>` with a visible `<summary>` for optional in-depth prose below a section's open, scannable answer. Omit the `open` attribute so the detail starts collapsed. Keep decisions, risks, Mermaid diagrams, and toolbox blocks outside the disclosure so they remain visible and commentable. Give each disclosure a stable id across pad revisions.
+
+```html
+<section id="storage-design">
+  <h2>Data design and storage</h2>
+  <p>No new table is needed. Add <code>status</code> to the existing jobs table.</p>
+  <details id="storage-design-detail">
+    <summary>Field and migration detail</summary>
+    <p>Backfill existing rows with the current job state before making the field required.</p>
+  </details>
+</section>
+```
+
 ## Decision first
 
 A block is evidence for a decision, not decoration.
