@@ -1,6 +1,6 @@
 ---
 name: inc-design-principles
-description: Use before a prototype or mockup, when asked to "design a few variations", redesign, build, polish, or review web or mobile UI, screens, layouts, components, or landing pages. Also use for "/inc-design-principles", visual design, responsive design, design tokens, interaction states, motion, or UI critique. Start from existing tokens and components; cover every state, page layout, mobile responsiveness, animation, fine details, subtraction, AI tells, creative direction, and screenshot-based review.
+description: Use before a prototype or mockup, when asked to "design a few variations", redesign, build, polish, or review web or mobile UI, screens, layouts, components, or landing pages. Also use for "/inc-design-principles", visual design, responsive design, design tokens, interaction states, motion, or UI critique.
 ---
 
 # Design principles
@@ -12,6 +12,18 @@ When reviewing, check each section below and call out concrete violations.
 
 - Before building anything, find the existing color, type, spacing, radius, and shadow tokens and components; use them.
 - Add new tokens and components to the system, not inline in a single screen.
+
+## Push past the default
+
+Models predict the most likely next choice, which produces safe, average design.
+Great design bends the rules and creates an emotional response, so steer it deliberately.
+
+- Start from a bold, specific creative direction rather than a generic request.
+- Name the aesthetic, the mood, the layout idea, and the typography intent before writing any UI code.
+- Inject the user's taste: ask for high-level ideas first, react to them, then refine into one precise direction.
+- When exploring, generate a few clearly different directions rather than small variations of one.
+- In an existing product, push within the system (composition, imagery, type scale, motion) before inventing new tokens; save new visual languages for new products or explicit explorations.
+- Once a direction is chosen, commit to it consistently.
 
 ## Page layout
 
@@ -25,25 +37,46 @@ When reviewing, check each section below and call out concrete violations.
 
 ## Design every state
 
+Design for the states real users actually hit, not just the happy path.
+Before building, introspect the component, view, or page (route guards, auth, data model, permissions, flags, where it is used) to work out which states can reach it.
+Design those, and skip states that are impossible or very rarely seen.
+
+### Interaction states
+
 - Hover and pressed: make interactive feedback clear.
 - Focus: show a visible indicator for keyboard users.
-- Loading: reserve space for images and async content so nothing jumps on load.
+- Disabled: look unavailable and, where possible, say why.
+- Selected and active: distinguish the current item, tab, or filter.
+
+### User states
+
+Derive user states from context, not from a fixed list.
+Evergreen states worth checking for:
+
+- Signed out vs signed in.
+- First run and onboarding vs returning user.
+- Role and permission: hide or disable what a user cannot do rather than letting them hit an error.
+- Plan or entitlement: free vs paid, trial, limit reached.
+- Unverified or incomplete profile.
+
+Context will surface others specific to the product (a creator vs a collector, a host vs a guest); design those too.
+
+### Data states
+
+- Loading: reserve space for images and async content, and size empty states to the container they replace, so nothing jumps when content arrives.
 - Empty:
-  - Every component that displays a list of items needs an empty state.
-  - Never render a bare heading, an empty grid, or a blank region when there is nothing to show.
+  - Every component that displays a list of items needs an empty state, never a bare heading, empty grid, or blank region.
   - Use one consistent look and feel for empty states across the app, especially when the missing items are similar in nature.
   - Build a shared empty state component: short text explaining what is missing, plus an optional CTA button that creates or finds the first item.
   - Keep empty state copy specific to the item type ("No orders yet") rather than generic ("Nothing here").
-  - Match the empty state to the container it replaces so the layout does not jump when items arrive.
+- Overflow: many items, the really long name, huge numbers; text wraps or truncates without breaking layout.
 - Error: explain what went wrong and give the user a way forward.
-- Long content: test the really long name so text wraps or truncates without breaking layout.
+- Optimistic and pending: a saved-but-not-confirmed change, plus the rollback when it fails.
 
 ## Mobile responsive design
 
-- Avoid reusing containers from the desktop design on mobile unless the container is a small card.
-- Containers that group things on desktop usually create a double padding effect on mobile: padding outside the container, then again inside its content.
-- The limited screen width already acts as the container, so remove the outer container and use the constrained full width of mobile as the natural boundary.
-- Keep the content's purposeful inner padding, but drop desktop-only outer margins, framing, borders, shadows, radii, and nested card surfaces that waste mobile width.
+- Drop desktop grouping containers on mobile (unless they are small cards): the screen width is already the container, and nesting causes double padding.
+- Keep purposeful inner padding; remove desktop-only outer margins, borders, shadows, radii, and nested card surfaces.
 - Reflow, do not shrink: stack side-by-side desktop regions vertically instead of squeezing them into narrow columns.
 - Test at a real phone width (360 to 390px) with the content gutter applied and no horizontal scroll.
 - Follow the 44px tap-target rule in Details, even for small icons.
@@ -62,58 +95,34 @@ When reviewing, check each section below and call out concrete violations.
 ## Subtract before you ship
 
 AI loves to add more, but it rarely takes away.
-One of the biggest signs a design is AI-generated is that it overexplains everything or contains elements with no practical purpose.
-A design that exercises restraint immediately looks premium and tasteful.
-Putting less on the screen communicates more, because you hold attention without clutter.
+Restraint looks premium: less on the screen holds attention without clutter.
 
 ### Do not overexplain
 
 - Cut subtext, eyebrows, captions, helper copy, and labels that restate what the visual already communicates.
-- If an image, icon, color, or layout already carries the meaning, no text should repeat it.
 - If information matters but is currently a line of text, ask whether it should be captured visually instead (a thumbnail, a badge, a progress bar, a count in the corner).
 - One title per element is enough. Titles plus subtitles plus descriptions plus tags is a tell.
 - Do not add "explanatory" sections, tooltips, or onboarding copy the user did not ask for.
 - Do not label the obvious: a search field does not need a "Search" caption above it.
 
-### Remove decoration and noise
-
-- Remove gradients, glows, and unnecessary containers.
-- Remove random colors and highlights on text that serve no purpose.
-- Replace custom buttons and text fields with native or system components when the custom version is not clearly better.
-- Prefer simpler layouts and image-centric organization over dense grids of small elements.
-- Prefer smaller, simpler, tighter text.
-- Let the visuals speak on their own.
-
 ### The subtraction pass
 
-- Stripping down a design and deleting code feels risky to the model, so it needs an explicit push.
-- Before finishing, do a dedicated pass whose only goal is to delete elements.
+- Before finishing, do a dedicated pass whose only goal is to delete elements; the model needs an explicit push to do this.
 - For each element ask: what really needs to be here, and what breaks if it is removed.
 - If nothing breaks, remove it.
 
 ## Avoid AI tells
 
-Watch for patterns that feel overdone, excessive, or obviously AI-generated, and remove them.
+Remove patterns that feel overdone or obviously AI-generated:
 
-- Glowy effects in the background or on progress bars.
-- Gradient text, gradient buttons, and gradient borders used as decoration.
+- Gradients and glows used as decoration: gradient text, buttons, borders, glowing backgrounds or progress bars.
+- Random accent colors or highlights on individual words.
 - Uniform card grids with an icon, a bold title, and two lines of copy in every cell.
-- Random accent colors applied to individual words.
+- Dense grids of small elements where a simpler, image-led layout would do.
 - Emoji or icons used as bullets to fill visual space.
-- Redundant labels that restate what the control already shows.
-- Excessive rounded corners, shadows, and blur stacked on the same surface.
+- Unnecessary containers, and rounded corners, shadows, and blur stacked on the same surface.
+- Oversized or loose text; prefer smaller, simpler, tighter type.
 - Generic copy ("Unlock the power of", "Seamlessly", "Elevate") in place of specific claims.
-
-## Push past the default
-
-Models predict the most likely next choice, which produces safe, average design.
-Great design bends the rules and creates an emotional response, so steer it deliberately.
-
-- Start from a bold, specific creative direction rather than a generic request.
-- Name the aesthetic, the mood, the layout idea, and the typography intent before writing any UI code.
-- Inject the user's taste: ask for high-level ideas first, react to them, then refine into one precise direction.
-- When exploring, generate a few clearly different directions rather than small variations of one.
-- Once a direction is chosen, commit to it consistently.
 
 ## Critique loop
 
@@ -124,8 +133,8 @@ Evaluate the result as an independent design critic.
 - State what aesthetic the design is aiming for.
 - Imagine the same brief executed by a top design studio and list the largest gaps.
 - Check both high-level structure and fine details (alignment, spacing, type scale, contrast).
-- Check hover, pressed, keyboard focus, loading, empty, error, and long-content states.
-- Check concentric corners and 44px tap targets, including icon buttons.
+- Check every reachable state from Design every state.
+- Check the Motion and Details rules, including icon buttons.
 - Penalize anything that looks overdone or obviously AI-generated.
 - Give tight, specific feedback with concrete fixes, not vague prose.
 - Be bold and opinionated rather than safe.
