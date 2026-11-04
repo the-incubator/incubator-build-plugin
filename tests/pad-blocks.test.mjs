@@ -64,7 +64,7 @@ test("the skill lists both toolbox blocks and links the catalog", () => {
 
 test("multi-section navigation and open decisions stay linked and unified", () => {
   assert.match(skill, /For every pad with multiple sections, put a compact section navigation near the top/);
-  assert.match(skill, /360-390px/);
+  assert.match(skill, /within the viewport at 360-390px/);
   assert.match(skill, /native fragment link/);
   assert.match(skill, /all open questions in one \*\*Decisions\*\* list/);
   assert.match(skill, /\*\*Product\*\* or \*\*Technical\*\*/);
