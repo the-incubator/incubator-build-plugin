@@ -31,6 +31,7 @@ Great design bends the rules and creates an emotional response, so steer it deli
 - Apply a max-width to the same three regions so content stays contained on large monitors.
 - Define the gutter and max-width once (a shared container class or layout component) and reuse it, rather than re-declaring per page.
 - Break these rules only selectively and on purpose.
+- Keep items in a collection (grid, list, or multi-column list) uniform in size and anatomy, regardless of item type or data state. Preserve title, subtext, and timestamp slots when fields are missing; clamp long text to consistent line counts; use consistent media aspect ratios; and set fixed or stretch-to-row heights. Grid items in each row must share a height. In multi-column lists, aligned items across columns must share a height, even when rows span multiple lines.
 - Carousels are the standard exception: they start and end at the screen edge, not at the padding edge.
 - The first carousel item should align with the content gutter, and overflow should run to the viewport edge.
 - A fade at the carousel edges is acceptable but not typical; prefer a plain edge bleed.
@@ -133,7 +134,7 @@ Evaluate the result as an independent design critic.
 - State what aesthetic the design is aiming for.
 - Imagine the same brief executed by a top design studio and list the largest gaps.
 - Check both high-level structure and fine details (alignment, spacing, type scale, contrast).
-- Check every reachable state from Design every state.
+- Check every reachable state from Design every state, including uniform size and anatomy across collection items with missing fields, long text, or different states and types.
 - Check the Motion and Details rules, including icon buttons.
 - Penalize anything that looks overdone or obviously AI-generated.
 - Give tight, specific feedback with concrete fixes, not vague prose.
