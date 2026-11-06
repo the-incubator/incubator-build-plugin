@@ -118,56 +118,62 @@ When a reviewer comments a replacement on a line, apply it to the slice or sketc
 
 ## Schema cards for Data design
 
-A planning pad's Data design is a change-focused schema, not an OBJECT / FIELDS / NOTES table. Use ordinary artifact HTML and CSS (there is no injected schema component). Name each table and its state; use one row per column, with type and only constraints established by the plan. Keep relationship targets clickable. Do not invent a PK or FK just because two tables share a key. Use a labeled relationship line when the link is conceptual rather than a declared FK. A changed table shows only changed columns unless unchanged context is essential; dim that context. Give configuration or JSON metadata its own typed shape card. Keep migration/backfill detail in a collapsed `<details>` after the cards. For a schema with many rows, a two-column card grid on desktop and stacked cards on mobile makes the table boundaries clear.
+A planning pad's Data design should feel like a simple object sketch, not a database table. Use one compact card per changed table or configuration shape. Lead with a human name and a short `Field: meaning` list inside braces; place the real table/key name quietly beneath the title for implementers. Say `ID`, `number`, `date`, `text`, or the possible choices when the reader does not need SQL types. Prefer `Player: ID` over `user_id uuid UNIQUE pair with campaign_id` repeated in every field. Put the rule once beneath the shape: `One enrollment per campaign and player.` Keep only changed fields on changed objects. Link related cards in a short sentence without claiming an unverified foreign key. Give JSON metadata its own shape. Keep migration/backfill detail in a collapsed `<details>` below. Two cards may sit side by side on desktop; stack them at 360-390px.
 
-The following is a small, self-contained authoring pattern. Put the CSS in the pad's `<style>` and the markup in its Data design section. Adapt the names and constraints to the actual schema; `?` means the type is not yet verified.
+This self-contained authoring pattern uses ordinary artifact HTML and CSS (there is no injected schema component). Put CSS in the pad's `<style>` and markup in its Data design section. Keep the shape short enough to scan; move exhaustive column lists and SQL details into the collapsed migration section when a reviewer needs them.
 
 ```css
 .schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.schema-card { min-width: 0; border: 1px solid #d9dde5; border-radius: 12px; background: #fff; overflow: hidden; }
-.schema-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e7e9ed; }
-.schema-head h3 { margin: 0; font: 600 15px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
+.schema-card { min-width: 0; padding: 18px 20px; border: 1px solid #d9dde5; border-radius: 12px; background: #fff; }
+.schema-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.schema-head h3 { margin: 0; font: 600 17px/1.3 system-ui; }
+.schema-key { margin: 2px 0 12px; color: #626b7a; font: 11px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
 .schema-badge { border-radius: 4px; padding: 2px 6px; font: 700 11px/1.4 system-ui; text-transform: uppercase; background: #e8f4e9; color: #216233; }
 .schema-badge.changed { background: #fff2db; color: #80500b; }
-.schema-columns { margin: 0; padding: 0; list-style: none; }
-.schema-columns li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, min(40%, 13ch)); gap: 2px 12px; padding: 9px 16px; border-bottom: 1px solid #eff0f2; }
-.schema-columns code { overflow-wrap: anywhere; font: 500 12px/1.5 ui-monospace, monospace; }
-.schema-type { color: #626b7a; font: 12px/1.5 ui-monospace, monospace; text-align: right; overflow-wrap: anywhere; }
-.schema-flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; color: #626b7a; font: 11px/1.5 system-ui; }
-.schema-flags span, .schema-flags a { border-radius: 4px; padding: 1px 5px; background: #f1f3f6; color: #34435a; }
-.schema-flags a { color: #245399; text-decoration: underline; text-underline-offset: 2px; }
-.schema-flags a:focus-visible { outline: 2px solid #245399; outline-offset: 2px; }
-.schema-note { margin: 0; padding: 10px 16px 14px; font: 12px/1.5 system-ui; color: #4d5665; }
+.schema-brace { display: block; color: #8590a0; font: 16px/1.4 ui-monospace, monospace; }
+.schema-fields { margin: 2px 0 2px 12px; padding: 0; list-style: none; font: 13px/1.7 system-ui; }
+.schema-fields li { overflow-wrap: anywhere; }
+.schema-fields strong { font-weight: 600; }
+.schema-fields a { color: #245399; text-underline-offset: 2px; }
+.schema-fields a:focus-visible { outline: 2px solid #245399; outline-offset: 2px; }
+.schema-notes { margin: 12px 0 0; color: #4d5665; font: 12px/1.5 system-ui; }
+.schema-notes p { margin: 4px 0 0; }
 @media (max-width: 720px) { .schema-grid { grid-template-columns: minmax(0, 1fr); } }
 ```
 
 ```html
-<div class="schema-grid" aria-label="Data schema changes">
+<div class="schema-grid" aria-label="Data shapes">
   <article class="schema-card" id="enrollments-schema">
-    <header class="schema-head"><h3>auto_find_enrollments</h3><span class="schema-badge">New</span></header>
-    <ul class="schema-columns">
-      <li><code>id</code><span class="schema-type">uuid</span><span class="schema-flags"><span>PK</span></span></li>
-      <li><code>campaign_id</code><span class="schema-type">uuid</span></li>
-      <li><code>user_id</code><span class="schema-type">uuid</span></li>
-      <li><code>status</code><span class="schema-type">enum</span><span class="schema-flags"><span>on</span><span>off</span><span>ended</span><span>NOT NULL</span></span></li>
-      <li><code>submission_id</code><span class="schema-type">uuid</span><span class="schema-flags"><a href="#submissions-schema">FK → submissions.id</a></span></li>
+    <header class="schema-head"><h3>Enrollment</h3><span class="schema-badge">New</span></header>
+    <p class="schema-key">auto_find_enrollments</p>
+    <span class="schema-brace" aria-hidden="true">{</span>
+    <ul class="schema-fields">
+      <li><strong>Campaign:</strong> ID</li>
+      <li><strong>Player:</strong> ID</li>
+      <li><strong>Status:</strong> On / Off / Paused / Ended</li>
+      <li><strong>Started from:</strong> <a href="#submissions-schema">Submission</a></li>
     </ul>
-    <p class="schema-note">Unique (campaign_id, user_id). Row-level security by tenant.</p>
+    <span class="schema-brace" aria-hidden="true">}</span>
+    <div class="schema-notes"><p>One enrollment per campaign and player.</p><p>Only this tenant can see it.</p></div>
   </article>
   <article class="schema-card" id="submissions-schema">
-    <header class="schema-head"><h3>submissions</h3><span class="schema-badge changed">Changed</span></header>
-    <ul class="schema-columns">
-      <li><code>source</code><span class="schema-type">text</span><span class="schema-flags"><span>NEW</span><span>NOT NULL</span><span>DEFAULT 'player'</span><span>player</span><span>auto</span></span></li>
-    </ul>
-    <p class="schema-note">Only the new column is shown; unchanged columns are omitted.</p>
+    <header class="schema-head"><h3>Submission</h3><span class="schema-badge changed">Changed</span></header>
+    <p class="schema-key">social_post_submissions · new field only</p>
+    <span class="schema-brace" aria-hidden="true">{</span>
+    <ul class="schema-fields"><li><strong>Source:</strong> Player / Auto</li></ul>
+    <span class="schema-brace" aria-hidden="true">}</span>
+    <div class="schema-notes"><p>Required. Defaults to Player.</p></div>
   </article>
   <article class="schema-card" id="config-shape">
-    <header class="schema-head"><h3>social-post.autoFind?</h3><span class="schema-badge changed">Config shape</span></header>
-    <ul class="schema-columns">
-      <li><code>enabled</code><span class="schema-type">boolean</span><span class="schema-flags"><span>DEFAULT false</span></span></li>
-      <li><code>scanAt</code><span class="schema-type">HH:mm</span><span class="schema-flags"><span>DEFAULT 23:15</span></span></li>
+    <header class="schema-head"><h3>Auto-find options</h3><span class="schema-badge changed">Config</span></header>
+    <p class="schema-key">social-post.autoFind? · metadata, not a table</p>
+    <span class="schema-brace" aria-hidden="true">{</span>
+    <ul class="schema-fields">
+      <li><strong>Enabled:</strong> Yes / No</li>
+      <li><strong>Scan time:</strong> 23:15</li>
     </ul>
-    <p class="schema-note">Lives in requirement metadata, not a database table.</p>
+    <span class="schema-brace" aria-hidden="true">}</span>
+    <div class="schema-notes"><p>Off by default.</p></div>
   </article>
 </div>
 <details id="migration-detail"><summary>Migration and backfill</summary><p>Add the column with its default before enabling automated writes.</p></details>

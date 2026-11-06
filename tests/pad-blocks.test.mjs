@@ -81,10 +81,13 @@ test("planning guidance offers scannable schema cards and active navigation", ()
   assert.ok(schema, "schema example can be copied into a planning pad");
   assert.match(schema, /id="enrollments-schema"/);
   assert.match(schema, /id="submissions-schema"/);
-  assert.match(schema, /href="#submissions-schema">FK/);
+  assert.match(schema, /<h3>Enrollment<\/h3>/);
+  assert.match(schema, /<strong>Campaign:<\/strong> ID/);
+  assert.match(schema, /<strong>Player:<\/strong> ID/);
+  assert.match(schema, /href="#submissions-schema">Submission/);
   assert.match(schema, /id="config-shape"/);
   assert.match(schema, /<details id="migration-detail"><summary>Migration and backfill/);
-  assert.doesNotMatch(schema, /<table\b/, "columns are individually scannable rows, not a wide table");
+  assert.doesNotMatch(schema, /<table\b|schema-columns|schema-flags/, "a reader sees a simple shape, not a row-heavy catalog");
   assert.match(catalog, /@media \(max-width: 720px\)/);
   const nav = htmlFences(catalog).find((html) => html.includes('id="section-nav"'));
   assert.match(nav, /aria-current="location"/);
