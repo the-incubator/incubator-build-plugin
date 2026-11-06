@@ -116,6 +116,125 @@ Escape it the same way as the code.
 Line-level comments and text annotations on any line work like other pad comments; there is no separate propose-edit flow in this contract.
 When a reviewer comments a replacement on a line, apply it to the slice or sketch in the next revision and declare the change.
 
+## Schema cards for Data design
+
+A planning pad's Data design is a change-focused schema, not an OBJECT / FIELDS / NOTES table. Use ordinary artifact HTML and CSS (there is no injected schema component). Name each table and its state; use one row per column, with type and only constraints established by the plan. Keep relationship targets clickable. Do not invent a PK or FK just because two tables share a key. Use a labeled relationship line when the link is conceptual rather than a declared FK. A changed table shows only changed columns unless unchanged context is essential; dim that context. Give configuration or JSON metadata its own typed shape card. Keep migration/backfill detail in a collapsed `<details>` after the cards. For a schema with many rows, a two-column card grid on desktop and stacked cards on mobile makes the table boundaries clear.
+
+The following is a small, self-contained authoring pattern. Put the CSS in the pad's `<style>` and the markup in its Data design section. Adapt the names and constraints to the actual schema; `?` means the type is not yet verified.
+
+```css
+.schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.schema-card { min-width: 0; border: 1px solid #d9dde5; border-radius: 12px; background: #fff; overflow: hidden; }
+.schema-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #e7e9ed; }
+.schema-head h3 { margin: 0; font: 600 15px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
+.schema-badge { border-radius: 4px; padding: 2px 6px; font: 700 11px/1.4 system-ui; text-transform: uppercase; background: #e8f4e9; color: #216233; }
+.schema-badge.changed { background: #fff2db; color: #80500b; }
+.schema-columns { margin: 0; padding: 0; list-style: none; }
+.schema-columns li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 9px 16px; border-bottom: 1px solid #eff0f2; }
+.schema-columns code { overflow-wrap: anywhere; font: 500 12px/1.5 ui-monospace, monospace; }
+.schema-type { color: #626b7a; font: 12px/1.5 ui-monospace, monospace; text-align: right; }
+.schema-flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; color: #626b7a; font: 11px/1.5 system-ui; }
+.schema-flags span, .schema-flags a { border-radius: 4px; padding: 1px 5px; background: #f1f3f6; color: #34435a; }
+.schema-flags a { color: #245399; text-decoration: underline; text-underline-offset: 2px; }
+.schema-flags a:focus-visible { outline: 2px solid #245399; outline-offset: 2px; }
+.schema-note { margin: 0; padding: 10px 16px 14px; font: 12px/1.5 system-ui; color: #4d5665; }
+@media (max-width: 720px) { .schema-grid { grid-template-columns: minmax(0, 1fr); } }
+```
+
+```html
+<div class="schema-grid" aria-label="Data schema changes">
+  <article class="schema-card" id="enrollments-schema">
+    <header class="schema-head"><h3>auto_find_enrollments</h3><span class="schema-badge">New</span></header>
+    <ul class="schema-columns">
+      <li><code>id</code><span class="schema-type">uuid</span><span class="schema-flags"><span>PK</span></span></li>
+      <li><code>campaign_id</code><span class="schema-type">uuid</span></li>
+      <li><code>user_id</code><span class="schema-type">uuid</span></li>
+      <li><code>status</code><span class="schema-type">enum</span><span class="schema-flags"><span>on</span><span>off</span><span>ended</span><span>NOT NULL</span></span></li>
+      <li><code>submission_id</code><span class="schema-type">uuid</span><span class="schema-flags"><a href="#submissions-schema">FK → submissions.id</a></span></li>
+    </ul>
+    <p class="schema-note">Unique (campaign_id, user_id). Row-level security by tenant.</p>
+  </article>
+  <article class="schema-card" id="submissions-schema">
+    <header class="schema-head"><h3>submissions</h3><span class="schema-badge changed">Changed</span></header>
+    <ul class="schema-columns">
+      <li><code>source</code><span class="schema-type">text</span><span class="schema-flags"><span>NEW</span><span>NOT NULL</span><span>DEFAULT 'player'</span><span>player</span><span>auto</span></span></li>
+    </ul>
+    <p class="schema-note">Only the new column is shown; unchanged columns are omitted.</p>
+  </article>
+  <article class="schema-card" id="config-shape">
+    <header class="schema-head"><h3>social-post.autoFind?</h3><span class="schema-badge changed">Config shape</span></header>
+    <ul class="schema-columns">
+      <li><code>enabled</code><span class="schema-type">boolean</span><span class="schema-flags"><span>DEFAULT false</span></span></li>
+      <li><code>scanAt</code><span class="schema-type">HH:mm</span><span class="schema-flags"><span>DEFAULT 23:15</span></span></li>
+    </ul>
+    <p class="schema-note">Lives in requirement metadata, not a database table.</p>
+  </article>
+</div>
+<details id="migration-detail"><summary>Migration and backfill</summary><p>Add the column with its default before enabling automated writes.</p></details>
+```
+
+## Active section navigation
+
+For multi-section pads, retain native fragment links. Use a scrollable sticky rail and an active pill. The artifact can run its own JavaScript; the injected toolbox does not provide a scroll-spy. This pattern chooses the last section whose top has crossed the sticky rail's bottom edge. It marks the clicked pill immediately, then corrects it on scroll, and scrolls only the *rail* horizontally so the active pill remains visible. IDs on sections and links remain stable across revisions. Include both CSS and JS in the authored HTML; no IncPad app changes are needed.
+
+```html
+<nav class="section-nav" aria-label="Sections" id="section-nav">
+  <ul>
+    <li><a href="#overview" aria-current="location">Overview</a></li>
+    <li><a href="#data-design">Data</a></li>
+    <li><a href="#risks">Risks</a></li>
+  </ul>
+</nav>
+<section><h2 id="overview">Overview</h2></section>
+<section><h2 id="data-design">Data design</h2></section>
+<section><h2 id="risks">Risks</h2></section>
+```
+
+```css
+.section-nav { position: sticky; top: 0; z-index: 2; overflow-x: auto; padding: 8px; background: #fff; scrollbar-width: thin; }
+.section-nav ul { display: flex; gap: 4px; width: max-content; margin: 0; padding: 0; list-style: none; }
+.section-nav a { display: block; padding: 8px 12px; border-radius: 6px; color: #4d5665; text-decoration: none; }
+.section-nav a[aria-current="location"] { background: #e6edfa; color: #234d90; font-weight: 700; }
+.section-nav a:focus-visible { outline: 2px solid #245399; outline-offset: -2px; }
+h2[id] { scroll-margin-top: 70px; }
+```
+
+```js
+const nav = document.querySelector('#section-nav');
+const links = [...nav.querySelectorAll('a[href^="#"]')];
+const sections = links.map(link => document.getElementById(decodeURIComponent(link.hash.slice(1))));
+function activate(index) {
+  links.forEach((link, i) => {
+    if (i === index) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  });
+  const link = links[index];
+  if (link) {
+    const left = link.offsetLeft;
+    if (left < nav.scrollLeft || left + link.offsetWidth > nav.scrollLeft + nav.clientWidth) {
+      nav.scrollTo({ left: Math.max(0, left - 8), behavior: 'smooth' });
+    }
+  }
+}
+links.forEach((link, i) => link.addEventListener('click', () => activate(i)));
+let pending = false;
+function updateActive() {
+  const threshold = nav.getBoundingClientRect().bottom + 32;
+  let active = 0;
+  sections.forEach((section, i) => {
+    if (section && section.getBoundingClientRect().top <= threshold) active = i;
+  });
+  if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4) active = sections.length - 1;
+  activate(active);
+}
+window.addEventListener('scroll', () => {
+  if (pending) return;
+  pending = true;
+  requestAnimationFrame(() => { updateActive(); pending = false; });
+}, { passive: true });
+window.addEventListener('load', updateActive);
+```
+
 ## Do not
 
 - Do not include `<script>` or `<link>` tags for `/pad-editor/blocks.js` or `/pad-editor/blocks.css`; the app injects them.
