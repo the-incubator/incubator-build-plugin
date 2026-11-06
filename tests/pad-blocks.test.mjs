@@ -138,11 +138,11 @@ test("copyable navigation highlights scroll and click targets and reveals overfl
   assert.equal(nav.scrollLeft, 302, "inset rail scrolls the active pill into view");
   handlers.click1();
   assert.equal(links[1].attributes["aria-current"], "location", "click updates immediately");
+  positions[2] = 900;
   window.scrollY = 900;
   handlers.scroll();
   assert.equal(links[2].attributes["aria-current"], "location", "last section wins at page bottom");
   window.scrollY = 0;
-  positions[2] = 900;
   handlers.resize();
   assert.equal(links[1].attributes["aria-current"], "location", "resize refreshes the active section");
 });
