@@ -1,7 +1,7 @@
 # Incubator Build Plugin
 
 Incubator Build provides agent skills for planning, PR review, debugging, resolving review feedback, shipping pull requests, publishing hosted IncPad review pages (`inc-pad`), and generating project-local verification skills that drive the real app to prove its behavior.
-For feature or project plans, `inc-pad` puts the product experience (PRD-style) before technical design (TDD-style). The standalone `inc-technical-writing` skill makes any technical document concise, grounded, and easy to scan; `inc-pad` applies it to planning pads.
+For feature or project plans, `inc-pad` puts the product experience (PRD-style) before technical design (TDD-style). Data design uses plain-language object shapes for tables and metadata, with migration detail collapsed below. Its section navigation highlights the section in view. The standalone `inc-technical-writing` skill makes any technical document concise, grounded, and easy to scan; `inc-pad` applies it to planning pads.
 The full skill catalog lives in [skills/inc-guide/SKILL.md](skills/inc-guide/SKILL.md).
 
 ## Install and invoke

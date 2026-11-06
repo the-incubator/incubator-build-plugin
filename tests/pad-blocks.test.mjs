@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 const SKILL_DIR = join(resolve(fileURLToPath(import.meta.url), "..", ".."), "skills", "inc-pad");
 const catalog = readFileSync(join(SKILL_DIR, "references", "blocks.md"), "utf8");
@@ -70,6 +71,85 @@ test("multi-section navigation and open decisions stay linked and unified", () =
   assert.match(skill, /\*\*Product\*\* or \*\*Technical\*\*/);
   assert.match(skill, /link the decision to that section's anchor/);
   assert.match(skill, /forward link from the relevant section back to the decision/);
+});
+
+test("planning guidance offers scannable schema cards and active navigation", () => {
+  assert.match(skill, /schema-card pattern/);
+  assert.match(skill, /Highlight the section currently in view/);
+  assert.match(catalog, /## Schema cards for Data design/);
+  const schema = htmlFences(catalog).find((html) => html.includes('class="schema-grid"'));
+  assert.ok(schema, "schema example can be copied into a planning pad");
+  assert.match(schema, /id="enrollments-schema"/);
+  assert.match(schema, /id="submissions-schema"/);
+  assert.match(schema, /<h3>Enrollment<\/h3>/);
+  assert.match(schema, /<table class="schema-fields">/);
+  assert.match(schema, /<th scope="row">Campaign<\/th><td>ID<\/td>/);
+  assert.match(schema, /<th scope="row">Player<\/th><td>ID<\/td>/);
+  assert.match(schema, /href="#submissions-schema">Submission/);
+  assert.match(schema, /id="config-shape"/);
+  assert.match(schema, /<details id="migration-detail"><summary>Migration and backfill/);
+  assert.doesNotMatch(schema, /<thead\b|schema-columns|schema-flags/, "a reader sees a quiet field sheet, not a row-heavy catalog");
+  assert.match(catalog, /\.schema-fields th, \.schema-fields td \{[^}]*border: 0/, "rows carry no horizontal rules");
+  assert.match(catalog, /@media \(max-width: 720px\)/);
+  const nav = htmlFences(catalog).find((html) => html.includes('id="section-nav"'));
+  assert.match(nav, /aria-current="location"/);
+});
+
+test("copyable navigation highlights scroll and click targets and reveals overflowing pills", () => {
+  const script = [...catalog.matchAll(/```js\n([\s\S]*?)```/g)][0]?.[1];
+  assert.ok(script, "catalog includes an executable scroll-spy example");
+  const handlers = {};
+  const links = [0, 1, 2].map((i) => ({
+    hash: ["#overview", "#data-design", "#risks"][i],
+    offsetLeft: [0, 160, 310][i],
+    offsetWidth: 100,
+    attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    addEventListener(name, fn) { handlers[`click${i}`] = fn; },
+  }));
+  const positions = [0, 300, 900];
+  const sections = positions.map((_, i) => ({ getBoundingClientRect: () => ({ top: positions[i] }) }));
+  const nav = {
+    offsetLeft: 200, scrollLeft: 0, clientWidth: 300,
+    querySelectorAll: () => links,
+    getBoundingClientRect: () => ({ bottom: 48 }),
+    scrollTo({ left }) { this.scrollLeft = left; },
+  };
+  const window = {
+    scrollY: 0, innerHeight: 600,
+    addEventListener(name, fn) { handlers[name] = fn; },
+  };
+  runInNewContext(script, {
+    document: {
+      querySelector: () => nav,
+      getElementById: (id) => sections[["overview", "data-design", "risks"].indexOf(id)],
+      documentElement: { scrollHeight: 1500 },
+    },
+    window,
+    requestAnimationFrame: (fn) => fn(),
+    decodeURIComponent,
+  });
+  handlers.load();
+  assert.equal(links[0].attributes["aria-current"], "location");
+  positions[1] = 50;
+  handlers.scroll();
+  assert.equal(links[1].attributes["aria-current"], "location", "section in view becomes active");
+  assert.equal(links[0].attributes["aria-current"], undefined);
+  assert.equal(nav.scrollLeft, 0, "visible links do not move the rail");
+  positions[2] = 50;
+  handlers.scroll();
+  assert.equal(links[2].attributes["aria-current"], "location");
+  assert.equal(nav.scrollLeft, 302, "inset rail scrolls the active pill into view");
+  handlers.click1();
+  assert.equal(links[1].attributes["aria-current"], "location", "click updates immediately");
+  positions[2] = 900;
+  window.scrollY = 900;
+  handlers.scroll();
+  assert.equal(links[2].attributes["aria-current"], "location", "last section wins at page bottom");
+  window.scrollY = 0;
+  handlers.resize();
+  assert.equal(links[1].attributes["aria-current"], "location", "resize refreshes the active section");
 });
 
 test("the catalog names the injected runtime paths", () => {
