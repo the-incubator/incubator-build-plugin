@@ -141,6 +141,10 @@ test("copyable navigation highlights scroll and click targets and reveals overfl
   window.scrollY = 900;
   handlers.scroll();
   assert.equal(links[2].attributes["aria-current"], "location", "last section wins at page bottom");
+  window.scrollY = 0;
+  positions[2] = 900;
+  handlers.resize();
+  assert.equal(links[1].attributes["aria-current"], "location", "resize refreshes the active section");
 });
 
 test("the catalog names the injected runtime paths", () => {

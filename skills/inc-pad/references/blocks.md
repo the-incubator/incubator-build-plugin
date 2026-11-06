@@ -130,9 +130,9 @@ The following is a small, self-contained authoring pattern. Put the CSS in the p
 .schema-badge { border-radius: 4px; padding: 2px 6px; font: 700 11px/1.4 system-ui; text-transform: uppercase; background: #e8f4e9; color: #216233; }
 .schema-badge.changed { background: #fff2db; color: #80500b; }
 .schema-columns { margin: 0; padding: 0; list-style: none; }
-.schema-columns li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 9px 16px; border-bottom: 1px solid #eff0f2; }
+.schema-columns li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, min(40%, 13ch)); gap: 2px 12px; padding: 9px 16px; border-bottom: 1px solid #eff0f2; }
 .schema-columns code { overflow-wrap: anywhere; font: 500 12px/1.5 ui-monospace, monospace; }
-.schema-type { color: #626b7a; font: 12px/1.5 ui-monospace, monospace; text-align: right; }
+.schema-type { color: #626b7a; font: 12px/1.5 ui-monospace, monospace; text-align: right; overflow-wrap: anywhere; }
 .schema-flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; color: #626b7a; font: 11px/1.5 system-ui; }
 .schema-flags span, .schema-flags a { border-radius: 4px; padding: 1px 5px; background: #f1f3f6; color: #34435a; }
 .schema-flags a { color: #245399; text-decoration: underline; text-underline-offset: 2px; }
@@ -233,6 +233,7 @@ window.addEventListener('scroll', () => {
   requestAnimationFrame(() => { updateActive(); pending = false; });
 }, { passive: true });
 window.addEventListener('load', updateActive);
+window.addEventListener('resize', updateActive);
 ```
 
 ## Do not
