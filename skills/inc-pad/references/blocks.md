@@ -118,9 +118,9 @@ When a reviewer comments a replacement on a line, apply it to the slice or sketc
 
 ## Schema cards for Data design
 
-A planning pad's Data design should feel like a simple object sketch, not a database table. Use one compact card per changed table or configuration shape. Lead with a human name and a short `Field: meaning` list inside braces; place the real table/key name quietly beneath the title for implementers. Say `ID`, `number`, `date`, `text`, or the possible choices when the reader does not need SQL types. Prefer `Player: ID` over `user_id uuid UNIQUE pair with campaign_id` repeated in every field. Put the rule once beneath the shape: `One enrollment per campaign and player.` Keep only changed fields on changed objects. Link related cards in a short sentence without claiming an unverified foreign key. Give JSON metadata its own shape. Keep migration/backfill detail in a collapsed `<details>` below. Two cards may sit side by side on desktop; stack them at 360-390px.
+A planning pad's Data design should feel like a quiet field sheet, not a database catalog. Use one compact card per changed table or configuration shape. Lead with a human name and a badge, place the real table/key name quietly beneath the title for implementers, then a two-column field/value table: plain labels on the left, plain values on the right. Leave out header rows, zebra stripes, and horizontal rules between rows; alignment and spacing carry the structure. Say `ID`, `number`, `date`, `text`, or the possible choices when the reader does not need SQL types. Prefer `Player` | `ID` over `user_id uuid UNIQUE pair with campaign_id` repeated in every row. Put the rule once beneath the table: `One enrollment per campaign and player.` Keep only changed fields on changed objects. Link related cards in a short sentence or value without claiming an unverified foreign key. Give JSON metadata its own card. Keep migration/backfill detail in a collapsed `<details>` below. Two cards may sit side by side on desktop; stack them at 360-390px.
 
-This self-contained authoring pattern uses ordinary artifact HTML and CSS (there is no injected schema component). Put CSS in the pad's `<style>` and markup in its Data design section. Keep the shape short enough to scan; move exhaustive column lists and SQL details into the collapsed migration section when a reviewer needs them.
+This self-contained authoring pattern uses ordinary artifact HTML and CSS (there is no injected schema component). Put CSS in the pad's `<style>` and markup in its Data design section. Keep the table short enough to scan; move exhaustive column lists and SQL details into the collapsed migration section when a reviewer needs them.
 
 ```css
 .schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
@@ -130,10 +130,9 @@ This self-contained authoring pattern uses ordinary artifact HTML and CSS (there
 .schema-key { margin: 2px 0 12px; color: #626b7a; font: 11px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
 .schema-badge { border-radius: 4px; padding: 2px 6px; font: 700 11px/1.4 system-ui; text-transform: uppercase; background: #e8f4e9; color: #216233; }
 .schema-badge.changed { background: #fff2db; color: #80500b; }
-.schema-brace { display: block; color: #8590a0; font: 16px/1.4 ui-monospace, monospace; }
-.schema-fields { margin: 2px 0 2px 12px; padding: 0; list-style: none; font: 13px/1.7 system-ui; }
-.schema-fields li { overflow-wrap: anywhere; }
-.schema-fields strong { font-weight: 600; }
+.schema-fields { width: 100%; border-collapse: collapse; font: 13px/1.5 system-ui; }
+.schema-fields th, .schema-fields td { padding: 3px 0; border: 0; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+.schema-fields th { width: 40%; padding-right: 16px; color: #626b7a; font-weight: 500; }
 .schema-fields a { color: #245399; text-underline-offset: 2px; }
 .schema-fields a:focus-visible { outline: 2px solid #245399; outline-offset: 2px; }
 .schema-notes { margin: 12px 0 0; color: #4d5665; font: 12px/1.5 system-ui; }
@@ -146,33 +145,27 @@ This self-contained authoring pattern uses ordinary artifact HTML and CSS (there
   <article class="schema-card" id="enrollments-schema">
     <header class="schema-head"><h3>Enrollment</h3><span class="schema-badge">New</span></header>
     <p class="schema-key">auto_find_enrollments</p>
-    <span class="schema-brace" aria-hidden="true">{</span>
-    <ul class="schema-fields">
-      <li><strong>Campaign:</strong> ID</li>
-      <li><strong>Player:</strong> ID</li>
-      <li><strong>Status:</strong> On / Off / Paused / Ended</li>
-      <li><strong>Started from:</strong> <a href="#submissions-schema">Submission</a></li>
-    </ul>
-    <span class="schema-brace" aria-hidden="true">}</span>
+    <table class="schema-fields">
+      <tr><th scope="row">Campaign</th><td>ID</td></tr>
+      <tr><th scope="row">Player</th><td>ID</td></tr>
+      <tr><th scope="row">Status</th><td>On / Off / Paused / Ended</td></tr>
+      <tr><th scope="row">Started from</th><td><a href="#submissions-schema">Submission</a></td></tr>
+    </table>
     <div class="schema-notes"><p>One enrollment per campaign and player.</p><p>Only this tenant can see it.</p></div>
   </article>
   <article class="schema-card" id="submissions-schema">
     <header class="schema-head"><h3>Submission</h3><span class="schema-badge changed">Changed</span></header>
     <p class="schema-key">social_post_submissions · new field only</p>
-    <span class="schema-brace" aria-hidden="true">{</span>
-    <ul class="schema-fields"><li><strong>Source:</strong> Player / Auto</li></ul>
-    <span class="schema-brace" aria-hidden="true">}</span>
+    <table class="schema-fields"><tr><th scope="row">Source</th><td>Player / Auto</td></tr></table>
     <div class="schema-notes"><p>Required. Defaults to Player.</p></div>
   </article>
   <article class="schema-card" id="config-shape">
     <header class="schema-head"><h3>Auto-find options</h3><span class="schema-badge changed">Config</span></header>
     <p class="schema-key">social-post.autoFind? · metadata, not a table</p>
-    <span class="schema-brace" aria-hidden="true">{</span>
-    <ul class="schema-fields">
-      <li><strong>Enabled:</strong> Yes / No</li>
-      <li><strong>Scan time:</strong> 23:15</li>
-    </ul>
-    <span class="schema-brace" aria-hidden="true">}</span>
+    <table class="schema-fields">
+      <tr><th scope="row">Enabled</th><td>Yes / No</td></tr>
+      <tr><th scope="row">Scan time</th><td>23:15</td></tr>
+    </table>
     <div class="schema-notes"><p>Off by default.</p></div>
   </article>
 </div>

@@ -82,12 +82,14 @@ test("planning guidance offers scannable schema cards and active navigation", ()
   assert.match(schema, /id="enrollments-schema"/);
   assert.match(schema, /id="submissions-schema"/);
   assert.match(schema, /<h3>Enrollment<\/h3>/);
-  assert.match(schema, /<strong>Campaign:<\/strong> ID/);
-  assert.match(schema, /<strong>Player:<\/strong> ID/);
+  assert.match(schema, /<table class="schema-fields">/);
+  assert.match(schema, /<th scope="row">Campaign<\/th><td>ID<\/td>/);
+  assert.match(schema, /<th scope="row">Player<\/th><td>ID<\/td>/);
   assert.match(schema, /href="#submissions-schema">Submission/);
   assert.match(schema, /id="config-shape"/);
   assert.match(schema, /<details id="migration-detail"><summary>Migration and backfill/);
-  assert.doesNotMatch(schema, /<table\b|schema-columns|schema-flags/, "a reader sees a simple shape, not a row-heavy catalog");
+  assert.doesNotMatch(schema, /<thead\b|schema-columns|schema-flags/, "a reader sees a quiet field sheet, not a row-heavy catalog");
+  assert.match(catalog, /\.schema-fields th, \.schema-fields td \{[^}]*border: 0/, "rows carry no horizontal rules");
   assert.match(catalog, /@media \(max-width: 720px\)/);
   const nav = htmlFences(catalog).find((html) => html.includes('id="section-nav"'));
   assert.match(nav, /aria-current="location"/);
