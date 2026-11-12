@@ -16,7 +16,7 @@ Write the markup below in the pad HTML and the runtime renders it when the pad l
 
 ## Collapsed supporting detail
 
-The injected toolbox has no disclosure block. Use native HTML `<details>` with a visible `<summary>` for optional in-depth prose below a section's open, scannable answer. Omit the `open` attribute so the detail starts collapsed. Keep decisions, risks, Mermaid diagrams, and toolbox blocks outside the disclosure so they remain visible and commentable. Give each disclosure a stable id across pad revisions.
+The injected toolbox has no disclosure block. Use native HTML `<details>` with a visible `<summary>` for optional in-depth prose below a section's open, scannable answer. Omit the `open` attribute so the detail starts collapsed. Keep decisions, the risk callout, Mermaid diagrams, and toolbox blocks outside every disclosure, including Evidence, so they render and stay commentable. Evidence is one closed disclosure of prose, quotes, logs, and file lists only. A Low-only risk list and mitigation prose also start collapsed. Give each disclosure a stable id across pad revisions. See [Risk severity](#risk-severity) and [Collapsed evidence](#collapsed-evidence).
 
 ```html
 <section id="storage-design">
@@ -195,7 +195,7 @@ For multi-section pads, retain native fragment links. Use a scrollable sticky ra
 .section-nav a { display: block; padding: 8px 12px; border-radius: 6px; color: #4d5665; text-decoration: none; }
 .section-nav a[aria-current="location"] { background: #e6edfa; color: #234d90; font-weight: 700; }
 .section-nav a:focus-visible { outline: 2px solid #245399; outline-offset: -2px; }
-h2[id] { scroll-margin-top: 70px; }
+h2[id], section[id], details[id] { scroll-margin-top: 70px; }
 ```
 
 ```js
@@ -235,9 +235,105 @@ window.addEventListener('load', updateActive);
 window.addEventListener('resize', updateActive);
 ```
 
+## Risk severity
+
+A Risks section leads with one overall callout, then one-line items. The overall severity is the highest item: High, else Medium, else Low. The badge text is that word, so the callout reads without color. Copy this CSS into the pad `<style>`. The injected `/pad-editor/blocks.css` styles only `<incpad-callstack>` and `<incpad-code>`. Its `.ipb-pill` rules do not apply outside those elements, and they are not a document severity badge. No app change is required.
+
+Show a group for each severity that has items. Omit empty groups. A Low group stays visible when the overall callout is High or Medium. Put mitigation prose in a collapsed `<details>`. When every item is Low, or there are no items, the callout says the reader can skip the section and any one-liners stay in a closed `<details>`. Link a decision from the one-liner to the Decisions list. Do not put the callout inside `<details>`.
+
+```css
+.risk-callout { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; margin: 0 0 16px; padding: 14px 16px; border: 1px solid #d9dde5; border-left: 8px solid #9b1c1c; border-radius: 12px; background: #fff; }
+.risk-callout[data-severity="high"] { border-left-color: #9b1c1c; background: #fdecec; }
+.risk-callout[data-severity="medium"] { border-left-color: #80500b; background: #fff6e8; }
+.risk-callout[data-severity="low"] { border-left-color: #216233; background: #eef6ef; }
+.risk-badge { display: inline-block; flex: none; border-radius: 6px; padding: 3px 8px; font: 700 12px/1.2 system-ui, sans-serif; letter-spacing: 0.04em; text-transform: uppercase; }
+.risk-callout .risk-badge { padding: 8px 14px; font-size: 18px; letter-spacing: 0.06em; }
+.risk-badge[data-severity="high"] { background: #9b1c1c; color: #ffffff; }
+.risk-badge[data-severity="medium"] { background: #80500b; color: #ffffff; }
+.risk-badge[data-severity="low"] { background: #216233; color: #ffffff; }
+.risk-callout-text { min-width: 0; margin: 0; color: #1c2430; font: 600 16px/1.4 system-ui, sans-serif; overflow-wrap: anywhere; }
+.risk-group { min-width: 0; margin: 0 0 12px; }
+.risk-group h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; font: 600 14px/1.3 system-ui, sans-serif; }
+.risk-lines { margin: 0; padding-left: 1.2em; }
+.risk-lines li { margin: 0 0 4px; overflow-wrap: anywhere; }
+.pad-evidence { margin: 16px 0; border: 1px solid #d9dde5; border-radius: 12px; background: #fff; scroll-margin-top: 70px; }
+.pad-evidence summary { padding: 14px 16px; font: 700 18px/1.3 system-ui, sans-serif; cursor: pointer; }
+.pad-evidence summary:focus-visible { outline: 2px solid #245399; outline-offset: -2px; }
+.pad-evidence[open] summary { border-bottom: 1px solid #d9dde5; }
+.pad-evidence[open] { padding-bottom: 8px; }
+.pad-evidence > :not(summary) { margin: 12px 16px; }
+```
+
+High or Medium overall. The callout stays outside the disclosure:
+
+```html
+<section id="risks">
+  <h2>Risks</h2>
+  <p class="risk-callout" id="risk-callout" data-severity="high">
+    <span class="risk-badge" data-severity="high">High</span>
+    <span class="risk-callout-text">One item needs a decision before this ships.</span>
+  </p>
+  <div class="risk-group" id="risks-high">
+    <h3><span class="risk-badge" data-severity="high">High</span> Needs a decision</h3>
+    <ul class="risk-lines">
+      <li>Backfill can lock the jobs table. <a href="#decision-backfill">Decision on backfill</a>.</li>
+    </ul>
+  </div>
+  <div class="risk-group" id="risks-medium">
+    <h3><span class="risk-badge" data-severity="medium">Medium</span></h3>
+    <ul class="risk-lines">
+      <li>Preview tokens expire after 8 minutes.</li>
+    </ul>
+  </div>
+  <div class="risk-group" id="risks-low-open">
+    <h3><span class="risk-badge" data-severity="low">Low</span></h3>
+    <ul class="risk-lines">
+      <li>Empty-state copy is slightly long.</li>
+    </ul>
+  </div>
+  <details id="risks-detail">
+    <summary>Mitigations</summary>
+    <p>Run the backfill in batches before adding the required constraint. Refresh the preview token in the existing 8-minute window.</p>
+  </details>
+</section>
+```
+
+Low only. The skip sentence is the open content. The items start collapsed:
+
+```html
+<section id="risks-low">
+  <h2>Risks</h2>
+  <p class="risk-callout" id="risk-callout-low" data-severity="low">
+    <span class="risk-badge" data-severity="low">Low</span>
+    <span class="risk-callout-text">Nothing here needs a decision. You can skip this section.</span>
+  </p>
+  <details id="risks-low-lines">
+    <summary>Low items</summary>
+    <ul class="risk-lines">
+      <li>Empty-state copy is slightly long.</li>
+    </ul>
+  </details>
+</section>
+```
+
+## Collapsed evidence
+
+The Evidence section is one closed disclosure. It holds prose, quotes, logs, and file lists only. Mermaid diagrams and toolbox blocks (`<incpad-code>`, call stacks) are main content: keep them outside Evidence so they render and stay commentable. The summary is the only visible part of Evidence until the reader opens it. Do not add a second Evidence heading outside the disclosure, and do not set `open`.
+
+```html
+<details class="pad-evidence" id="evidence">
+  <summary>Evidence</summary>
+  <p>The jobs-table lock lasted 40 seconds on a 2 million row copy of production.</p>
+  <p>Preview token lifetime is the 8-minute recording cap in the feedback client.</p>
+</details>
+```
+
 ## Do not
 
 - Do not include `<script>` or `<link>` tags for `/pad-editor/blocks.js` or `/pad-editor/blocks.css`; the app injects them.
 - Do not define your own `incpad-callstack`, `incpad-code`, or `incpad-pin` elements, and do not restyle the runtime's internals; use the blocks as they render.
 - Do not expect them to render outside IncPad: opened as a local file they show as unstyled text.
 - Do not paste secrets, credentials, or private data into a code slice; anyone with the pad link can read it.
+- Do not use `.ipb-pill` or other runtime classes as a document risk badge. Copy the risk severity snippet instead.
+- Do not leave an Evidence section expanded, and do not open a Risks section with a long list in place of the callout.
+- Do not put a Mermaid diagram, `<incpad-code>`, or call stack inside Evidence or any other `<details>`. Those blocks stay in the open page so they render and stay commentable.
