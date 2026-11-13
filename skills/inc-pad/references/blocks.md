@@ -16,7 +16,7 @@ Write the markup below in the pad HTML and the runtime renders it when the pad l
 
 ## Collapsed supporting detail
 
-The injected toolbox has no disclosure block. Use native HTML `<details>` with a visible `<summary>` for optional in-depth prose below a section's open, scannable answer. Omit the `open` attribute so the detail starts collapsed. Keep decisions, the risk callout, Mermaid diagrams, and toolbox blocks outside every disclosure, including Evidence, so they render and stay commentable. Evidence is one closed disclosure of prose, quotes, logs, and file lists only. A Low-only risk list and mitigation prose also start collapsed. Give each disclosure a stable id across pad revisions. See [Risk severity](#risk-severity) and [Collapsed evidence](#collapsed-evidence).
+The injected toolbox has no disclosure block. Use native HTML `<details>` with a visible `<summary>` for optional in-depth prose below a section's open, scannable answer. Omit the `open` attribute so the detail starts collapsed. Keep open decisions, the risk callout, Mermaid diagrams, and toolbox blocks outside every disclosure, including Evidence, so they render and stay commentable. Answered decisions in later revisions of a still-open pad are the exception: collapse them in a closed `<details>` as shown in [Answered decisions](#answered-decisions). Evidence is one closed disclosure of prose, quotes, logs, and file lists only. A Low-only risk list and mitigation prose also start collapsed. Give each disclosure a stable id across pad revisions. See [Risk severity](#risk-severity) and [Collapsed evidence](#collapsed-evidence).
 
 ```html
 <section id="storage-design">
@@ -27,6 +27,23 @@ The injected toolbox has no disclosure block. Use native HTML `<details>` with a
     <p>Backfill existing rows with the current job state before making the field required.</p>
   </details>
 </section>
+```
+
+## Answered decisions
+
+When a reviewer has answered a decision and you publish a later revision of the same pad while it is still open, collapse that answered decision. Keep its stable decision id on the `<details>` element; this preserves deep links, change-row targets, and feedback selectors. The summary includes the question and a one-line recorded answer. Put the full question, options, and context inside, but do not expose a live answer form or re-queue button. Expanded options are read-only context. Leave unanswered decisions fully open with their controls. This is the only exception to keeping decisions outside disclosures; it does not apply after the pad ends.
+
+```html
+<details id="decision-rollout">
+  <summary>Which rollout plan should the next revision use? Answered: Pilot - one team first</summary>
+  <fieldset>
+    <legend>Which rollout plan should the next revision use?</legend>
+    <label><input type="radio" name="plan" value="Pilot" disabled> Pilot: one team first</label>
+    <label><input type="radio" name="plan" value="Broad" disabled> Broad: all teams together</label>
+  </fieldset>
+  <p>Recorded answer: Pilot - one team first</p>
+  <p>Context: start with one team, then expand after reviewing the results.</p>
+</details>
 ```
 
 ## Decision first
