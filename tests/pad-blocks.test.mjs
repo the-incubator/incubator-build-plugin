@@ -73,6 +73,21 @@ test("multi-section navigation and open decisions stay linked and unified", () =
   assert.match(skill, /forward link from the relevant section back to the decision/);
 });
 
+test("answered decisions in the catalog collapse with stable ids and read-only context", () => {
+  assert.match(skill, /When publishing a later revision of the same pad, if the pad is still open and a decision has been answered/);
+  assert.match(skill, /answered decision disclosure/);
+  const snippet = htmlFences(catalog).find((html) => html.includes('id="decision-rollout"'));
+  assert.ok(snippet, "catalog has a copyable answered-decision disclosure");
+  assert.match(snippet, /^<details id="decision-rollout">/);
+  assert.match(snippet, /<summary>Which rollout plan should the next revision use\? Answered: Pilot - one team first<\/summary>/);
+  assert.match(snippet, /<legend>Which rollout plan should the next revision use\?<\/legend>/);
+  assert.equal((snippet.match(/disabled>/g) ?? []).length, 2, "expanded options are read-only");
+  assert.match(snippet, /Recorded answer: Pilot - one team first/);
+  assert.doesNotMatch(snippet, /\bopen\b|Queue this answer|queuePrompt/);
+  assert.match(catalog, /Keep open decisions, the risk callout/);
+  assert.match(catalog, /Answered decisions in later revisions .* are the exception/);
+});
+
 test("planning guidance offers scannable schema cards and active navigation", () => {
   assert.match(skill, /schema-card pattern/);
   assert.match(skill, /Highlight the section currently in view/);

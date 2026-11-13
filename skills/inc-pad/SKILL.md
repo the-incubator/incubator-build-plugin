@@ -239,6 +239,8 @@ It currently ignores `queueKey`, so do not rely on it to replace an earlier queu
 The reviewer then presses **Send to Agent** in the pad's conversation panel.
 The artifact cannot send queued feedback on the reviewer's behalf.
 
+When publishing a later revision of the same pad, if the pad is still open and a decision has been answered, replace that decision's live question with a closed native `<details>` disclosure. Keep its stable decision id on `<details>` so deep links, change rows, and feedback selectors keep resolving. Its `<summary>` shows the original question and a one-line answer summary (for example, `Which rollout plan? Answered: Pilot - one team first`). Put the full original question, options, and context inside. Do not show a live re-queue control by default; if the reviewer expands it, the original options may appear as read-only context. Unanswered decisions remain fully open with their answer controls. Once the pad has ended, this rule does not apply. See the copyable [answered decision disclosure](references/blocks.md#answered-decisions).
+
 This self-contained example can be placed in an artifact's body:
 
 ```html
