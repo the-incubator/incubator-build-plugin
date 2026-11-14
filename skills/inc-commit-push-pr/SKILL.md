@@ -192,7 +192,7 @@ If the user declines or `BEHIND` < 10, continue.
 
 Catches the class of bug where local code passes locally but CI gates the PR on something the agent forgot to run (most common: Drizzle schema drift — `*.sql.ts` edited, `pnpm db:generate` never run, CI's `db:validate` fails). The fix is to run whatever CI runs, locally, before push.
 
-**Source of truth is `.github/workflows/*.yml`.** Do NOT hardcode script names (`db:validate`, `lint`, etc.). The replayer prefers workflows triggered on `pull_request` and keeps their current replay filters, including skipping build/test/e2e checks. If no pull-request workflow exists, it falls back to workflows triggered by `push` on `main` or `master`; in that fallback, build/test/e2e steps are included, while checkout, setup/toolchain, and dependency-install steps remain skipped. It emits one JSON line per replayable step.
+**Source of truth is `.github/workflows/*.yml`.** Do NOT hardcode script names (`db:validate`, `lint`, etc.). The replayer prefers workflows triggered on `pull_request`; if none exist, it falls back to workflows triggered by `push` on `main` or `master`. In either case, build/test/e2e/coverage steps are included so the skill can verify whether they already passed in this session against the current changes. Checkout, setup/toolchain, and dependency-install steps remain skipped. It emits one JSON line per replayable step.
 
 **Discover steps:**
 
@@ -205,7 +205,7 @@ Each line of `STEPS_JSON` is a JSON object: `{"step": "...", "dir": "...", "env"
 
 **Diff-relevance filter.** Compute the changed-file set once: `git diff <base-remote>/<base-branch>...HEAD --name-only` (resolving base the same way the later push/description steps do — try PR metadata first, then remote default branch, then `main`/`master`). For each step, if no changed file falls under `step.dir`, skip that step. Means a frontend-only PR doesn't trigger the api job's `db:validate`. If the base ref can't be resolved (offline, no upstream), skip the filter and run all steps.
 
-**Run each remaining step in order.** For fallback steps that run build, test, e2e, or coverage commands, first verify whether this session has already run that command successfully against the current changes. Check the visible session command/test results, and confirm no relevant source changes were made afterward. If so, count the step as passed and do not rerun it. If not, or if the evidence is ambiguous, run it now. Do not count checks run before this session or checks invalidated by later edits. This reuse applies only to the main-push fallback; pull-request workflow behavior is unchanged. Use the `Bash` tool, one call per step that still needs running, in this shape:
+**Run each remaining step in order.** For steps that run build, test, e2e, or coverage commands, first verify whether this session has already run that command successfully against the current changes. Check the visible session command/test results, and confirm no relevant source changes were made afterward. If so, count the step as passed and do not rerun it. If not, or if the evidence is ambiguous, run it now. Do not count checks run before this session or checks invalidated by later edits. Apply this rule to both pull-request workflows and the main-push fallback. Use the `Bash` tool, one call per step that still needs running, in this shape:
 
 ```bash
 cd "<repo-root>/<step.dir>" && <env-assignments> <step.cmd>

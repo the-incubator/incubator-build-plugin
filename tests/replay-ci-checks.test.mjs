@@ -22,12 +22,17 @@ function replay(workflows) {
   }
 }
 
-test('pull-request workflows retain existing build and test skips', () => {
+test('pull-request workflows expose build/test/e2e and still skip checkout, setup, and install', () => {
   const steps = replay({
-    'pr.yml': `on: pull_request\njobs:\n  checks:\n    steps:\n      - name: Build app\n        run: npm run build\n      - name: Unit tests\n        run: npm test\n      - name: Typecheck\n        run: npm run typecheck\n`,
+    'pr.yml': `on: pull_request\njobs:\n  checks:\n    steps:\n      - name: Checkout source\n        run: git checkout main\n      - name: Setup Node toolchain\n        run: nvm install 22\n      - name: Install dependencies\n        run: npm ci\n      - name: Build app\n        run: npm run build\n      - name: Unit tests\n        run: npm test\n      - name: End-to-end tests\n        run: npm run e2e\n      - name: Typecheck\n        run: npm run typecheck\n`,
     'main.yml': `on:\n  push:\n    branches: [main]\njobs:\n  checks:\n    steps:\n      - name: Main only check\n        run: npm run main-check\n`,
   });
-  assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [['Typecheck', 'npm run typecheck']]);
+  assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [
+    ['Build app', 'npm run build'],
+    ['Unit tests', 'npm test'],
+    ['End-to-end tests', 'npm run e2e'],
+    ['Typecheck', 'npm run typecheck'],
+  ]);
 });
 
 test('main-only push workflows expose build and test for session-aware replay, skipping checkout, setup, and install', () => {

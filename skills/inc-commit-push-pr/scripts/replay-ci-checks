@@ -32,16 +32,11 @@ except ImportError:
     sys.exit(2)
 
 
-# Skip a step when its `name:` matches one of these (case-insensitive).
+# Skip steps that are not replayable CI checks (case-insensitive).
 SKIP_NAME_PATTERNS = [
-    re.compile(r"\bbuild\b", re.IGNORECASE),
-    re.compile(r"\btests?\b", re.IGNORECASE),
-    re.compile(r"\be2e\b", re.IGNORECASE),
-    re.compile(r"\bplaywright\b", re.IGNORECASE),
-    re.compile(r"\bcoverage\b", re.IGNORECASE),
     re.compile(r"^install\b", re.IGNORECASE),
     re.compile(r"^checkout\b", re.IGNORECASE),
-    re.compile(r"^setup\b", re.IGNORECASE),
+    re.compile(r"^(setup|set[ -]up)\b", re.IGNORECASE),
     re.compile(r"\bdeploy\b", re.IGNORECASE),
     re.compile(r"\bpublish\b", re.IGNORECASE),
     re.compile(r"\brelease\b", re.IGNORECASE),
@@ -56,19 +51,10 @@ SKIP_RUN_PATTERNS = [
     re.compile(r"^\s*yarn\s+install\b"),
     re.compile(r"^\s*yarn\s*$", re.MULTILINE),
     re.compile(r"^\s*bun\s+install\b"),
-    # JS-ecosystem build/test/e2e/coverage/bench
-    re.compile(r"^\s*(pnpm|npm|yarn|bun)\s+(run\s+)?(build|test|e2e|coverage|bench)\b"),
-    re.compile(r"^\s*(next|vite|tsup|esbuild|webpack|rollup)\s+build\b"),
-    re.compile(r"^\s*(jest|vitest|mocha|ava)\b"),
-    re.compile(r"^\s*playwright\s+test\b"),
-    # Other-ecosystem build/test
-    re.compile(r"^\s*forge\s+(build|test|coverage)\b"),
-    re.compile(r"^\s*hardhat\s+(test|coverage|compile)\b"),
-    re.compile(r"^\s*go\s+test\b"),
-    re.compile(r"^\s*cargo\s+(build|test|bench)\b"),
-    re.compile(r"^\s*pytest\b"),
-    re.compile(r"^\s*rspec\b"),
-    re.compile(r"^\s*make\s+(build|test|all|release)\b"),
+    re.compile(r"^\s*git\s+checkout\b", re.IGNORECASE),
+    re.compile(r"^\s*(rustup\s+toolchain|nvm)\s+install\b", re.IGNORECASE),
+    # Build/test/e2e commands are replayed unless the skill confirms they passed in-session.
+
     # System / network — unsafe or unnecessary locally
     re.compile(r"\bapt-get\b"),
     re.compile(r"\bbrew\s+install\b"),
