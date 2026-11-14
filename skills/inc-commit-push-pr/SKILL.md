@@ -192,7 +192,7 @@ If the user declines or `BEHIND` < 10, continue.
 
 Catches the class of bug where local code passes locally but CI gates the PR on something the agent forgot to run (most common: Drizzle schema drift — `*.sql.ts` edited, `pnpm db:generate` never run, CI's `db:validate` fails). The fix is to run whatever CI runs, locally, before push.
 
-**Source of truth is `.github/workflows/*.yml`.** Do NOT hardcode script names (`db:validate`, `lint`, etc.). The replayer parses the workflow files, keeps only steps that gate PRs, skips slow behavioral checks (build/test/e2e — those stay CI's job), and emits one JSON line per replayable step.
+**Source of truth is `.github/workflows/*.yml`.** Do NOT hardcode script names (`db:validate`, `lint`, etc.). The replayer prefers workflows triggered on `pull_request` and keeps their current replay filters, including skipping build/test/e2e checks. If no pull-request workflow exists, it falls back to workflows triggered by `push` on `main` or `master`; in that fallback, build/test/e2e steps are replayed too, while checkout, setup/toolchain, and dependency-install steps remain skipped. It emits one JSON line per replayable step.
 
 **Discover steps:**
 
@@ -201,7 +201,7 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-<plugin root>}"
 STEPS_JSON=$(python3 "$PLUGIN_ROOT/skills/inc-commit-push-pr/scripts/replay-ci-checks")
 ```
 
-Each line of `STEPS_JSON` is a JSON object: `{"step": "...", "dir": "...", "env": {...}, "cmd": "...", "workflow": "...", "job": "..."}`. If the output is empty (no PR-gating workflow, no replayable steps), skip to Step 6.
+Each line of `STEPS_JSON` is a JSON object: `{"step": "...", "dir": "...", "env": {...}, "cmd": "...", "workflow": "...", "job": "..."}`. If the output is empty (no qualifying workflow or no replayable steps), skip to Step 6.
 
 **Diff-relevance filter.** Compute the changed-file set once: `git diff <base-remote>/<base-branch>...HEAD --name-only` (resolving base the same way the later push/description steps do — try PR metadata first, then remote default branch, then `main`/`master`). For each step, if no changed file falls under `step.dir`, skip that step. Means a frontend-only PR doesn't trigger the api job's `db:validate`. If the base ref can't be resolved (offline, no upstream), skip the filter and run all steps.
 
