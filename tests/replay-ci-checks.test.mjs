@@ -30,7 +30,7 @@ test('pull-request workflows retain existing build and test skips', () => {
   assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [['Typecheck', 'npm run typecheck']]);
 });
 
-test('main-only push workflows replay build and test while skipping checkout, setup, and install', () => {
+test('main-only push workflows expose build and test for session-aware replay, skipping checkout, setup, and install', () => {
   const steps = replay({
     'ci.yml': `on:\n  push:\n    branches: [main]\njobs:\n  checks:\n    steps:\n      - name: Checkout source\n        run: git checkout main\n      - name: Set up Node toolchain\n        run: nvm install 22\n      - name: Install dependencies\n        run: npm ci\n      - name: Build app\n        run: npm run build\n      - name: Unit tests\n        run: npm test\n      - name: Lint\n        run: npm run lint\n`,
   });
