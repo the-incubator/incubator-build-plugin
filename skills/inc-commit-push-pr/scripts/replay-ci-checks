@@ -14,7 +14,7 @@ Output (one JSON object per line):
   {"step": "...", "dir": "...", "env": {...}, "cmd": "...", "workflow": "...", "job": "..."}
 
 Exit codes:
-  0  steps emitted (possibly zero — also when no workflow triggers on pull_request)
+  0  steps emitted (possibly zero — when no qualifying PR or main-push workflow exists)
   2  PyYAML missing or unrecoverable error
 """
 from __future__ import annotations
