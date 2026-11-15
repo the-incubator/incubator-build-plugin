@@ -61,6 +61,15 @@ test('branch exclusions are evaluated per candidate and tag-only workflows are n
   assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [['Main check', 'npm run check']]);
 });
 
+test('negated branch patterns exclude main and master in order', () => {
+  assert.deepEqual(replay({
+    'feature-only.yml': `on:\n  push:\n    branches: ['**', '!main', '!master']\njobs:\n  checks:\n    steps:\n      - name: Feature check\n        run: npm run feature-check\n`,
+  }), []);
+  assert.deepEqual(replay({
+    'main-only.yml': `on:\n  push:\n    branches: ['**', '!master']\njobs:\n  checks:\n    steps:\n      - name: Main check\n        run: npm run main-check\n`,
+  }).map(({ step, cmd }) => [step, cmd]), [['Main check', 'npm run main-check']]);
+});
+
 test('no pull-request or main-triggered push workflow produces no replay steps', () => {
   assert.deepEqual(replay({
     'feature.yml': `on:\n  push:\n    branches: [feature]\njobs:\n  checks:\n    steps:\n      - name: Check\n        run: npm run check\n`,

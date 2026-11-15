@@ -93,6 +93,16 @@ def workflow_triggers_on_pr(workflow: dict) -> bool:
     return "pull_request" in workflow_events(workflow)
 
 
+def branch_matches_patterns(branch: str, patterns, default: bool) -> bool:
+    matched = default
+    for pattern in patterns or []:
+        excluded = pattern.startswith("!")
+        pattern = pattern[1:] if excluded else pattern
+        if fnmatch.fnmatchcase(branch, pattern):
+            matched = not excluded
+    return matched
+
+
 def workflow_triggers_on_push_main(workflow: dict) -> bool:
     events = workflow_events(workflow)
     push = events.get("push")
@@ -111,7 +121,7 @@ def workflow_triggers_on_push_main(workflow: dict) -> bool:
         return False
 
     return any(
-        (not branches or any(fnmatch.fnmatchcase(branch, pattern) for pattern in branches))
+        branch_matches_patterns(branch, branches, default=not branches)
         and not any(fnmatch.fnmatchcase(branch, pattern) for pattern in ignored)
         for branch in ("main", "master")
     )
