@@ -14,10 +14,11 @@ Output (one JSON object per line):
   {"step": "...", "dir": "...", "env": {...}, "cmd": "...", "workflow": "...", "job": "..."}
 
 Exit codes:
-  0  steps emitted (possibly zero — also when no workflow triggers on pull_request)
+  0  steps emitted (possibly zero — when no qualifying PR or main-push workflow exists)
   2  PyYAML missing or unrecoverable error
 """
 from __future__ import annotations
+import fnmatch
 import glob
 import json
 import os
@@ -31,16 +32,11 @@ except ImportError:
     sys.exit(2)
 
 
-# Skip a step when its `name:` matches one of these (case-insensitive).
+# Skip steps that are not replayable CI checks (case-insensitive).
 SKIP_NAME_PATTERNS = [
-    re.compile(r"\bbuild\b", re.IGNORECASE),
-    re.compile(r"\btests?\b", re.IGNORECASE),
-    re.compile(r"\be2e\b", re.IGNORECASE),
-    re.compile(r"\bplaywright\b", re.IGNORECASE),
-    re.compile(r"\bcoverage\b", re.IGNORECASE),
     re.compile(r"^install\b", re.IGNORECASE),
     re.compile(r"^checkout\b", re.IGNORECASE),
-    re.compile(r"^setup\b", re.IGNORECASE),
+    re.compile(r"^(setup|set[ -]up)\b", re.IGNORECASE),
     re.compile(r"\bdeploy\b", re.IGNORECASE),
     re.compile(r"\bpublish\b", re.IGNORECASE),
     re.compile(r"\brelease\b", re.IGNORECASE),
@@ -55,19 +51,10 @@ SKIP_RUN_PATTERNS = [
     re.compile(r"^\s*yarn\s+install\b"),
     re.compile(r"^\s*yarn\s*$", re.MULTILINE),
     re.compile(r"^\s*bun\s+install\b"),
-    # JS-ecosystem build/test/e2e/coverage/bench
-    re.compile(r"^\s*(pnpm|npm|yarn|bun)\s+(run\s+)?(build|test|e2e|coverage|bench)\b"),
-    re.compile(r"^\s*(next|vite|tsup|esbuild|webpack|rollup)\s+build\b"),
-    re.compile(r"^\s*(jest|vitest|mocha|ava)\b"),
-    re.compile(r"^\s*playwright\s+test\b"),
-    # Other-ecosystem build/test
-    re.compile(r"^\s*forge\s+(build|test|coverage)\b"),
-    re.compile(r"^\s*hardhat\s+(test|coverage|compile)\b"),
-    re.compile(r"^\s*go\s+test\b"),
-    re.compile(r"^\s*cargo\s+(build|test|bench)\b"),
-    re.compile(r"^\s*pytest\b"),
-    re.compile(r"^\s*rspec\b"),
-    re.compile(r"^\s*make\s+(build|test|all|release)\b"),
+    re.compile(r"^\s*git\s+checkout\b", re.IGNORECASE),
+    re.compile(r"^\s*(rustup\s+toolchain|nvm)\s+install\b", re.IGNORECASE),
+    # Build/test/e2e commands are replayed unless the skill confirms they passed in-session.
+
     # System / network — unsafe or unnecessary locally
     re.compile(r"\bapt-get\b"),
     re.compile(r"\bbrew\s+install\b"),
@@ -90,20 +77,54 @@ IF_EXCLUDES_PR = [
 ]
 
 
-def workflow_triggers_on_pr(workflow: dict) -> bool:
+def workflow_events(workflow: dict):
     # PyYAML treats bare `on:` in YAML 1.1 as the boolean True. Tolerate both.
     on = workflow.get("on")
     if on is None:
         on = workflow.get(True)
-    if on is None:
-        return False
     if isinstance(on, str):
-        return on == "pull_request"
+        return {on: None}
     if isinstance(on, list):
-        return "pull_request" in on
-    if isinstance(on, dict):
-        return "pull_request" in on
-    return False
+        return {event: None for event in on}
+    return on if isinstance(on, dict) else {}
+
+
+def workflow_triggers_on_pr(workflow: dict) -> bool:
+    return "pull_request" in workflow_events(workflow)
+
+
+def branch_matches_patterns(branch: str, patterns, default: bool) -> bool:
+    matched = default
+    for pattern in patterns or []:
+        excluded = pattern.startswith("!")
+        pattern = pattern[1:] if excluded else pattern
+        if fnmatch.fnmatchcase(branch, pattern):
+            matched = not excluded
+    return matched
+
+
+def workflow_triggers_on_push_main(workflow: dict) -> bool:
+    events = workflow_events(workflow)
+    push = events.get("push")
+    if push is None:
+        return "push" in events
+    if not isinstance(push, dict):
+        return False
+
+    branches = push.get("branches")
+    ignored = push.get("branches-ignore") or []
+    if isinstance(branches, str):
+        branches = [branches]
+    if isinstance(ignored, str):
+        ignored = [ignored]
+    if (push.get("tags") or push.get("tags-ignore")) and not branches and not ignored:
+        return False
+
+    return any(
+        branch_matches_patterns(branch, branches, default=not branches)
+        and not any(fnmatch.fnmatchcase(branch, pattern) for pattern in ignored)
+        for branch in ("main", "master")
+    )
 
 
 def excluded_by_if(if_clause) -> bool:
@@ -134,6 +155,14 @@ def run_skipped(run: str) -> bool:
     return False
 
 
+def fallback_name_skipped(name: str) -> bool:
+    return name_skipped(name) or bool(name and re.search(r"\btoolchain\b", name, re.IGNORECASE))
+
+
+def fallback_run_skipped(run: str) -> bool:
+    return run_skipped(run)
+
+
 def filter_env(env: dict) -> dict:
     out = {}
     for k, v in (env or {}).items():
@@ -152,6 +181,7 @@ def emit_steps(repo_root: str) -> int:
     if not workflows:
         return 0
 
+    parsed_workflows = []
     for wf_path in workflows:
         try:
             with open(wf_path) as f:
@@ -159,9 +189,15 @@ def emit_steps(repo_root: str) -> int:
         except (yaml.YAMLError, OSError) as e:
             print(f"WARN: failed to parse {wf_path}: {e}", file=sys.stderr)
             continue
-        if not isinstance(wf, dict):
-            continue
-        if not workflow_triggers_on_pr(wf):
+        if isinstance(wf, dict):
+            parsed_workflows.append((wf_path, wf))
+
+    use_pr_workflows = any(workflow_triggers_on_pr(wf) for _, wf in parsed_workflows)
+    for wf_path, wf in parsed_workflows:
+        if use_pr_workflows:
+            if not workflow_triggers_on_pr(wf):
+                continue
+        elif not workflow_triggers_on_push_main(wf):
             continue
 
         wf_env = wf.get("env") or {}
@@ -170,7 +206,7 @@ def emit_steps(repo_root: str) -> int:
         for job_id, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
                 continue
-            if excluded_by_if(job.get("if")):
+            if use_pr_workflows and excluded_by_if(job.get("if")):
                 continue
             job_env = job.get("env") or {}
             job_defaults_dir = ((job.get("defaults") or {}).get("run") or {}).get("working-directory")
@@ -181,12 +217,13 @@ def emit_steps(repo_root: str) -> int:
                 run = step.get("run")
                 if not run:
                     continue
-                if excluded_by_if(step.get("if")):
+                if use_pr_workflows and excluded_by_if(step.get("if")):
                     continue
                 name = step.get("name") or ""
-                if name_skipped(name):
-                    continue
-                if run_skipped(run):
+                if use_pr_workflows:
+                    if name_skipped(name) or run_skipped(run):
+                        continue
+                elif fallback_name_skipped(name) or fallback_run_skipped(run):
                     continue
 
                 step_env = step.get("env") or {}

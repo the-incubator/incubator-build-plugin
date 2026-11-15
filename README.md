@@ -168,9 +168,10 @@ For a fresh Codex installation, its default target is stable Git rather than loc
 
 ## Validation and smoke verification
 
-From a checkout, run:
+From a checkout, install the Python test dependency and run:
 
 ```bash
+python3 -m pip install -r requirements-test.txt
 npm ci
 npm test
 npm pack --dry-run
