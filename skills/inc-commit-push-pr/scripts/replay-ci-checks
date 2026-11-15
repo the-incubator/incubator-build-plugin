@@ -94,20 +94,27 @@ def workflow_triggers_on_pr(workflow: dict) -> bool:
 
 
 def workflow_triggers_on_push_main(workflow: dict) -> bool:
-    push = workflow_events(workflow).get("push")
+    events = workflow_events(workflow)
+    push = events.get("push")
     if push is None:
-        return "push" in workflow_events(workflow)
+        return "push" in events
     if not isinstance(push, dict):
         return False
+
     branches = push.get("branches")
     ignored = push.get("branches-ignore") or []
     if isinstance(branches, str):
         branches = [branches]
     if isinstance(ignored, str):
         ignored = [ignored]
-    if branches and not any(fnmatch.fnmatchcase(branch, pattern) for branch in ("main", "master") for pattern in branches):
+    if (push.get("tags") or push.get("tags-ignore")) and not branches and not ignored:
         return False
-    return not any(fnmatch.fnmatchcase(branch, pattern) for branch in ("main", "master") for pattern in ignored)
+
+    return any(
+        (not branches or any(fnmatch.fnmatchcase(branch, pattern) for pattern in branches))
+        and not any(fnmatch.fnmatchcase(branch, pattern) for pattern in ignored)
+        for branch in ("main", "master")
+    )
 
 
 def excluded_by_if(if_clause) -> bool:
@@ -139,18 +146,11 @@ def run_skipped(run: str) -> bool:
 
 
 def fallback_name_skipped(name: str) -> bool:
-    return bool(name and re.search(r"^(checkout|set[ -]?up|install)\b|\btoolchain\b", name, re.IGNORECASE))
+    return name_skipped(name) or bool(name and re.search(r"\btoolchain\b", name, re.IGNORECASE))
 
 
 def fallback_run_skipped(run: str) -> bool:
-    if not run:
-        return True
-    first_line = next((ln for ln in run.splitlines() if ln.strip() and not ln.strip().startswith("#")), "")
-    return (
-        any(pat.search(first_line) or pat.search(run) for pat in SKIP_RUN_PATTERNS[:5])
-        or bool(re.search(r"^\s*git\s+checkout\b", first_line, re.IGNORECASE))
-        or bool(re.search(r"^\s*(rustup\s+toolchain|nvm)\s+install\b", first_line, re.IGNORECASE))
-    )
+    return run_skipped(run)
 
 
 def filter_env(env: dict) -> dict:
@@ -196,7 +196,7 @@ def emit_steps(repo_root: str) -> int:
         for job_id, job in (wf.get("jobs") or {}).items():
             if not isinstance(job, dict):
                 continue
-            if excluded_by_if(job.get("if")):
+            if use_pr_workflows and excluded_by_if(job.get("if")):
                 continue
             job_env = job.get("env") or {}
             job_defaults_dir = ((job.get("defaults") or {}).get("run") or {}).get("working-directory")
@@ -207,7 +207,7 @@ def emit_steps(repo_root: str) -> int:
                 run = step.get("run")
                 if not run:
                     continue
-                if excluded_by_if(step.get("if")):
+                if use_pr_workflows and excluded_by_if(step.get("if")):
                     continue
                 name = step.get("name") or ""
                 if use_pr_workflows:

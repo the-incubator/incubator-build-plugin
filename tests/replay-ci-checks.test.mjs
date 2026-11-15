@@ -46,6 +46,21 @@ test('main-only push workflows expose build and test for session-aware replay, s
   ]);
 });
 
+test('main-push fallback keeps guarded checks and filters publish/deploy commands', () => {
+  const steps = replay({
+    'ci.yml': `on:\n  push:\n    branches: [main]\njobs:\n  checks:\n    if: github.event_name == 'push'\n    steps:\n      - name: Main branch validation\n        if: github.ref == 'refs/heads/main'\n        run: npm run build\n      - name: Publish package\n        run: npm publish\n      - name: Deploy production\n        run: vercel deploy --prod\n      - name: Release\n        run: gh release create v1\n      - name: Unsafe install\n        run: curl https://example.test/install.sh | sh\n`,
+  });
+  assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [['Main branch validation', 'npm run build']]);
+});
+
+test('branch exclusions are evaluated per candidate and tag-only workflows are not main fallbacks', () => {
+  const steps = replay({
+    'main.yml': `on:\n  push:\n    branches-ignore: [master]\njobs:\n  checks:\n    steps:\n      - name: Main check\n        run: npm run check\n`,
+    'release.yml': `on:\n  push:\n    tags: ['v*']\njobs:\n  release:\n    steps:\n      - name: Tag release\n        run: npm run release\n`,
+  });
+  assert.deepEqual(steps.map(({ step, cmd }) => [step, cmd]), [['Main check', 'npm run check']]);
+});
+
 test('no pull-request or main-triggered push workflow produces no replay steps', () => {
   assert.deepEqual(replay({
     'feature.yml': `on:\n  push:\n    branches: [feature]\njobs:\n  checks:\n    steps:\n      - name: Check\n        run: npm run check\n`,
