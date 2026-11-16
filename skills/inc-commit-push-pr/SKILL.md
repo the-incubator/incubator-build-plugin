@@ -359,7 +359,7 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 | Before | After |
 | --- | --- |
-| ![<before shot description>](https://github.com/user-attachments/assets/<before-id>) | ![<after shot description>](https://github.com/user-attachments/assets/<after-id>) |
+| <local Markdown image embed for before capture> | <local Markdown image embed for after capture> |
 
 <For additional corresponding shots, add one table row per pair. For a one-sided capture, embed each image directly with descriptive alt text.>
 
@@ -377,7 +377,7 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 **Hard rules for the writer. Do not rationalize around these:**
 
-- **Visual evidence is always rendered inline.** In PR descriptions and PR comments, use Markdown image embeds (`![descriptive alt](https://github.com/user-attachments/assets/<id>)`) or `<img>` with a renderable image URL, never a text link to the image file or a bare URL. When both before and after captures exist, show them side by side in a two-column `Before | After` table, one row per corresponding screen. This also applies to GIFs/recordings and other visual evidence: embed a GitHub-renderable artifact; if the host cannot render the recording inline, use an inline GIF or screenshot instead of linking to the file. Upload local captures using GitHub attachments (`--attach`) so the final body/comment uses permanent `user-attachments` URLs. Never put local paths in the published body or comment, and verify the final body readback contains rendered embeds and hosted URLs.
+- **Visual evidence is always rendered inline.** In PR descriptions and PR comments, use Markdown image embeds (`![descriptive alt](https://github.com/user-attachments/assets/<id>)`), never HTML image tags, text links to image files, or bare URLs. When both before and after captures exist, show them side by side in a two-column `Before | After` table, one row per corresponding screen. This also applies to GIFs/recordings and other visual evidence: embed a GitHub-renderable artifact; if the host cannot render the recording inline, use an inline GIF or screenshot instead of linking to the file. Upload local captures using GitHub attachments (`--attach`) so the final body/comment uses permanent `user-attachments` URLs. Never put local paths in the published body or comment, and verify the final body readback contains rendered embeds and hosted URLs.
 
 - **Never fabricate intent.** If Step 7's answer is thin, the skill already stopped. If you got here, you have a real answer — use it verbatim or lightly cleaned up. Do not invent motivation.
 - **Never list files changed.** GitHub already shows this in the diff view.
