@@ -79,7 +79,7 @@ Read the current PR body so any existing `## Demo` or `## Screenshots` block can
 gh pr view --json body --jq '.body'
 ```
 
-Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5. Existing image references — whether GitHub `user-attachments` URLs (permanent, from a prior `--attach`) or third-party hosted URLs — are preserved **verbatim**. Never re-upload or re-attach an image already in the body; the URLs already point at a permanent asset.
+Extract the `## Demo` and/or `## Screenshots` blocks (start of heading through the next `##`/`###` heading or end of body). Hold them for step DU-5. Preserve existing rendered image embeds and their hosted URLs; never preserve a text link to an image file as the evidence presentation. Convert link-only evidence to `![descriptive alt](https://...)` embeds when its URL is a renderable image URL, or re-upload the source with `--attach` if it is available locally. Never use local paths or URLs that GitHub cannot render.
 
 ### DU-4: Gather the real branch diff
 
@@ -357,7 +357,11 @@ BODY_FILE="$(mktemp -t pr-body).md"
 
 ## Screenshots    <!-- optional: only if Step 9 captured screenshots -->
 
-<attachment path: one local image reference per shot — `![<alt text>]` immediately followed by `(./<file>)`  ·  hosted path: the demo-reel URL(s)>
+| Before | After |
+| --- | --- |
+| <local Markdown image embed for before capture> | <local Markdown image embed for after capture> |
+
+<For additional corresponding shots, add one table row per pair. For a one-sided capture, embed each image directly with descriptive alt text.>
 
 <details>
 <summary>Implementation Plan</summary>
@@ -372,6 +376,8 @@ BODY_FILE="$(mktemp -t pr-body).md"
 **Core principle for the writer.** The diff is already visible on GitHub. The description exists to explain what the diff *cannot* show — intent, trade-offs, context, what was rejected and why, what a reviewer would otherwise have to ask. Cut any sentence a reader could reconstruct from the diff. Every hard rule below is a consequence of this principle, not an independent constraint; if a rule and the principle ever disagree, the principle wins.
 
 **Hard rules for the writer. Do not rationalize around these:**
+
+- **Visual evidence is always rendered inline.** In PR descriptions and PR comments, use Markdown image embeds (`![descriptive alt](https://github.com/user-attachments/assets/<id>)`), never HTML image tags, text links to image files, or bare URLs. When both before and after captures exist, show them side by side in a two-column `Before | After` table, one row per corresponding screen. This also applies to GIFs/recordings and other visual evidence: embed a GitHub-renderable artifact; if the host cannot render the recording inline, use an inline GIF or screenshot instead of linking to the file. Upload local captures using GitHub attachments (`--attach`) so the final body/comment uses permanent `user-attachments` URLs. Never put local paths in the published body or comment, and verify the final body readback contains rendered embeds and hosted URLs.
 
 - **Never fabricate intent.** If Step 7's answer is thin, the skill already stopped. If you got here, you have a real answer — use it verbatim or lightly cleaned up. Do not invent motivation.
 - **Never list files changed.** GitHub already shows this in the diff view.
