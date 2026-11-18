@@ -99,7 +99,9 @@ Separately, decide whether the requested artifact includes UI work: interactive 
    Keep each id on its block across revisions and never reuse a removed block's id for different content, because change rows, deep links, and feedback selectors all resolve through these ids.
    The pad renders inside a sandboxed iframe on a separate origin.
    It has no cookies, no access to the parent page, and no session with any of the user's apps, so everything it needs must ship inside the artifact or come from a public CDN.
-3. **Publish, share, and open.**
+   Start with the copyable [mobile-safe layout pattern](references/mobile-layout.md), adapting its classes to the artifact rather than hiding overflow on `body`.
+3. **Check at phone width, then publish, share, and open.**
+   Before `pad create` and every `pad update`, render the authored HTML at 390px (also 360px for dense layouts) in the host browser. Run the [overflow check](references/mobile-layout.md#pre-publish-overflow-check) in the artifact frame, not the viewer page. Fix each reported element and confirm `document.documentElement.scrollWidth <= document.documentElement.clientWidth`; a table, tab rail, or code block may scroll *inside its own bounded wrapper*. Recheck after fonts, images, and Mermaid finish rendering. Do not publish a pad that still scrolls sideways. If the harness has no browser, say that the phone-width check was unavailable instead of claiming it passed.
    ```bash
    "${INC_BUILD[@]}" pad create "$PAD_DIR/<name>.html" --title "<short title>"
    "${INC_BUILD[@]}" pad open "<share url>"
@@ -335,9 +337,8 @@ When you deliver the pad, state which of the three sources you used and why.
 - Use sections, cards, tables, diagrams, toolbox blocks, and side-by-side comparisons instead of long prose.
   Show code with `<incpad-code>` rather than hand-built snippets, so its lines are pinned and commentable.
 - Choose typography, spacing, color, and layout deliberately so the artifact has a clear point of view.
-- Prevent horizontal overflow at every nesting level.
-  Nested grid and flex children need `minmax(0, 1fr)` tracks and `min-width: 0`, especially around badges, labels, and monospace text.
-  Wrap, truncate, or contain long unbreakable strings deliberately.
+- Keep the *page* within 360-390px, not just the outer card. Use `repeat(2, minmax(0, 1fr))` for desktop grids and collapse to `minmax(0, 1fr)` on phones; `1fr 1fr` alone does not constrain long children. Give grid and flex children `min-width: 0`, and cap images, videos, diagrams, and other media at `max-width: 100%`.
+  Wrap long URLs, labels, and code with `overflow-wrap: anywhere` (and `white-space: pre-wrap` for code when line breaks are acceptable). Keep tab rows, wide tables, and intentionally unwrapped code in bounded `overflow-x: auto` wrappers so only those elements scroll sideways. Copy and adapt [the mobile-safe CSS and markup](references/mobile-layout.md); do not rely on `body { overflow-x: hidden }` to mask clipped content.
 - Give sections and elements users will comment on stable, meaningful ids (Workflow step 2) so feedback selectors and declared changes resolve across revisions.
 
 ## Section navigation and decisions
