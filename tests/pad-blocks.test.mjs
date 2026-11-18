@@ -84,7 +84,7 @@ test("answered decisions in the catalog collapse with stable ids and read-only c
   assert.equal((snippet.match(/disabled>/g) ?? []).length, 2, "expanded options are read-only");
   assert.match(snippet, /Recorded answer: Pilot - one team first/);
   assert.doesNotMatch(snippet, /\bopen\b|Queue this answer|queuePrompt/);
-  assert.match(catalog, /Keep open decisions, the risk callout/);
+  assert.match(catalog, /Keep open decisions, per-level risk groups/);
   assert.match(catalog, /Answered decisions in later revisions .* are the exception/);
 });
 
@@ -249,9 +249,10 @@ function rule(css, selector) {
   return match[1];
 }
 
-test("risk callout and evidence snippets are glanceable and collapsed by default", () => {
-  assert.match(skill, /Every Risks section leads with one overall severity callout/);
-  assert.match(skill, /You can skip this section/);
+test("risk groups show visible severity badges in descending order without a summary callout", () => {
+  assert.match(skill, /Show risks grouped under per-level badges, ordered/);
+  assert.match(skill, /If there are no material risks, omit the Risks section/);
+  assert.doesNotMatch(skill, /overall severity callout|risk callout/i);
   assert.match(skill, /Every Evidence section is one closed disclosure/);
   assert.match(skill, /prose, quotes, logs, and file lists/);
   assert.match(skill, /Keep them outside every `<details>`, including Evidence/);
@@ -259,17 +260,15 @@ test("risk callout and evidence snippets are glanceable and collapsed by default
   assert.doesNotMatch(catalog, /Evidence section is the exception/);
   assert.match(skill, /references\/blocks\.md#risk-severity/);
   assert.match(skill, /references\/blocks\.md#collapsed-evidence/);
-  assert.match(skill, /Do not use the injected `\.ipb-pill` styles for this/);
+  assert.match(skill, /Do not use the injected `\.ipb-pill` styles/);
   assert.match(catalog, /## Risk severity/);
   assert.match(catalog, /## Collapsed evidence/);
 
-  const css = [...catalog.matchAll(/```css\n([\s\S]*?)```/g)].map((match) => match[1]).find((block) => block.includes(".risk-callout"));
-  assert.ok(css, "catalog includes copyable risk callout CSS");
-  assert.match(css, /flex-wrap: wrap/);
-  assert.match(css, /min-width: 0/);
+  assert.doesNotMatch(catalog, /risk-callout|overall callout/i);
+  const css = [...catalog.matchAll(/```css\n([\s\S]*?)```/g)].map((match) => match[1]).find((block) => block.includes(".risk-badge"));
+  assert.ok(css, "catalog includes copyable risk badge CSS");
   assert.match(rule(css, ".pad-evidence"), /scroll-margin-top: 70px/, "an Evidence link clears the sticky section nav");
   assert.match(catalog, /h2\[id\], section\[id\], details\[id\] \{ scroll-margin-top: 70px; \}/);
-  assert.match(rule(css, ".risk-callout .risk-badge"), /font-size: 18px/, "the overall badge is larger than a group chip");
   assert.match(rule(css, ".risk-badge"), /font: 700 12px/);
 
   const badgeColors = {};
@@ -284,22 +283,23 @@ test("risk callout and evidence snippets are glanceable and collapsed by default
   assert.equal(new Set(Object.values(badgeColors)).size, 3, "High, Medium, and Low use different fills");
 
   const fences = htmlFences(catalog);
-  const high = fences.find((html) => html.includes('id="risk-callout"'));
-  assert.ok(high, "catalog has a High or Medium risk snippet");
+  const high = fences.find((html) => html.includes('id="risks-high"'));
+  assert.ok(high, "catalog has a multi-level risk snippet");
   assert.match(high, /<span class="risk-badge" data-severity="high">High<\/span>/);
   assert.match(high, /<span class="risk-badge" data-severity="medium">Medium<\/span>/);
   assert.match(high, /<span class="risk-badge" data-severity="low">Low<\/span>/);
-  assert.doesNotMatch(high, /<details[^>]*>[\s\S]*id="risk-callout"/, "the callout stays outside the disclosure");
+  const severityOrder = ["high", "medium", "low"].map((severity) => high.indexOf(`id="risks-${severity}"`));
+  assert.deepEqual(severityOrder, [...severityOrder].sort((a, b) => a - b), "groups are ordered High, Medium, then Low");
   assert.doesNotMatch(high, /<details[^>]*>[\s\S]*data-severity="low"/, "a Low group stays visible when the section is open");
   assert.match(high, /<details id="risks-detail">/);
   assert.doesNotMatch(high, /<details\b[^>]*\bopen\b/);
 
-  const low = fences.find((html) => html.includes('id="risk-callout-low"'));
+  const low = fences.find((html) => html.includes('id="risks-low"') && !html.includes('id="risks-high"'));
   assert.ok(low, "catalog has a Low-only risk snippet");
   assert.match(low, /<span class="risk-badge" data-severity="low">Low<\/span>/);
-  assert.match(low, /You can skip this section/);
-  assert.match(low, /<details id="risks-low-lines">/);
-  assert.doesNotMatch(low, /<details\b[^>]*\bopen\b/);
+  assert.match(low, /Empty-state copy is slightly long/);
+  assert.doesNotMatch(low, /risk-callout|overall severity/i);
+  assert.doesNotMatch(low, /<details/);
 
   const evidence = fences.find((html) => html.includes('id="evidence"'));
   assert.ok(evidence, "catalog has a collapsed Evidence snippet");
