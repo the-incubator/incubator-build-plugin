@@ -143,11 +143,11 @@ This self-contained authoring pattern uses ordinary artifact HTML and CSS (there
 .schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .schema-card { min-width: 0; padding: 18px 20px; border: 1px solid #d9dde5; border-radius: 12px; background: #fff; }
 .schema-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.schema-head h3 { margin: 0; font: 600 17px/1.3 system-ui; }
+.schema-head h3 { min-width: 0; margin: 0; font: 600 17px/1.3 system-ui; overflow-wrap: anywhere; }
 .schema-key { margin: 2px 0 12px; color: #626b7a; font: 11px/1.4 ui-monospace, monospace; overflow-wrap: anywhere; }
 .schema-badge { border-radius: 4px; padding: 2px 6px; font: 700 11px/1.4 system-ui; text-transform: uppercase; background: #e8f4e9; color: #216233; }
 .schema-badge.changed { background: #fff2db; color: #80500b; }
-.schema-fields { width: 100%; border-collapse: collapse; font: 13px/1.5 system-ui; }
+.schema-fields { width: 100%; table-layout: fixed; border-collapse: collapse; font: 13px/1.5 system-ui; }
 .schema-fields th, .schema-fields td { padding: 3px 0; border: 0; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
 .schema-fields th { width: 40%; padding-right: 16px; color: #626b7a; font-weight: 500; }
 .schema-fields a { color: #245399; text-underline-offset: 2px; }
@@ -207,7 +207,7 @@ For multi-section pads, retain native fragment links. Use a scrollable sticky ra
 ```
 
 ```css
-.section-nav { position: sticky; top: 0; z-index: 2; overflow-x: auto; padding: 8px; background: #fff; scrollbar-width: thin; }
+.section-nav { position: sticky; top: 0; z-index: 2; max-width: 100%; min-width: 0; overflow-x: auto; padding: 8px; background: #fff; scrollbar-width: thin; }
 .section-nav ul { display: flex; gap: 4px; width: max-content; margin: 0; padding: 0; list-style: none; }
 .section-nav a { display: block; padding: 8px 12px; border-radius: 6px; color: #4d5665; text-decoration: none; }
 .section-nav a[aria-current="location"] { background: #e6edfa; color: #234d90; font-weight: 700; }
